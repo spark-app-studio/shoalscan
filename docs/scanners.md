@@ -8,9 +8,10 @@
 | Gitleaks | secrets: API keys, tokens, private keys, passwords | off | SHA-256 of the release archive, of the binary in it and of its default rules |
 | Hadolint | Dockerfile mistakes, with ShellCheck for `RUN` lines: running as root, unpinned images and packages, unsafe shell pipes | off | SHA-256 of the binary |
 | zizmor | GitHub Actions flaws: template injection, dangerous triggers, unpinned actions, broad permissions, persisted credentials | off | SHA-256 of the release archive and of the binary in it; build provenance checked when pinned |
+| Trivy | infrastructure-as-code misconfigurations in Terraform, CloudFormation, Kubernetes, Helm, Dockerfiles, Azure ARM and Ansible | off | SHA-256 of the release archive and of the binary in it, and a cosign signature checked at install against the Trivy release workflow |
 
 ```toml
-scanners = ["opengrep", "gitleaks", "hadolint", "zizmor"]
+scanners = ["opengrep", "gitleaks", "hadolint", "zizmor", "trivy"]
 ```
 
 ## Gitleaks
@@ -96,5 +97,45 @@ zizmor normally reads a `zizmor.yml` (or `.github/zizmor.yml`) that can turn aud
 ### Its pin
 
 zizmor publishes no checksums file, but its release archives carry GitHub build provenance. Before they were pinned, the four archives in `tools.lock` were verified with `gh attestation verify` against zizmor's release workflow at the v1.30.1 tag. `install` checks the SHA-256 of each archive and of the `zizmor` binary in it, and `scan` checks the binary again before every run; neither fetches the attestation again.
+
+## Trivy
+
+Trivy's `config` command checks infrastructure as code: Terraform, CloudFormation, Kubernetes manifests, Helm charts, Dockerfiles, Azure ARM templates and Ansible. Findings are named `trivy.<check>`, such as `trivy.AWS-0087` or `trivy.KSV-0017`. `CRITICAL` and `HIGH` become ERROR, `MEDIUM` WARNING, and `LOW` and `UNKNOWN` INFO. The triage work list shows each check's resolution and links to its page.
+
+Trivy finds the configuration files itself. Findings in excluded files and under `.git` are dropped. A finding in anything that is not a file of the repository (for example, a remote Terraform module) fails the scan, so it can never be filed under the wrong path.
+
+### Offline, with the checks in the binary
+
+Trivy normally downloads its checks bundle from a registry and keeps it in a cache. Shoalscan gives it an empty cache directory and `--skip-check-update`, so it uses the checks embedded in the pinned binary, and passes `--skip-version-check` and `--disable-telemetry`. Updating the checks means updating the pin.
+
+### Nothing in the repository or the machine can silence it
+
+Trivy normally reads a `trivy.yaml` and `.trivyignore` files, `TRIVY_*` environment variables, and WebAssembly modules from `~/.trivy/modules`. Shoalscan passes empty files for `--config` and `--ignorefile`, an empty `--module-dir`, and runs Trivy with the scanners' allowlisted environment.
+
+Trivy also honours inline comments such as `#trivy:ignore:AWS-0089`, and cannot be told not to. Shoalscan holds them to the same rule as Opengrep's suppression comments: each must name one check and an issue on the same line, as in
+
+```hcl
+#trivy:ignore:AWS-0089 #123 access logs go to the central bucket
+resource "aws_s3_bucket" "assets" {
+```
+
+A comment without an issue, or one that silences every check (`*`), is a blocking finding (`shoalscan.suppression-without-rule-and-issue`). Every comment is counted and listed with the other inline suppressions, and so is every finding Trivy reports it silenced, so silencing never looks like fixing. The comments are read in the files Trivy reads: `.tf`, `.tf.json`, `.tfvars`, `.hcl`, `.yaml`, `.yml`, `.json`, `.template`, `.bicep` and Dockerfiles.
+
+### Leaving checks out
+
+```toml
+[trivy]
+ignore = ["KSV-0011", "AWS-0089"]   # Trivy check ids
+```
+
+This is policy: on a pull request run with `--policy-ref`, it comes from the base branch. Findings of an ignored check are never taken as fixed on the dashboard.
+
+### What Trivy does not report
+
+Trivy logs the Terraform files it cannot parse, and Shoalscan lists them as not fully scanned. A YAML or JSON file it cannot parse is not recognised as configuration at all, so it is neither scanned nor reported.
+
+### Its pin
+
+v0.74.0 is pinned, not the newest release: it had been public for two months when it was pinned, which leaves time for a bad release to be noticed. Each archive's SHA-256 was checked against the release's checksums file and its Sigstore bundle against Trivy's release workflow (`reusable-release.yaml` at the v0.74.0 tag, commit `e1fd17a`). `shoalscan install` downloads the bundle and checks the signature again with cosign before it extracts anything, unless `--skip-signature-check` is given, and then says loudly that it did not. `scan` checks the binary's SHA-256 before every run.
 
 **Next:** [Rules](rules.md).

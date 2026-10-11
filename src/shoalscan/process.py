@@ -27,8 +27,8 @@ def scanner_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k in ENV_ALLOWED or k.startswith("LC_")}
 
 
-def run_scanner(name: str, cmd: list[str], cwd: Path, timeout: int) -> tuple[int, bytes, str]:
-    """Run `cmd` and return its exit code, standard output and the tail of its standard error."""
+def run_scanner(name: str, cmd: list[str], cwd: Path, timeout: int, stderr_chars: int = 2000) -> tuple[int, bytes, str]:
+    """Run `cmd` and return its exit code, standard output and the last `stderr_chars` of its standard error."""
     try:
         proc = subprocess.Popen(
             cmd,
@@ -50,7 +50,7 @@ def run_scanner(name: str, cmd: list[str], cwd: Path, timeout: int) -> tuple[int
             proc.kill()
         proc.communicate()
         raise ScanError(f"{name} timed out after {timeout}s") from None
-    tail = stderr.decode("utf-8", errors="replace").strip()[-2000:]
+    tail = stderr.decode("utf-8", errors="replace").strip()[-stderr_chars:]
     if proc.returncode < 0:
         raise ScanError(f"{name} was killed by signal {-proc.returncode}\n{tail}")
     return proc.returncode, stdout, tail

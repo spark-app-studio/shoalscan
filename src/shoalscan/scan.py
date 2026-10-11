@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shoalscan import __version__, gitleaks, hadolint, opengrep, zizmor
+from shoalscan import __version__, gitleaks, hadolint, opengrep, trivy, zizmor
 from shoalscan.check import CHECK_JSON
 from shoalscan.config import Config
 from shoalscan.errors import ScanError, SetupError
@@ -254,6 +254,31 @@ def run_scan(
                 "files_scanned": audited,
                 "ignore": list(config.zizmor.ignore),
                 "findings": len(audits),
+            }
+        if "trivy" in config.scanners:
+            pin = tools.pinned.get("trivy")
+            if pin is None:
+                raise SetupError("trivy is enabled but tools.lock pins no trivy")
+            misconfigs, missed, markers, silenced, misconfig_rules = trivy.run(
+                pin.path, pin.sha256, root, stage, config.limits, config.components, config.excludes, config.trivy.ignore
+            )
+            findings += misconfigs
+            extra_runs.append((trivy.TOOL, pin.version, misconfigs))
+            unscanned = {kind: [*unscanned.get(kind, []), *missed[kind]] for kind in ("skipped", "errors")}
+            # Trivy's inline markers are held to the same rule as Opengrep's, and counted with them.
+            suppressions = [*suppressions, *markers]
+            marker_findings = lint_findings(markers, config.components)
+            own_findings = [*own_findings, *marker_findings]
+            findings += marker_findings
+            suppressed_by_scanner += silenced
+            meta.setdefault("rules", {}).update(misconfig_rules)
+            meta["scanners"]["trivy"] = {
+                "version": pin.version,
+                "verification": "sha256 and cosign",
+                "ignore": list(config.trivy.ignore),
+                "findings": len(misconfigs),
+                "inline_suppressions": len(markers),
+                "suppressed_findings": silenced,
             }
         sarif_text = build_sarif(sarif_source, root, sarif_index, own_findings, extra_runs)
     finally:

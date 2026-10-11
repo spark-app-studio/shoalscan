@@ -14,7 +14,7 @@ from shoalscan.errors import SetupError
 
 CONFIG_NAME = ".shoalscan.toml"
 SEVERITIES = ("ERROR", "WARNING", "INFO")
-KNOWN_SCANNERS = ("opengrep", "gitleaks", "hadolint", "zizmor")
+KNOWN_SCANNERS = ("opengrep", "gitleaks", "hadolint", "zizmor", "trivy")
 _CATEGORY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _RULE_PATTERN_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-/]*(\.\*)?$")
 # parse_warn_only globs: plain path characters and the * ? wildcards only.
@@ -26,6 +26,7 @@ _FILE_NAME_RE = re.compile(r"^(?:[A-Za-z0-9_][A-Za-z0-9_.\-]*(?:\.\*)?|\*(?:\.[A
 _DIR_SEGMENT_RE = re.compile(r"^(?:\*\*|\*|[A-Za-z0-9_.\-]+)$")
 _HADOLINT_RULE_RE = re.compile(r"^(?:DL|SC)\d{4}$")
 _ZIZMOR_AUDIT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,99}$")
+_TRIVY_CHECK_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d{3,5}$")
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,12 @@ class ZizmorSettings:
 
 
 @dataclass(frozen=True)
+class TrivySettings:
+    # Trivy check ids to leave out, such as AWS-0089 or KSV-0011.
+    ignore: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Limits:
     scan_timeout_seconds: int = 1800
     rule_timeout_seconds: int = 30
@@ -74,6 +81,7 @@ class Config:
     opengrep: OpengrepSettings = OpengrepSettings()
     hadolint: HadolintSettings = HadolintSettings()
     zizmor: ZizmorSettings = ZizmorSettings()
+    trivy: TrivySettings = TrivySettings()
     limits: Limits = Limits()
     source: str = "defaults"
 
@@ -168,7 +176,7 @@ def _parse_glob(value: str) -> str:
 def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
     _check_keys(
         data,
-        {"scanners", "excludes", "blocking", "baseline", "non_blocking_paths", "parse_warn_only", "components", "opengrep", "hadolint", "zizmor", "limits"},
+        {"scanners", "excludes", "blocking", "baseline", "non_blocking_paths", "parse_warn_only", "components", "opengrep", "hadolint", "zizmor", "trivy", "limits"},
         "the top level",
     )
     defaults = Config()
@@ -261,6 +269,16 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
             raise SetupError(f"{CONFIG_NAME}: zizmor.ignore entries must be audit names such as artipacked: {audit!r}")
     zizmor = ZizmorSettings(ignore=tuple(sorted(set(audits))))
 
+    tr_raw = data.get("trivy", {})
+    if not isinstance(tr_raw, dict):
+        raise SetupError(f"{CONFIG_NAME}: [trivy] must be a table")
+    _check_keys(tr_raw, {"ignore"}, "[trivy]")
+    checks = _str_list(tr_raw.get("ignore", []), "trivy.ignore")
+    for check in checks:
+        if not _TRIVY_CHECK_RE.match(check):
+            raise SetupError(f"{CONFIG_NAME}: trivy.ignore entries must be check ids such as AWS-0089 or KSV-0011: {check!r}")
+    trivy = TrivySettings(ignore=tuple(sorted(set(checks))))
+
     lim_raw = data.get("limits", {})
     if not isinstance(lim_raw, dict):
         raise SetupError(f"{CONFIG_NAME}: [limits] must be a table")
@@ -284,6 +302,7 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
         opengrep=opengrep,
         hadolint=hadolint,
         zizmor=zizmor,
+        trivy=trivy,
         limits=limits,
         source=source,
     )

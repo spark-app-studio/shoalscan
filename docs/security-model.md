@@ -4,9 +4,9 @@ This guide collects how Shoalscan protects itself: the scan, the dashboard and t
 
 ## Scans and the policy
 
-- Scanner binaries and the community rules are pinned by SHA-256 in `tools.lock`, and the Opengrep binary's cosign signature is checked at install time ([Getting started](getting-started.md#install-the-pinned-scanners)).
+- Scanner binaries and the community rules are pinned by SHA-256 in `tools.lock`, and the Opengrep and Trivy cosign signatures are checked at install time ([Getting started](getting-started.md#install-the-pinned-scanners)).
 - A scan makes no network calls. Each scanner gets only an allowlisted environment: `PATH`, `HOME`, the temporary directory variables, the locale, the user name and the time zone.
-- Nothing in the scanned repository can configure a scanner or silence it: Opengrep ignores `.semgrepignore` files, Gitleaks ignores `.gitleaks.toml`, `.gitleaksignore` and `gitleaks:allow` comments, Hadolint ignores `.hadolint.yaml` and `# hadolint ignore=` pragmas, and zizmor runs offline and ignores `zizmor.yml` and `# zizmor: ignore` comments ([Scanners](scanners.md)). Inline suppressions for Opengrep must name a rule and an issue.
+- Nothing in the scanned repository can configure a scanner or silence it: Opengrep ignores `.semgrepignore` files, Gitleaks ignores `.gitleaks.toml`, `.gitleaksignore` and `gitleaks:allow` comments, Hadolint ignores `.hadolint.yaml` and `# hadolint ignore=` pragmas, zizmor runs offline and ignores `zizmor.yml` and `# zizmor: ignore` comments, and Trivy runs offline with its embedded checks and ignores `trivy.yaml`, `.trivyignore` and modules in the home directory; its inline ignore comments must name a check and an issue ([Scanners](scanners.md)). Inline suppressions for Opengrep must name a rule and an issue.
 - Secrets that Gitleaks finds never reach the findings, the SARIF file or the history ([details](scanners.md#the-secrets-stay-out-of-the-output)).
 - The tools directory and the output directory must be outside the repository, so a pull request cannot plant files in them.
 - A scan that fails in any way fails the command; it is never read as "no findings".
