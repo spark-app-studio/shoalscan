@@ -168,7 +168,9 @@ def baseline_binding_path(repo: Path, baseline: Path) -> str | None:
     return rel.as_posix()
 
 
-def _changes_digest(repo: Path, tree: str | None, options: tuple[str, ...], pathspec: tuple[str, ...]) -> tuple[bool, str]:
+def _changes_digest(
+    repo: Path, tree: str | None, options: tuple[str, ...], pathspec: tuple[str, ...]
+) -> tuple[bool, str]:
     status = _git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", *options, *pathspec).stdout
     digest = hashlib.sha256(status)
     if tree is not None:
@@ -223,7 +225,9 @@ def added_lines(repo: Path, commit: str, path: str) -> set[int]:
         except OSError:
             return set()
         return set(range(1, count + 1))
-    out = _git(repo, "diff", "--no-color", "--no-ext-diff", "--no-renames", "-U0", merge_base(repo, commit), "--", path).stdout
+    out = _git(
+        repo, "diff", "--no-color", "--no-ext-diff", "--no-renames", "-U0", merge_base(repo, commit), "--", path
+    ).stdout
     lines: set[int] = set()
     for line in out.decode("utf-8", errors="replace").split("\n"):
         match = _HUNK.match(line)
@@ -235,7 +239,9 @@ def added_lines(repo: Path, commit: str, path: str) -> set[int]:
 
 def renames(repo: Path, commit: str) -> list[tuple[str, str]]:
     """(old, new) pairs that git reports as renames with at least 90% similarity."""
-    out = _git(repo, "diff", "-M90%", "--name-status", "-z", merge_base(repo, commit)).stdout.decode("utf-8", errors="replace")
+    out = _git(repo, "diff", "-M90%", "--name-status", "-z", merge_base(repo, commit)).stdout.decode(
+        "utf-8", errors="replace"
+    )
     parts = out.split("\0")
     pairs = []
     i = 0

@@ -30,9 +30,7 @@ class FingerprintTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_whitespace_does_not_matter(self):
-        self.assertEqual(
-            assign_fingerprints([item(1, "eval( x )\n")]), assign_fingerprints([item(9, "eval(  x  )")])
-        )
+        self.assertEqual(assign_fingerprints([item(1, "eval( x )\n")]), assign_fingerprints([item(9, "eval(  x  )")]))
 
     def test_rule_code_and_context_matter_but_not_path(self):
         base = assign_fingerprints([item(1)])[0]
@@ -43,7 +41,14 @@ class FingerprintTests(unittest.TestCase):
         self.assertEqual(base, assign_fingerprints([item(1, path="moved/b.py")])[0])
 
     def test_same_method_name_in_two_classes_is_told_apart(self):
-        source = ["class A:", "    def run(self):", "        eval(x)", "class B:", "    def run(self):", "        eval(x)"]
+        source = [
+            "class A:",
+            "    def run(self):",
+            "        eval(x)",
+            "class B:",
+            "    def run(self):",
+            "        eval(x)",
+        ]
         self.assertEqual(enclosing_context(source, 3), "class:A/def:run")
         self.assertEqual(enclosing_context(source, 6), "class:B/def:run")
 
@@ -112,8 +117,21 @@ class NormaliseTests(unittest.TestCase):
         findings, index = opengrep.normalise(doc, self.root, {"src": "app"})
         self.assertEqual(len(findings), 1)
         f = findings[0]
-        self.assertEqual((f.tool, f.rule, f.path, f.line, f.component), ("opengrep", "shoalscan.r", "src/a.py", 2, "app"))
-        expected = assign_fingerprints([{"tool": "opengrep", "rule": "shoalscan.r", "path": "src/a.py", "line": 2, "code": "eval(data)", "context": ""}])
+        self.assertEqual(
+            (f.tool, f.rule, f.path, f.line, f.component), ("opengrep", "shoalscan.r", "src/a.py", 2, "app")
+        )
+        expected = assign_fingerprints(
+            [
+                {
+                    "tool": "opengrep",
+                    "rule": "shoalscan.r",
+                    "path": "src/a.py",
+                    "line": 2,
+                    "code": "eval(data)",
+                    "context": "",
+                }
+            ]
+        )
         self.assertEqual(f.fingerprint, expected[0])
         self.assertEqual(index[("shoalscan.r", "src/a.py", 2, 1)], f.fingerprint)
 
@@ -156,7 +174,10 @@ class NormaliseTests(unittest.TestCase):
         found = opengrep.unscanned(doc, self.root)
         self.assertEqual(
             found["skipped"],
-            [{"path": "big.py", "reason": "exceeded_size_limit"}, {"path": "other.py", "reason": "analysis_failed_parser_or_internal_error"}],
+            [
+                {"path": "big.py", "reason": "exceeded_size_limit"},
+                {"path": "other.py", "reason": "analysis_failed_parser_or_internal_error"},
+            ],
         )
         self.assertEqual(
             found["errors"],

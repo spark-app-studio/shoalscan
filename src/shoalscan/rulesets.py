@@ -218,4 +218,8 @@ def select(
         return None, 0, len(rules)
     if len(keep) == len(rules):
         return text, len(keep), 0
-    return "rules:\n" + "".join(r.text if r.text.endswith("\n") else r.text + "\n" for r in keep), len(keep), len(rules) - len(keep)
+    return (
+        "rules:\n" + "".join(r.text if r.text.endswith("\n") else r.text + "\n" for r in keep),
+        len(keep),
+        len(rules) - len(keep),
+    )

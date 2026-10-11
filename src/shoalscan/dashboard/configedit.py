@@ -22,8 +22,8 @@ from pathlib import Path
 
 from shoalscan import history
 from shoalscan.baseline import load_baseline
-from shoalscan.dashboard import scanning
 from shoalscan.config import KNOWN_SCANNERS, config_from_bytes
+from shoalscan.dashboard import scanning
 from shoalscan.errors import SetupError
 from shoalscan.install import opengrep_path, tool_path
 from shoalscan.locations import default_tools_dir
@@ -42,9 +42,18 @@ def _source(value: object, targets: scanning.Targets, current: scanning.Target |
     if kind == "url":
         if set(value) != {"kind", "url"}:
             raise SetupError("a URL source has only a url")
-        return {"kind": "url", "source": scanning.validate_url(value["url"], targets.allowed_hosts), "mirror": None, "clone": None}
+        return {
+            "kind": "url",
+            "source": scanning.validate_url(value["url"], targets.allowed_hosts),
+            "mirror": None,
+            "clone": None,
+        }
     if kind == "mirror":
-        if set(value) != {"kind", "mirror"} or not isinstance(value["mirror"], str) or value["mirror"] not in targets.mirrors:
+        if (
+            set(value) != {"kind", "mirror"}
+            or not isinstance(value["mirror"], str)
+            or value["mirror"] not in targets.mirrors
+        ):
             raise SetupError("choose one of the registered mirrors")
         return {"kind": "mirror", "mirror": value["mirror"], "source": None, "clone": None}
     # A clone path is set only by hand in the file; the page may keep it, never set or change it.
@@ -61,13 +70,22 @@ def _flag(value: object, name: str) -> bool:
 
 def _fields(t: scanning.Target, policy: str) -> dict:
     chosen = scanning.split_policy(policy)[1]
-    return {"name": t.name, "source": t.public_source(), "branch": t.branch, "enabled": t.enabled, "nightly": t.nightly,
-            "scanners": list(chosen) if chosen is not None else None, "policy_sha256": scanning.policy_sha256(policy)}
+    return {
+        "name": t.name,
+        "source": t.public_source(),
+        "branch": t.branch,
+        "enabled": t.enabled,
+        "nightly": t.nightly,
+        "scanners": list(chosen) if chosen is not None else None,
+        "policy_sha256": scanning.policy_sha256(policy),
+    }
 
 
 def _diff(before: dict | None, after: dict | None) -> dict:
     keys = sorted(set(before or {}) | set(after or {}))
-    return {k: [(before or {}).get(k), (after or {}).get(k)] for k in keys if (before or {}).get(k) != (after or {}).get(k)}
+    return {
+        k: [(before or {}).get(k), (after or {}).get(k)] for k in keys if (before or {}).get(k) != (after or {}).get(k)
+    }
 
 
 def _policy_scanners(text: str) -> list[str] | None:
@@ -111,11 +129,31 @@ class ConfigEditor:
             scanning.write_private(path, f"history_db = {scanning._toml_string(str(self.db))}\n")
         scanning.save_targets(self.state_dir, targets)
 
-    def _audit(self, who: str, target: str, action: str, before: dict | None, after: dict | None,
-               policy_before: str = "", policy_after: str = "") -> int:
-        text_diff = "\n".join(difflib.unified_diff(policy_before.splitlines(), policy_after.splitlines(), "before", "after", lineterm="", n=1))
-        return history.append_config_change(self.db, who, target, action, _diff(before, after),
-                                            (before or {}).get("policy_sha256"), (after or {}).get("policy_sha256"), text_diff or None)
+    def _audit(
+        self,
+        who: str,
+        target: str,
+        action: str,
+        before: dict | None,
+        after: dict | None,
+        policy_before: str = "",
+        policy_after: str = "",
+    ) -> int:
+        text_diff = "\n".join(
+            difflib.unified_diff(
+                policy_before.splitlines(), policy_after.splitlines(), "before", "after", lineterm="", n=1
+            )
+        )
+        return history.append_config_change(
+            self.db,
+            who,
+            target,
+            action,
+            _diff(before, after),
+            (before or {}).get("policy_sha256"),
+            (after or {}).get("policy_sha256"),
+            text_diff or None,
+        )
 
     # ------------------------------------------------------------ changes
 
@@ -146,13 +184,30 @@ class ConfigEditor:
                 body = scanning.validate_policy(request["policy"])
                 scanners = scanning.validate_scanners(request["scanners"])
                 if current is not None and current.config is not None and (body != "" or scanners is not None):
-                    raise SetupError("this target's configuration file is set by hand in scan_targets.toml; edit it there")
+                    raise SetupError(
+                        "this target's configuration file is set by hand in scan_targets.toml; edit it there"
+                    )
                 if scanners is not None and body and "scanners" in tomllib.loads(body):
-                    raise SetupError("the policy text sets scanners too: remove that line, or let the policy decide the scanners")
+                    raise SetupError(
+                        "the policy text sets scanners too: remove that line, or let the policy decide the scanners"
+                    )
                 policy = scanning.validate_policy(scanning.compose_policy(body, scanners))
-                kept = {k: getattr(current, k) for k in ("config", "baseline", "python", "max_clone_mb")} if current else {}
-                target = scanning.Target(name=name, branch=branch, enabled=enabled, nightly=nightly,
-                                         kind=source["kind"], source=source["source"], mirror=source["mirror"], clone=source["clone"], **kept)
+                kept = (
+                    {k: getattr(current, k) for k in ("config", "baseline", "python", "max_clone_mb")}
+                    if current
+                    else {}
+                )
+                target = scanning.Target(
+                    name=name,
+                    branch=branch,
+                    enabled=enabled,
+                    nightly=nightly,
+                    kind=source["kind"],
+                    source=source["source"],
+                    mirror=source["mirror"],
+                    clone=source["clone"],
+                    **kept,
+                )
                 old_policy = scanning.read_policy(targets, current) if current else ""
                 before = _fields(current, old_policy) if current else None
                 updated = scanning.with_target(targets, target, original)
@@ -190,7 +245,7 @@ class ConfigEditor:
 
     def set_enabled(self, request: dict, who: str) -> tuple[int, dict]:
         if set(request) != {"name", "enabled"} or not isinstance(request["enabled"], bool):
-            return 400, {"error": "send exactly {\"name\": name, \"enabled\": true or false}"}
+            return 400, {"error": 'send exactly {"name": name, "enabled": true or false}'}
         with _write_lock:
             targets = self.load()
             name = request["name"]
@@ -199,7 +254,13 @@ class ConfigEditor:
             current = targets.targets[name]
             target = replace(current, enabled=request["enabled"])
             policy = scanning.read_policy(targets, current)
-            audit_id = self._audit(who, name, "enable" if request["enabled"] else "disable", _fields(current, policy), _fields(target, policy))
+            audit_id = self._audit(
+                who,
+                name,
+                "enable" if request["enabled"] else "disable",
+                _fields(current, policy),
+                _fields(target, policy),
+            )
             try:
                 self._commit(audit_id, lambda: self._save(scanning.with_target(targets, target, name)))
             except OSError:
@@ -209,7 +270,7 @@ class ConfigEditor:
     def remove(self, request: dict, who: str) -> tuple[int, dict]:
         """Remove a target from the file. Its runs, findings and baseline stay."""
         if set(request) != {"name", "confirm"}:
-            return 400, {"error": "send exactly {\"name\": name, \"confirm\": name}"}
+            return 400, {"error": 'send exactly {"name": name, "confirm": name}'}
         with _write_lock:
             targets = self.load()
             name = request["name"]
@@ -236,16 +297,18 @@ class ConfigEditor:
             baseline = self.baseline_entries(targets, t)
             full = scanning.read_policy(targets, t) if t.config is None else ""
             body, chosen = scanning.split_policy(full)
-            out.append({
-                **_fields(t, ""),
-                "scanners": list(chosen) if chosen is not None else None,
-                "policy_scanners": _policy_scanners(full),
-                "policy": body if t.config is None else None,
-                "policy_editable": t.config is None,
-                "set_by_hand": [k for k in ("clone", "config", "baseline", "python") if getattr(t, k) is not None],
-                "last_run": latest_run(t.name),
-                "baseline": {"size": baseline["size"], "found": baseline["found"]},
-            })
+            out.append(
+                {
+                    **_fields(t, ""),
+                    "scanners": list(chosen) if chosen is not None else None,
+                    "policy_scanners": _policy_scanners(full),
+                    "policy": body if t.config is None else None,
+                    "policy_editable": t.config is None,
+                    "set_by_hand": [k for k in ("clone", "config", "baseline", "python") if getattr(t, k) is not None],
+                    "last_run": latest_run(t.name),
+                    "baseline": {"size": baseline["size"], "found": baseline["found"]},
+                }
+            )
         return {
             "targets": out,
             "scanners": available_scanners(targets.tools_dir),
@@ -260,18 +323,32 @@ class ConfigEditor:
             entries = load_baseline(path) if t.kind != "clone" or t.baseline is not None else None
         except SetupError:
             entries = None
-        state_relative = f"<state dir>/targets/{scanning.slug(t.name)}/baseline.toml" if t.baseline is None else "the baseline set in scan_targets.toml"
+        state_relative = (
+            f"<state dir>/targets/{scanning.slug(t.name)}/baseline.toml"
+            if t.baseline is None
+            else "the baseline set in scan_targets.toml"
+        )
         return {
             "found": entries is not None,
             "size": len(entries) if entries is not None else 0,
-            "location": state_relative if t.kind != "clone" or t.baseline is not None else "the repository's own baseline",
+            "location": state_relative
+            if t.kind != "clone" or t.baseline is not None
+            else "the repository's own baseline",
             "entries": [
-                {"tool": e.tool, "rule": e.rule, "path": e.path, "fingerprint": e.fingerprint, "issue": e.issue, "reason": e.reason}
+                {
+                    "tool": e.tool,
+                    "rule": e.rule,
+                    "path": e.path,
+                    "fingerprint": e.fingerprint,
+                    "issue": e.issue,
+                    "reason": e.reason,
+                }
                 for e in (entries or [])[:MAX_BASELINE_ENTRIES]
             ],
             "command": (
-                f"shoalscan baseline init --repo <a checkout of {t.name}> --config <state dir>/targets/{scanning.slug(t.name)}/shoalscan.toml "
-                f"--baseline {state_relative} --issue \"#123\" --reason \"accepted at adoption\""
+                f"shoalscan baseline init --repo <a checkout of {t.name}> --config <state "
+                f"dir>/targets/{scanning.slug(t.name)}/shoalscan.toml "
+                f'--baseline {state_relative} --issue "#123" --reason "accepted at adoption"'
             ),
         }
 

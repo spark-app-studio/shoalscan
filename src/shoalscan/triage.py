@@ -25,7 +25,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from shoalscan import PROJECT_URL, __version__, markdown as md
+from shoalscan import PROJECT_URL, __version__
+from shoalscan import markdown as md
 from shoalscan.baseline import Entry, load_baseline
 from shoalscan.check import CheckResult, compare, is_blocking_class
 from shoalscan.config import CONFIG_NAME, load_config
@@ -81,7 +82,13 @@ def _heat(findings: list[Finding]) -> int:
     return sum(HEAT_WEIGHTS.get(f.severity, 0) for f in findings)
 
 
-def build(findings: list[Finding], meta: dict, result: CheckResult, blocking_only: bool = False, warnings: list[str] | None = None) -> dict:
+def build(
+    findings: list[Finding],
+    meta: dict,
+    result: CheckResult,
+    blocking_only: bool = False,
+    warnings: list[str] | None = None,
+) -> dict:
     """The work list as a JSON-ready dict. Every finding is listed; nothing is cut here."""
     rules_meta = meta.get("rules") if isinstance(meta.get("rules"), dict) else {}
     baselined = {f.key(): e for f, e in result.matched}
@@ -99,7 +106,15 @@ def build(findings: list[Finding], meta: dict, result: CheckResult, blocking_onl
         return "new" if f.key() in new else "baselined"
 
     def order(f: Finding) -> tuple:
-        return (0 if f.key() in new_blocking else 1, SEVERITY_RANK.get(f.severity, 3), -component_heat[f.component], f.path, f.line, f.rule, f.fingerprint)
+        return (
+            0 if f.key() in new_blocking else 1,
+            SEVERITY_RANK.get(f.severity, 3),
+            -component_heat[f.component],
+            f.path,
+            f.line,
+            f.rule,
+            f.fingerprint,
+        )
 
     families: dict[str, dict] = {}
     for f in sorted(items, key=order):
@@ -151,7 +166,9 @@ def build(findings: list[Finding], meta: dict, result: CheckResult, blocking_onl
                     {
                         "component": name,
                         "heat": _heat(found),
-                        "findings": [_finding(f, status(f), baselined.get(f.key()), is_blocking_class(result, f)) for f in found],
+                        "findings": [
+                            _finding(f, status(f), baselined.get(f.key()), is_blocking_class(result, f)) for f in found
+                        ],
                     }
                     for name, found in sorted(components.items(), key=lambda kv: (min(order(f) for f in kv[1]), kv[0]))
                 ],
@@ -209,7 +226,14 @@ def _finding(f: Finding, status: str, entry: Entry | None, blocking: bool) -> di
 
 
 def _entry(e: Entry) -> dict:
-    return {"tool": e.tool, "rule": e.rule, "path": e.path, "fingerprint": e.fingerprint, "issue": e.issue, "reason": e.reason}
+    return {
+        "tool": e.tool,
+        "rule": e.rule,
+        "path": e.path,
+        "fingerprint": e.fingerprint,
+        "issue": e.issue,
+        "reason": e.reason,
+    }
 
 
 # ------------------------------------------------------------------ Markdown
@@ -230,9 +254,13 @@ def render_markdown(doc: dict, per_group: int = DEFAULT_PER_GROUP) -> str:
     t = doc["totals"]
     out = ["# Shoalscan triage work list", ""]
     scan = doc["scan"]
-    where = f"commit {md.code(scan['commit'][:12])}" if isinstance(scan.get("commit"), str) else "a directory outside git"
+    where = (
+        f"commit {md.code(scan['commit'][:12])}" if isinstance(scan.get("commit"), str) else "a directory outside git"
+    )
     dirty = " with uncommitted changes" if scan.get("dirty") else ""
-    out.append(f"From the scan of {where}{dirty}, made by Shoalscan {md.text(scan.get('shoalscan_version') or 'unknown')}.")
+    out.append(
+        f"From the scan of {where}{dirty}, made by Shoalscan {md.text(scan.get('shoalscan_version') or 'unknown')}."
+    )
     scope = "blocking findings" if doc["blocking_only"] else "findings"
     out.append(
         f"{_plural(t['findings'], scope[:-1], scope)} in {_plural(t['groups'], 'group')}: "
@@ -243,8 +271,10 @@ def render_markdown(doc: dict, per_group: int = DEFAULT_PER_GROUP) -> str:
         out += ["", f"> **Warning:** {md.text(warning)}"]
     out += [
         "",
-        "Work from the top. Fix one group per pull request, remove the fixed findings' baseline entries in the same change, "
-        "and add a test or a rule that keeps each fix in place. A false positive gets an inline suppression that names the rule "
+        "Work from the top. Fix one group per pull request, remove the fixed findings' baseline entries in the same "
+        "change, "
+        "and add a test or a rule that keeps each fix in place. A false positive gets an inline suppression that names "
+        "the rule "
         "and an issue; an accepted risk stays in the baseline with its reason. The baseline guide explains both: "
         f"{md.link('The baseline and the check', PROJECT_URL + '/blob/main/docs/baseline-and-check.md')}.",
     ]
@@ -253,11 +283,21 @@ def render_markdown(doc: dict, per_group: int = DEFAULT_PER_GROUP) -> str:
     step = 0
     if doc["stale"]:
         step += 1
-        out += ["", f"## {step}. Remove {_plural(len(doc['stale']), 'stale baseline entry', 'stale baseline entries')}", ""]
-        out.append("These entries match no finding any more, so `shoalscan check` fails until they are removed from the baseline file.")
+        out += [
+            "",
+            f"## {step}. Remove {_plural(len(doc['stale']), 'stale baseline entry', 'stale baseline entries')}",
+            "",
+        ]
+        out.append(
+            "These entries match no finding any more, so `shoalscan check` fails until they are removed from the "
+            "baseline file."
+        )
         out.append("")
         for e in doc["stale"][:per_group]:
-            out.append(f"- {md.code(e['path'])} {md.code(e['rule'])}, fingerprint {md.code(e['fingerprint'])} (issue {md.issue(e['issue'])})")
+            out.append(
+                f"- {md.code(e['path'])} {md.code(e['rule'])}, fingerprint {md.code(e['fingerprint'])} (issue "
+                f"{md.issue(e['issue'])})"
+            )
         if len(doc["stale"]) > per_group:
             out.append(f"- … and {len(doc['stale']) - per_group} more (see `--format json`)")
     for group in doc["groups"]:
@@ -267,7 +307,13 @@ def render_markdown(doc: dict, per_group: int = DEFAULT_PER_GROUP) -> str:
         if c["new_blocking"]:
             parts.append(f"{c['new_blocking']} new and blocking")
         parts.append(_severity_counts(c["by_severity"]))
-        out += ["", f"## {step}. {md.text(group['title'], 200)}", "", f"{'; '.join(parts)}. Heat score {group['heat']}.", ""]
+        out += [
+            "",
+            f"## {step}. {md.text(group['title'], 200)}",
+            "",
+            f"{'; '.join(parts)}. Heat score {group['heat']}.",
+            "",
+        ]
         out.append("Rules:")
         out.append("")
         for r in group["rules"]:
@@ -287,14 +333,21 @@ def render_markdown(doc: dict, per_group: int = DEFAULT_PER_GROUP) -> str:
             if labels:
                 out.append(f"  - {'; '.join(md.text(x, 200) for x in labels)}")
             if r["references"]:
-                out.append("  - References: " + ", ".join(md.link(str(n), u) for n, u in enumerate(r["references"], start=1)))
+                out.append(
+                    "  - References: " + ", ".join(md.link(str(n), u) for n, u in enumerate(r["references"], start=1))
+                )
         shown = 0
         hidden = 0
         for comp in group["components"]:
             if shown >= per_group:
                 hidden += len(comp["findings"])
                 continue
-            out += ["", f"### {md.text(comp['component'], 200)} ({_plural(len(comp['findings']), 'finding')}, heat {comp['heat']})", ""]
+            out += [
+                "",
+                f"### {md.text(comp['component'], 200)} ({_plural(len(comp['findings']), 'finding')}, heat "
+                f"{comp['heat']})",
+                "",
+            ]
             for f in comp["findings"]:
                 if shown >= per_group:
                     hidden += 1
@@ -325,15 +378,22 @@ def _warnings(repo: Path, meta: dict, config_path: Path, baseline_path: Path, ba
     if recorded and state:
         if (recorded.get("commit"), recorded.get("tree")) != (state.get("commit"), state.get("tree")):
             head = state.get("commit") or "no commit"
-            out.append(f"the scan was made at another commit than HEAD ({head[:12]}); run `shoalscan scan` again for an up-to-date list")
+            out.append(
+                f"the scan was made at another commit than HEAD ({head[:12]}); run `shoalscan scan` again for an "
+                "up-to-date list"
+            )
         elif recorded.get("changes_sha256") != state.get("changes_sha256") and (
-            recorded.get("without_baseline") is None or recorded.get("without_baseline") != state.get("without_baseline")
+            recorded.get("without_baseline") is None
+            or recorded.get("without_baseline") != state.get("without_baseline")
         ):
             out.append("the working tree changed after the scan; run `shoalscan scan` again for an up-to-date list")
     policy = meta.get("policy") if isinstance(meta.get("policy"), dict) else {}
     local = hashlib.sha256(config_path.read_bytes() if config_path.is_file() else b"").hexdigest()
     if policy.get("ref") is not None:
-        out.append(f"the scan read its policy from {policy['ref']}; this list uses the working tree's configuration and baseline")
+        out.append(
+            f"the scan read its policy from {policy['ref']}; this list uses the working tree's configuration and "
+            "baseline"
+        )
     elif policy.get("config_sha256") not in (None, local):
         out.append(f"{CONFIG_NAME} changed after the scan; run `shoalscan scan` again")
     if not baseline_found:
@@ -376,7 +436,8 @@ def run(args: argparse.Namespace) -> int:
         write_atomic(target, text)
         t = doc["totals"]
         print(
-            f"shoalscan triage: wrote {t['findings']} findings in {t['groups']} groups and {t['stale']} stale entries to {target}",
+            f"shoalscan triage: wrote {t['findings']} findings in {t['groups']} groups and {t['stale']} stale entries "
+            f"to {target}",
             file=sys.stderr,
         )
     else:
@@ -389,10 +450,14 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--config", help=f"configuration file (default: <repo>/{CONFIG_NAME})")
     p.add_argument("--out", help="directory with findings.json (default: the same default as `scan`)")
     p.add_argument("--baseline", help="baseline file (default: from the configuration)")
-    p.add_argument("--format", choices=("markdown", "json"), default="markdown", help="output format (default: markdown)")
+    p.add_argument(
+        "--format", choices=("markdown", "json"), default="markdown", help="output format (default: markdown)"
+    )
     p.add_argument("--output", help="write the list to this file instead of standard output")
     p.add_argument("--blocking-only", action="store_true", help="list only the findings the policy treats as blocking")
     p.add_argument(
-        "--max-per-group", type=int, default=DEFAULT_PER_GROUP,
+        "--max-per-group",
+        type=int,
+        default=DEFAULT_PER_GROUP,
         help=f"findings listed per group in Markdown (default: {DEFAULT_PER_GROUP}); JSON always lists every finding",
-    )  # fmt: skip
+    )

@@ -32,6 +32,10 @@ All notable changes to Shoalscan are recorded here.
 - The secrets Gitleaks finds never reach the findings, the SARIF file, `check.json` or the history: the report stays in the scan's private temporary directory, and fingerprints hash the matched line with the secret masked.
 - Text from the scanned repository (paths, messages, rule metadata, baseline reasons, component names, review descriptions) is escaped in the work list and the report, so it cannot add links, images, HTML or headings.
 
+### Project
+
+- The code follows PEP 8 with 120-character lines, formatted and checked by Ruff 0.14.0 (a development tool, pinned by hash in `requirements-dev.txt`, never a dependency). CI runs `ruff check` and `ruff format --check`. `CloneTooLarge` in the scan worker is now `CloneTooLargeError`.
+
 ## 0.1.1 (2026-10-11)
 
 ### Fixed

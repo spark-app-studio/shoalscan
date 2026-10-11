@@ -39,11 +39,22 @@ _RUN_COLUMNS = (
     "nb_error, nb_warning, nb_info, new, new_blocking, new_non_blocking_paths, stale, baseline_size, "
     "baseline_additions, suppressions, suppressions_invalid, suppressed_findings, unscanned_skipped, "
     "unscanned_errored, changed_unscanned, policy_ref, shoalscan_version, duration_seconds, outcome, check_exit, "
-    "details_known, files_known, suppressions_known, partial_warnings, partial_warn_only, excluded_changed, blocking_class_count, "
+    "details_known, files_known, suppressions_known, partial_warnings, partial_warn_only, excluded_changed, "
+    "blocking_class_count, "
     "EXISTS (SELECT 1 FROM scan_triggers st WHERE st.run_id = runs.id AND st.trigger = 'rescan-commit') AS rescanned"
 )
 SORTS = ("priority",)
-REVIEW_FILTERS = ("untriaged", "open", "false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed", "regression", "baselined")
+REVIEW_FILTERS = (
+    "untriaged",
+    "open",
+    "false_positive",
+    "accepted_risk",
+    "wont_fix",
+    "fixed",
+    "verified_fixed",
+    "regression",
+    "baselined",
+)
 # A finding's review status: a review made on the dashboard, else what its
 # baseline entry's reason says, else open.
 _REVIEW_STATUS = (
@@ -59,7 +70,9 @@ _REVIEW_JOIN = (
 
 
 def _review(r) -> dict:
-    source = "review" if r["review_status_raw"] is not None else ("baseline" if r["baseline_reason"] is not None else "none")
+    source = (
+        "review" if r["review_status_raw"] is not None else ("baseline" if r["baseline_reason"] is not None else "none")
+    )
     return {
         "status": r["review_status"],
         "source": source,
@@ -70,6 +83,8 @@ def _review(r) -> dict:
         "baseline_issue": r["baseline_issue"],
         "baseline_reason": r["baseline_reason"],
     }
+
+
 SEVERITY_RANK = {"ERROR": 0, "WARNING": 1, "INFO": 2}
 TOP_BLOCKING = 10
 _TREND = "outcome != 'scan_error'"
@@ -119,21 +134,33 @@ def run_status(d: dict) -> dict:
     reasons = [
         _count(d["new_blocking"], "new blocking finding", "new blocking findings") if d["new_blocking"] else None,
         _count(d["stale"], "stale baseline entry", "stale baseline entries") if d["stale"] else None,
-        _count(d["changed_unscanned"], "changed file not fully scanned", "changed files not fully scanned") if d["changed_unscanned"] else None,
-        _count(d["baseline_additions"], "baseline entry added", "baseline entries added") if d["baseline_additions"] else None,
+        _count(d["changed_unscanned"], "changed file not fully scanned", "changed files not fully scanned")
+        if d["changed_unscanned"]
+        else None,
+        _count(d["baseline_additions"], "baseline entry added", "baseline entries added")
+        if d["baseline_additions"]
+        else None,
     ]
     reasons = [r for r in reasons if r]
     notes = []
     if d.get("partial_warn_only"):
-        notes.append(_count(d["partial_warn_only"], "changed file partially parsed (warn-only by policy)", "changed files partially parsed (warn-only by policy)"))
+        notes.append(
+            _count(
+                d["partial_warn_only"],
+                "changed file partially parsed (warn-only by policy)",
+                "changed files partially parsed (warn-only by policy)",
+            )
+        )
     if outcome == "passed":
         return {"outcome": outcome, "label": "Passed", "details": notes, "explanation": None}
     return {
         "outcome": outcome,
         "label": f"Blocked: {reasons[0]}" if reasons else "Blocked",
         "details": reasons[1:] + notes,
-        "explanation": "The check blocks a change that adds findings the baseline does not accept, leaves stale baseline entries, "
-        "or changes files that could not be fully scanned.",
+        "explanation": (
+            "The check blocks a change that adds findings the baseline does not accept, leaves stale baseline "
+            "entries, or changes files that could not be fully scanned."
+        ),
     }
 
 
@@ -200,7 +227,9 @@ def heat_rows(counts: dict[str, Counter]) -> list[dict]:
     for component, c in counts.items():
         cells = [c[s] for s in SEVERITIES]
         score = sum(HEAT_WEIGHTS[s] * c[s] for s in SEVERITIES)
-        rows.append({"component": component, "cells": cells, "new": c["new"], "new_blocking": c["new_blocking"], "score": score})
+        rows.append(
+            {"component": component, "cells": cells, "new": c["new"], "new_blocking": c["new_blocking"], "score": score}
+        )
     rows.sort(key=lambda r: (r["new_blocking"] == 0, -r["score"], r["component"]))
     return rows
 
@@ -243,7 +272,8 @@ class Data:
         out = []
         for row in self.conn.execute("SELECT id, name FROM repos ORDER BY name"):
             latest = self.conn.execute(
-                f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? ORDER BY scanned_at DESC, id DESC LIMIT 1", (row["id"],)
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? ORDER BY scanned_at DESC, id DESC LIMIT 1",
+                (row["id"],),
             ).fetchone()
             count = self.conn.execute("SELECT COUNT(*) FROM runs WHERE repo_id = ?", (row["id"],)).fetchone()[0]
             out.append({"name": row["name"], "runs": count, "latest": _run_dict(latest) if latest else None})
@@ -253,7 +283,8 @@ class Data:
         """Changes whenever the repository's runs change; used as a cache key."""
         return tuple(
             self.conn.execute(
-                "SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(MAX(recorded_at), ''), COALESCE(SUM(id), 0) FROM runs WHERE repo_id = ?",
+                "SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(MAX(recorded_at), ''), COALESCE(SUM(id), 0) FROM runs "
+                "WHERE repo_id = ?",
                 (repo_id,),
             ).fetchone()
         )
@@ -268,12 +299,14 @@ class Data:
         kinds = self._trend_kinds(repo_id)
         marks = ", ".join("?" for _ in kinds)
         return self.conn.execute(
-            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? AND kind IN ({marks}) AND {_TREND} ORDER BY scanned_at, id",
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? AND kind IN ({marks}) AND {_TREND} ORDER BY scanned_at, id",  # noqa: E501 - one literal, so Opengrep's raw-query rule still sees it
             (repo_id, *kinds),
         ).fetchall()
 
     def run(self, repo_id: int, run_id: int) -> dict | None:
-        row = self.conn.execute(f"SELECT {_RUN_COLUMNS} FROM runs WHERE id = ? AND repo_id = ?", (run_id, repo_id)).fetchone()
+        row = self.conn.execute(
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE id = ? AND repo_id = ?", (run_id, repo_id)
+        ).fetchone()
         return _run_dict(row) if row else None
 
     # -------------------------------------------------------- overview
@@ -334,7 +367,9 @@ class Data:
         """Yield (index, run, current keys, previous keys) for the newest trend runs, two runs at a time."""
         previous: set[int] = set()
         for index, run in enumerate(runs[-MAX_TREND_RUNS:]):
-            current = {key for (key,) in self.conn.execute("SELECT key_id FROM run_findings WHERE run_id = ?", (run["id"],))}
+            current = {
+                key for (key,) in self.conn.execute("SELECT key_id FROM run_findings WHERE run_id = ?", (run["id"],))
+            }
             yield index, run, current, previous
             previous = current
 
@@ -370,11 +405,19 @@ class Data:
 
     def blocking_summary(self, repo_id: int, run: sqlite3.Row) -> dict:
         """The blocking-class findings of one run: how many, new versus baselined, and the top ones by priority."""
-        out = {"run": run["id"], "known": run["blocking_class_count"] is not None, "total": None, "new": None, "baselined": None, "top": []}
+        out = {
+            "run": run["id"],
+            "known": run["blocking_class_count"] is not None,
+            "total": None,
+            "new": None,
+            "baselined": None,
+            "top": [],
+        }
         if not out["known"]:
             return out
         total, new = self.conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(is_new), 0) FROM run_findings WHERE run_id = ? AND blocking_class = 1", (run["id"],)
+            "SELECT COUNT(*), COALESCE(SUM(is_new), 0) FROM run_findings WHERE run_id = ? AND blocking_class = 1",
+            (run["id"],),
         ).fetchone()
         out.update(total=total, new=new, baselined=total - new)
         out["top"] = self.findings(repo_id, run["id"], blocking=True, sort="priority", limit=TOP_BLOCKING)["findings"]
@@ -473,14 +516,19 @@ class Data:
             where.append(f"({_REVIEW_STATUS}) = ?")
             params.append(review)
         clause = " AND ".join(where)
-        base = f"FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id JOIN messages m ON m.id = rf.message_id {_REVIEW_JOIN}"
+        base = (
+            "FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id JOIN messages m ON m.id = rf.message_id "
+            f"{_REVIEW_JOIN}"
+        )
         total = self.conn.execute(f"SELECT COUNT(*) {base} WHERE {clause}", params).fetchone()[0]
         limit = max(1, min(limit, MAX_PAGE))
         offset = max(0, offset)
         columns = (
             f"SELECT rf.key_id, rf.severity, fk.tool, fk.rule, fk.path, fk.fingerprint, rf.line, rf.component, m.text, "
-            f"rf.is_new, rf.new_blocking, rf.blocking_class, rf.baseline_issue, rf.baseline_reason, fr.status AS review_status_raw, "
-            f"({_REVIEW_STATUS}) AS review_status, fr.description AS review_description, fr.resolved_at AS review_resolved_at, "
+            "rf.is_new, rf.new_blocking, rf.blocking_class, rf.baseline_issue, rf.baseline_reason, fr.status AS "
+            "review_status_raw, "
+            f"({_REVIEW_STATUS}) AS review_status, fr.description AS review_description, fr.resolved_at AS "
+            "review_resolved_at, "
             f"fr.updated_at AS review_updated_at, fr.updated_by AS review_updated_by {base} WHERE {clause}"
         )
         if sort == "priority":
@@ -498,7 +546,10 @@ class Data:
             ).fetchall()
             first_seen = self._first_seen(repo_id, [r["key_id"] for r in rows])
         facets = {
-            "severities": [s for (s,) in self.conn.execute("SELECT DISTINCT severity FROM run_findings WHERE run_id = ?", (run_id,))],
+            "severities": [
+                s
+                for (s,) in self.conn.execute("SELECT DISTINCT severity FROM run_findings WHERE run_id = ?", (run_id,))
+            ],
             "rules": [
                 {"rule": name, "count": n}
                 for name, n in self.conn.execute(
@@ -508,7 +559,10 @@ class Data:
                 )
             ],
             "components": [
-                c for (c,) in self.conn.execute("SELECT DISTINCT component FROM run_findings WHERE run_id = ? ORDER BY component", (run_id,))
+                c
+                for (c,) in self.conn.execute(
+                    "SELECT DISTINCT component FROM run_findings WHERE run_id = ? ORDER BY component", (run_id,)
+                )
             ],
         }
         facets["severities"].sort(key=SEVERITIES.index)
@@ -591,7 +645,8 @@ class Data:
             (run_id, rule, max(1, min(limit, MAX_PAGE))),
         ).fetchall()
         total = self.conn.execute(
-            "SELECT COUNT(*) FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id WHERE rf.run_id = ? AND fk.rule = ?",
+            "SELECT COUNT(*) FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id WHERE rf.run_id = ? AND "
+            "fk.rule = ?",
             (run_id, rule),
         ).fetchone()[0]
         return {
@@ -600,7 +655,8 @@ class Data:
             "total": total,
             "messages": sorted({r["text"] for r in rows}),
             "locations": [
-                {"severity": r["severity"], "path": r["path"], "line": r["line"], "component": r["component"]} for r in rows
+                {"severity": r["severity"], "path": r["path"], "line": r["line"], "component": r["component"]}
+                for r in rows
             ],
         }
 
@@ -621,7 +677,11 @@ class Data:
             where += " AND kind = ?"
             params.append(kind)
         total = self.conn.execute(f"SELECT COUNT(*) FROM run_files WHERE {where}", params).fetchone()[0]
-        counts = dict(self.conn.execute("SELECT kind, COUNT(*) FROM run_files WHERE run_id = ? GROUP BY kind", (run_id,)).fetchall())
+        counts = dict(
+            self.conn.execute(
+                "SELECT kind, COUNT(*) FROM run_files WHERE run_id = ? GROUP BY kind", (run_id,)
+            ).fetchall()
+        )
         rows = self.conn.execute(
             f"SELECT kind, path, detail FROM run_files WHERE {where} ORDER BY kind, path LIMIT ? OFFSET ?",
             (*params, max(1, min(limit, MAX_PAGE)), max(0, offset)),
@@ -646,7 +706,14 @@ class Data:
             "run": run_id,
             "total": total,
             "suppressions": [
-                {"path": r["path"], "line": r["line"], "rules": r["rules"].split(), "issue": r["issue"], "valid": bool(r["valid"]), "problem": r["problem"]}
+                {
+                    "path": r["path"],
+                    "line": r["line"],
+                    "rules": r["rules"].split(),
+                    "issue": r["issue"],
+                    "valid": bool(r["valid"]),
+                    "problem": r["problem"],
+                }
                 for r in rows
             ],
         }
@@ -670,15 +737,29 @@ class Data:
                 picked += [(before, k, run["scanned_at"]) for k in sorted(previous - current)]
         return picked
 
-    def changes(self, repo_id: int, week: str, change: str, limit: int = MAX_PAGE, offset: int = 0,
-                picked: list[tuple[int, int, str]] | None = None) -> dict:
+    def changes(
+        self,
+        repo_id: int,
+        week: str,
+        change: str,
+        limit: int = MAX_PAGE,
+        offset: int = 0,
+        picked: list[tuple[int, int, str]] | None = None,
+    ) -> dict:
         """One page of `change_keys`, with each finding's details. `picked` may come from a cache."""
         if picked is None:
             picked = self.change_keys(repo_id, week, change)
         limit = max(1, min(limit, MAX_PAGE))
         offset = max(0, offset)
         items = self._change_items(picked[offset : offset + limit])
-        return {"week": week, "change": change, "total": len(picked), "limit": limit, "offset": offset, "findings": items}
+        return {
+            "week": week,
+            "change": change,
+            "total": len(picked),
+            "limit": limit,
+            "offset": offset,
+            "findings": items,
+        }
 
     def _change_items(self, picked: list[tuple[int, int, str]]) -> list[dict]:
         """Each (run the finding is shown from, key id, when) with the finding's details from that run."""
@@ -691,8 +772,18 @@ class Data:
                 (shown_run, key_id),
             ).fetchone()
             if r:
-                items.append({"when": when, "run": shown_run, "severity": r["severity"], "rule": r["rule"], "path": r["path"],
-                              "line": r["line"], "component": r["component"], "message": r["text"]})
+                items.append(
+                    {
+                        "when": when,
+                        "run": shown_run,
+                        "severity": r["severity"],
+                        "rule": r["rule"],
+                        "path": r["path"],
+                        "line": r["line"],
+                        "component": r["component"],
+                        "message": r["text"],
+                    }
+                )
         return items
 
     @staticmethod
@@ -789,7 +880,8 @@ class Data:
         """Runs of this repository deleted with `shoalscan history delete-run`, newest first."""
         count = self.conn.execute("SELECT COUNT(*) FROM deletions WHERE repo_name = ?", (repo_name,)).fetchone()[0]
         rows = self.conn.execute(
-            "SELECT run_id, kind, ref, commit_sha, scanned_at, outcome, findings, deleted_at, deleted_by FROM deletions "
+            "SELECT run_id, kind, ref, commit_sha, scanned_at, outcome, findings, deleted_at, deleted_by FROM "
+            "deletions "
             "WHERE repo_name = ? ORDER BY deleted_at DESC, id DESC LIMIT ?",
             (repo_name, limit),
         ).fetchall()
@@ -797,7 +889,9 @@ class Data:
 
     def config_changes(self, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
-            "SELECT who, changed_at, target, action, diff, policy_before, policy_after, policy_diff FROM config_changes ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT who, changed_at, target, action, diff, policy_before, policy_after, policy_diff FROM "
+            "config_changes ORDER BY id DESC LIMIT ?",
+            (limit,),
         ).fetchall()
         out = []
         for r in rows:
@@ -811,7 +905,7 @@ class Data:
 
     def latest_run_of(self, name: str) -> dict | None:
         row = self.conn.execute(
-            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = (SELECT id FROM repos WHERE name = ?) ORDER BY scanned_at DESC, id DESC LIMIT 1",
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = (SELECT id FROM repos WHERE name = ?) ORDER BY scanned_at DESC, id DESC LIMIT 1",  # noqa: E501 - one literal, so Opengrep's raw-query rule still sees it
             (name,),
         ).fetchone()
         return _run_dict(row) if row else None
@@ -819,12 +913,16 @@ class Data:
     def scan_triggers(self, limit: int = 20) -> list[dict]:
         """Scans started from the dashboard, the command line or the nightly job, newest first."""
         rows = self.conn.execute(
-            "SELECT target, who, trigger, started_at, finished_at, outcome, run_id, detail FROM scan_triggers ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT target, who, trigger, started_at, finished_at, outcome, run_id, detail FROM scan_triggers ORDER BY "
+            "id DESC LIMIT ?",
+            (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
 
     def latest_scanners(self) -> dict:
-        row = self.conn.execute(f"SELECT scanners FROM runs WHERE {_TREND} ORDER BY scanned_at DESC, id DESC LIMIT 1").fetchone()
+        row = self.conn.execute(
+            f"SELECT scanners FROM runs WHERE {_TREND} ORDER BY scanned_at DESC, id DESC LIMIT 1"
+        ).fetchone()
         if not row:
             return {}
         try:

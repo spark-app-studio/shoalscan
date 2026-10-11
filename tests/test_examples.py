@@ -1,4 +1,3 @@
-import os
 import re
 import stat
 import subprocess
@@ -54,7 +53,9 @@ class SelfHostedScriptTests(unittest.TestCase):
             "SHOALSCAN_SPEC": spec,
             "LOG": str(log),
         }
-        subprocess.run(["bash", str(EXAMPLES / "self-hosted.sh"), str(home)], env=env, check=True, capture_output=True, timeout=60)
+        subprocess.run(
+            ["bash", str(EXAMPLES / "self-hosted.sh"), str(home)], env=env, check=True, capture_output=True, timeout=60
+        )
 
     def test_reinstalls_when_the_spec_changes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -116,7 +117,9 @@ class ScheduledScanScriptTests(unittest.TestCase):
         (origin / "a.py").write_text("x = 1\n", encoding="utf-8")
         subprocess.run([*git, "-C", str(origin), "add", "a.py"], check=True, timeout=30)
         subprocess.run([*git, "-C", str(origin), "commit", "-q", "-m", "one"], check=True, timeout=30)
-        self.sha = subprocess.run(["git", "-C", str(origin), "rev-parse", "HEAD"], check=True, capture_output=True, text=True, timeout=30).stdout.strip()
+        self.sha = subprocess.run(
+            ["git", "-C", str(origin), "rev-parse", "HEAD"], check=True, capture_output=True, text=True, timeout=30
+        ).stdout.strip()
         self.clone = self.base / "clone"
         subprocess.run(["git", "clone", "-q", str(origin), str(self.clone)], check=True, timeout=30)
         (self.clone / "local-change.txt").write_text("keep me\n", encoding="utf-8")
@@ -155,15 +158,22 @@ class ScheduledScanScriptTests(unittest.TestCase):
         self.assertEqual((self.base / "venv.log").read_text().count("created"), 1)
 
     def run_script(self, **env):
-        return subprocess.run(["bash", str(EXAMPLES / "scheduled-scan.sh"), str(self.clone)], env={**self.env, **env},
-                              capture_output=True, text=True, timeout=60)
+        return subprocess.run(
+            ["bash", str(EXAMPLES / "scheduled-scan.sh"), str(self.clone)],
+            env={**self.env, **env},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
 
     def calls(self):
         return self.log.read_text().splitlines()
 
     def assert_clone_untouched(self):
         self.assertEqual((self.clone / "local-change.txt").read_text(), "keep me\n")
-        worktrees = subprocess.run(["git", "-C", str(self.clone), "worktree", "list"], capture_output=True, text=True, timeout=30).stdout
+        worktrees = subprocess.run(
+            ["git", "-C", str(self.clone), "worktree", "list"], capture_output=True, text=True, timeout=30
+        ).stdout
         self.assertEqual(len(worktrees.splitlines()), 1)
 
     def test_records_the_default_branch_head_as_a_scheduled_run(self):
@@ -174,14 +184,24 @@ class ScheduledScanScriptTests(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 record = [c for c in self.calls() if c.startswith("record ")]
                 self.assertEqual(len(record), 1)
-                for part in ("--kind scheduled", f"--commit {self.sha}", "--ref main", "--repo-name acme/app", "--scanned-at 20",
-                             f"--check-exit {check_exit}"):
+                for part in (
+                    "--kind scheduled",
+                    f"--commit {self.sha}",
+                    "--ref main",
+                    "--repo-name acme/app",
+                    "--scanned-at 20",
+                    f"--check-exit {check_exit}",
+                ):
                     self.assertIn(part, record[0])
                 self.assert_clone_untouched()
 
     def test_a_stale_worktree_from_an_interrupted_run_is_pruned(self):
         stale = self.base / "gone"
-        subprocess.run(["git", "-C", str(self.clone), "worktree", "add", "-q", "--detach", str(stale), "HEAD"], check=True, timeout=30)
+        subprocess.run(
+            ["git", "-C", str(self.clone), "worktree", "add", "-q", "--detach", str(stale), "HEAD"],
+            check=True,
+            timeout=30,
+        )
         for child in sorted(stale.rglob("*"), reverse=True):
             child.unlink() if child.is_file() or child.is_symlink() else child.rmdir()
         stale.rmdir()
@@ -207,7 +227,9 @@ class ScheduledScanScriptTests(unittest.TestCase):
 
 class ProjectUrlTests(unittest.TestCase):
     def test_no_placeholder_project_url_is_left(self):
-        tracked = subprocess.run(["git", "-C", str(helpers.ROOT), "ls-files"], capture_output=True, text=True, timeout=30, check=True).stdout.split()
+        tracked = subprocess.run(
+            ["git", "-C", str(helpers.ROOT), "ls-files"], capture_output=True, text=True, timeout=30, check=True
+        ).stdout.split()
         offenders = []
         for name in tracked:
             path = helpers.ROOT / name
@@ -236,7 +258,9 @@ class NightlyTargetsUnitTests(unittest.TestCase):
         service = (EXAMPLES / "scheduled" / "shoalscan-nightly-targets.service").read_text(encoding="utf-8")
         self.assertIn("\nPrivateTmp=yes\n", service)
         self.assertIn("\nNoNewPrivileges=yes\n", service)
-        self.assertIn("OnCalendar=", (EXAMPLES / "scheduled" / "shoalscan-nightly-targets.timer").read_text(encoding="utf-8"))
+        self.assertIn(
+            "OnCalendar=", (EXAMPLES / "scheduled" / "shoalscan-nightly-targets.timer").read_text(encoding="utf-8")
+        )
 
 
 if __name__ == "__main__":

@@ -23,7 +23,8 @@ from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from shoalscan import PROJECT_URL, __version__, history, markdown as md
+from shoalscan import PROJECT_URL, __version__, history
+from shoalscan import markdown as md
 from shoalscan.dashboard.data import MAX_TREND_RUNS, SEVERITIES, Data
 from shoalscan.errors import SetupError
 from shoalscan.scan import write_atomic
@@ -109,7 +110,8 @@ def build(conn, repo: str, first: date, last: date, generated_at: str) -> dict:
     changes = data.period(repo_id, since, until, limit=MAX_LISTED)
     if not changes["complete"]:
         raise SetupError(
-            f"the period holds more trend runs than a report can walk ({MAX_TREND_RUNS}), so its counts would be incomplete; "
+            f"the period holds more trend runs than a report can walk ({MAX_TREND_RUNS}), so its counts would be "
+            "incomplete; "
             "choose a shorter period"
         )
     end, start = changes["end"], changes["start"]
@@ -133,13 +135,19 @@ def build(conn, repo: str, first: date, last: date, generated_at: str) -> dict:
         run_id = end["id"]
         if end["blocking_class"] is not None:
             total, new = conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(is_new), 0) FROM run_findings WHERE run_id = ? AND blocking_class = 1", (run_id,)
+                "SELECT COUNT(*), COALESCE(SUM(is_new), 0) FROM run_findings WHERE run_id = ? AND blocking_class = 1",
+                (run_id,),
             ).fetchone()
             doc["blocking"] = {"total": total, "new": new, "baselined": total - new}
         doc["reviews_now"] = data.review_counts(repo_id, run_id)
         doc["baselined"] = _baselined(conn, run_id)
         doc["components"] = [
-            {"component": r["component"], "by_severity": dict(zip(SEVERITIES, r["cells"])), "new_blocking": r["new_blocking"], "heat": r["score"]}
+            {
+                "component": r["component"],
+                "by_severity": dict(zip(SEVERITIES, r["cells"])),
+                "new_blocking": r["new_blocking"],
+                "heat": r["score"],
+            }
             for r in data.by_component(run_id)["rows"][:MAX_COMPONENTS]
         ]
         row = conn.execute("SELECT scanners FROM runs WHERE id = ?", (run_id,)).fetchone()
@@ -156,7 +164,8 @@ def build(conn, repo: str, first: date, last: date, generated_at: str) -> dict:
 def _baselined(conn, run_id: int) -> dict:
     """The end run's baselined findings, grouped by the issue and reason of their baseline entries."""
     rows = conn.execute(
-        "SELECT baseline_issue, baseline_reason, COUNT(*) AS n, SUM(severity = 'ERROR'), SUM(severity = 'WARNING'), SUM(severity = 'INFO') "
+        "SELECT baseline_issue, baseline_reason, COUNT(*) AS n, SUM(severity = 'ERROR'), SUM(severity = 'WARNING'), "
+        "SUM(severity = 'INFO') "
         "FROM run_findings WHERE run_id = ? AND baseline_reason IS NOT NULL GROUP BY baseline_issue, baseline_reason "
         "ORDER BY n DESC, baseline_issue, baseline_reason",
         (run_id,),
@@ -167,9 +176,21 @@ def _baselined(conn, run_id: int) -> dict:
         kind = baseline_kind(reason)
         by_kind[kind] += n
         if len(reasons) < MAX_LISTED:
-            reasons.append({"issue": issue, "reason": reason, "kind": kind, "findings": n,
-                            "by_severity": {"ERROR": error or 0, "WARNING": warning or 0, "INFO": info or 0}})  # fmt: skip
-    return {"total": sum(by_kind.values()), "groups": len(rows), "by_kind": {k: by_kind.get(k, 0) for k in BASELINE_KINDS}, "reasons": reasons}
+            reasons.append(
+                {
+                    "issue": issue,
+                    "reason": reason,
+                    "kind": kind,
+                    "findings": n,
+                    "by_severity": {"ERROR": error or 0, "WARNING": warning or 0, "INFO": info or 0},
+                }
+            )
+    return {
+        "total": sum(by_kind.values()),
+        "groups": len(rows),
+        "by_kind": {k: by_kind.get(k, 0) for k in BASELINE_KINDS},
+        "reasons": reasons,
+    }
 
 
 def _runs(conn, repo_id: int, repo: str, since: str, until: str) -> dict:
@@ -189,14 +210,21 @@ def _runs(conn, repo_id: int, repo: str, since: str, until: str) -> dict:
 
 def _reviews(conn, repo: str, since: str, until: str) -> dict:
     """Review statuses now, and every review change made in the period."""
-    now = dict(conn.execute("SELECT status, COUNT(*) FROM finding_reviews WHERE repo_name = ? GROUP BY status", (repo,)).fetchall())
+    now = dict(
+        conn.execute(
+            "SELECT status, COUNT(*) FROM finding_reviews WHERE repo_name = ? GROUP BY status", (repo,)
+        ).fetchall()
+    )
     total = conn.execute(
         "SELECT COUNT(*) FROM finding_review_events WHERE repo_name = ? AND at BETWEEN ? AND ?", (repo, since, until)
     ).fetchone()[0]
-    by_status = dict(conn.execute(
-        "SELECT to_status, COUNT(*) FROM finding_review_events WHERE repo_name = ? AND at BETWEEN ? AND ? GROUP BY to_status",
-        (repo, since, until),
-    ).fetchall())  # fmt: skip
+    by_status = dict(
+        conn.execute(
+            "SELECT to_status, COUNT(*) FROM finding_review_events WHERE repo_name = ? AND at BETWEEN ? AND ? GROUP BY "
+            "to_status",
+            (repo, since, until),
+        ).fetchall()
+    )
     rows = conn.execute(
         "SELECT at, who, from_status, to_status, description, rule, path FROM finding_review_events "
         "WHERE repo_name = ? AND at BETWEEN ? AND ? ORDER BY at, id LIMIT ?",
@@ -204,10 +232,15 @@ def _reviews(conn, repo: str, since: str, until: str) -> dict:
     ).fetchall()
     return {
         "now": {s: now.get(s, 0) for s in REVIEW_LABELS if s != "open"},
-        "changes": {"total": total, "by_status": {s: by_status.get(s, 0) for s in REVIEW_LABELS}, "items": [
-            {"at": at, "who": who, "from": a, "to": b, "description": d, "rule": rule, "path": path} for at, who, a, b, d, rule, path in rows
-        ]},
-    }  # fmt: skip
+        "changes": {
+            "total": total,
+            "by_status": {s: by_status.get(s, 0) for s in REVIEW_LABELS},
+            "items": [
+                {"at": at, "who": who, "from": a, "to": b, "description": d, "rule": rule, "path": path}
+                for at, who, a, b, d, rule, path in rows
+            ],
+        },
+    }
 
 
 # ------------------------------------------------------------------ Markdown
@@ -227,8 +260,10 @@ def _change(before: int, after: int) -> str:
 
 
 def _run_line(run: dict) -> str:
-    return (f"{run['scanned_at'][:10]}, commit {md.code(run['commit'][:12])} on {md.code(run['ref'])} "
-            f"({md.text(run['kind'])} run {run['id']}): {md.text(run['status'])}")  # fmt: skip
+    return (
+        f"{run['scanned_at'][:10]}, commit {md.code(run['commit'][:12])} on {md.code(run['ref'])} "
+        f"({md.text(run['kind'])} run {run['id']}): {md.text(run['status'])}"
+    )
 
 
 def render_markdown(doc: dict) -> str:
@@ -238,11 +273,16 @@ def render_markdown(doc: dict) -> str:
     out = [
         f"# Security report: {md.text(doc['repository'], 200)}",
         "",
-        f"**Period:** {p['first_day']} to {p['last_day']} (UTC). **Generated:** {doc['generated_at']} by Shoalscan {doc['shoalscan_version']}.",
+        f"**Period:** {p['first_day']} to {p['last_day']} (UTC). **Generated:** {doc['generated_at']} by Shoalscan "
+        f"{doc['shoalscan_version']}.",
         "",
-        "Trends come from " + ("the scheduled scans of the default branch." if doc["trend_runs"] == "scheduled"
-                               else "every recorded run: this repository has no scheduled scans, so pull-request runs are included."),
-    ]  # fmt: skip
+        "Trends come from "
+        + (
+            "the scheduled scans of the default branch."
+            if doc["trend_runs"] == "scheduled"
+            else "every recorded run: this repository has no scheduled scans, so pull-request runs are included."
+        ),
+    ]
 
     out += ["", "## Summary", ""]
     if end is None:
@@ -257,7 +297,9 @@ def render_markdown(doc: dict) -> str:
         if b is None:
             out.append("- Blocking findings: unknown for this run (recorded without the check's details).")
         else:
-            out.append(f"- Blocking findings: {b['total']}, of which {b['new']} new and {b['baselined']} in the baseline.")
+            out.append(
+                f"- Blocking findings: {b['total']}, of which {b['new']} new and {b['baselined']} in the baseline."
+            )
         line = f"- Baseline: {_plural(end['baseline_size'], 'entry', 'entries')}"
         if start:
             line += f" ({_change(start['baseline_size'], end['baseline_size'])} since the start)"
@@ -275,9 +317,20 @@ def render_markdown(doc: dict) -> str:
     if end and start:
         out += ["| Severity | Start | End | Change |", "|---|---:|---:|---|"]
         for s in SEVERITIES:
-            out.append(f"| {s} | {start['by_severity'][s]} | {end['by_severity'][s]} | {_change(start['by_severity'][s], end['by_severity'][s])} |")
-        out.append(f"| Baseline entries | {start['baseline_size']} | {end['baseline_size']} | {_change(start['baseline_size'], end['baseline_size'])} |")
-        out += ["", f"Start: the scan of {start['scanned_at'][:10]}, the last before the period. End: the scan of {end['scanned_at'][:10]}.", ""]
+            out.append(
+                f"| {s} | {start['by_severity'][s]} | {end['by_severity'][s]} | "
+                f"{_change(start['by_severity'][s], end['by_severity'][s])} |"
+            )
+        out.append(
+            f"| Baseline entries | {start['baseline_size']} | {end['baseline_size']} | "
+            f"{_change(start['baseline_size'], end['baseline_size'])} |"
+        )
+        out += [
+            "",
+            f"Start: the scan of {start['scanned_at'][:10]}, the last before the period. End: the scan of "
+            f"{end['scanned_at'][:10]}.",
+            "",
+        ]
     elif end:
         out += ["No scan was recorded before the period, so it has no starting point to compare with.", ""]
     out += ["| Week of | New | Fixed |", "|---|---:|---:|"]
@@ -290,7 +343,9 @@ def render_markdown(doc: dict) -> str:
             out.append("None.")
         for f in part["findings"]:
             where = md.code(f"{f['path']}:{f['line']}")
-            out.append(f"- {f['when'][:10]} {f['severity']} {where} {md.code(f['rule'])} ({md.text(f['component'], 200)})")
+            out.append(
+                f"- {f['when'][:10]} {f['severity']} {where} {md.code(f['rule'])} ({md.text(f['component'], 200)})"
+            )
         if part["total"] > len(part["findings"]):
             out.append(f"- … and {part['total'] - len(part['findings'])} more (see `--format json`, or the dashboard)")
 
@@ -300,15 +355,24 @@ def render_markdown(doc: dict) -> str:
         out.append("No scan in the period, so the baseline cannot be described.")
     else:
         kinds = ", ".join(f"{BASELINE_KINDS[k].lower()} {n}" for k, n in base["by_kind"].items())
-        out.append(f"The baseline accepts {_plural(base['total'], 'finding')} in the latest scan ({kinds}), under {_plural(base['groups'], 'issue and reason', 'issues and reasons')}:")
+        out.append(
+            f"The baseline accepts {_plural(base['total'], 'finding')} in the latest scan ({kinds}), under "
+            f"{_plural(base['groups'], 'issue and reason', 'issues and reasons')}:"
+        )
         out.append("")
         for g in base["reasons"]:
-            out.append(f"- {_plural(g['findings'], 'finding')} ({_severities(g['by_severity'])}), {md.text(g['issue'])}: {md.text(g['reason'], 400)}")
+            out.append(
+                f"- {_plural(g['findings'], 'finding')} ({_severities(g['by_severity'])}), {md.text(g['issue'])}: "
+                f"{md.text(g['reason'], 400)}"
+            )
         if base["groups"] > len(base["reasons"]):
             out.append(f"- … and {base['groups'] - len(base['reasons'])} more reasons")
     rv = doc["reviews"]
     now = ", ".join(f"{REVIEW_LABELS[s].lower()} {n}" for s, n in rv["now"].items())
-    out += ["", f"Dashboard reviews now: {now}. Reviews help triage but never change what blocks CI; the baseline does."]
+    out += [
+        "",
+        f"Dashboard reviews now: {now}. Reviews help triage but never change what blocks CI; the baseline does.",
+    ]
     changes = rv["changes"]
     out += ["", f"Review changes in the period: {changes['total']}."]
     if changes["items"]:
@@ -316,29 +380,48 @@ def render_markdown(doc: dict) -> str:
         for e in changes["items"]:
             out.append(
                 f"- {e['at'][:10]} {md.text(e['who'], 100)}: {REVIEW_LABELS.get(e['from'], md.text(e['from']))} to "
-                f"{REVIEW_LABELS.get(e['to'], md.text(e['to']))}, {md.code(e['path'])} {md.code(e['rule'])}: {md.text(e['description'], 300)}"
+                f"{REVIEW_LABELS.get(e['to'], md.text(e['to']))}, {md.code(e['path'])} {md.code(e['rule'])}: "
+                f"{md.text(e['description'], 300)}"
             )
         if changes["total"] > len(changes["items"]):
             out.append(f"- … and {changes['total'] - len(changes['items'])} more")
 
     if doc["components"]:
-        out += ["", "## Components", "", "In the latest scan, hottest first (heat: ERROR ×10, WARNING ×3, INFO ×1).", ""]
+        out += [
+            "",
+            "## Components",
+            "",
+            "In the latest scan, hottest first (heat: ERROR ×10, WARNING ×3, INFO ×1).",
+            "",
+        ]
         out += ["| Component | ERROR | WARNING | INFO | New blocking | Heat |", "|---|---:|---:|---:|---:|---:|"]
         for c in doc["components"]:
             s = c["by_severity"]
-            out.append(f"| {md.text(c['component'], 200)} | {s['ERROR']} | {s['WARNING']} | {s['INFO']} | {c['new_blocking']} | {c['heat']} |")
+            out.append(
+                f"| {md.text(c['component'], 200)} | {s['ERROR']} | {s['WARNING']} | {s['INFO']} | {c['new_blocking']} "
+                f"| {c['heat']} |"
+            )
 
     out += ["", "## Coverage", ""]
     runs = doc["runs"]
     for kind, label in (("scheduled", "Scheduled scans"), ("pr", "Pull-request runs")):
         c = runs["by_kind"][kind]
-        out.append(f"- {label} in the period: {sum(c.values())} ({', '.join(f'{OUTCOME_LABELS[o]} {n}' for o, n in c.items())}).")
+        out.append(
+            f"- {label} in the period: {sum(c.values())} "
+            f"({', '.join(f'{OUTCOME_LABELS[o]} {n}' for o, n in c.items())})."
+        )
     if runs["deleted"]:
-        out.append(f"- {_plural(runs['deleted'], 'run')} scanned in the period {'was' if runs['deleted'] == 1 else 'were'} later deleted from the history.")
+        out.append(
+            f"- {_plural(runs['deleted'], 'run')} scanned in the period {'was' if runs['deleted'] == 1 else 'were'} "
+            "later deleted from the history."
+        )
     if end:
         u, s = end["unscanned"], end["suppressions"]
         out.append(f"- Files not fully scanned in the latest scan: {u['skipped']} skipped, {u['errored']} with errors.")
-        out.append(f"- Inline suppressions: {s['total']} ({s['invalid']} without a rule and an issue), silencing {_plural(s['suppressed_findings'], 'finding')}.")
+        out.append(
+            f"- Inline suppressions: {s['total']} ({s['invalid']} without a rule and an issue), silencing "
+            f"{_plural(s['suppressed_findings'], 'finding')}."
+        )
     for name, info in sorted(doc["scanners"].items()):
         if not isinstance(info, dict):
             continue
@@ -357,8 +440,10 @@ def render_markdown(doc: dict) -> str:
         "",
         "## Limits",
         "",
-        "This report covers what the configured scanners and rules can see in the scanned files. Static analysis misses flaws "
-        "that need data flow across files, runtime behaviour or business logic, and it does not replace code review, tests or "
+        "This report covers what the configured scanners and rules can see in the scanned files. Static analysis "
+        "misses flaws "
+        "that need data flow across files, runtime behaviour or business logic, and it does not replace code review, "
+        "tests or "
         f"dependency audits. See {md.link('Limits', PROJECT_URL + '/blob/main/docs/limits.md')}.",
     ]
     return "\n".join(out) + "\n"
@@ -383,7 +468,10 @@ def run(args: argparse.Namespace) -> int:
     text = json.dumps(doc, indent=2, sort_keys=True) + "\n" if args.format == "json" else render_markdown(doc)
     if args.output:
         write_atomic(Path(args.output), text)
-        print(f"shoalscan report: wrote the report on {args.repo_name} for {first} to {last} to {args.output}", file=sys.stderr)
+        print(
+            f"shoalscan report: wrote the report on {args.repo_name} for {first} to {last} to {args.output}",
+            file=sys.stderr,
+        )
     else:
         sys.stdout.write(text)
     return 0
@@ -391,8 +479,12 @@ def run(args: argparse.Namespace) -> int:
 
 def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("--repo-name", required=True, help="the repository's name in the history, such as owner/project")
-    p.add_argument("--since", help=f"the first day, YYYY-MM-DD, UTC (default: {DEFAULT_DAYS} days before --until, inclusive)")
+    p.add_argument(
+        "--since", help=f"the first day, YYYY-MM-DD, UTC (default: {DEFAULT_DAYS} days before --until, inclusive)"
+    )
     p.add_argument("--until", help="the last day, YYYY-MM-DD, UTC (default: today)")
-    p.add_argument("--format", choices=("markdown", "json"), default="markdown", help="output format (default: markdown)")
+    p.add_argument(
+        "--format", choices=("markdown", "json"), default="markdown", help="output format (default: markdown)"
+    )
     p.add_argument("--output", help="write the report to this file instead of standard output")
     p.add_argument("--db", help="history database (default: the same default as `record`)")

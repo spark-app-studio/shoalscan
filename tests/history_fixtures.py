@@ -17,11 +17,36 @@ from shoalscan.findings import Finding, findings_to_json
 MALICIOUS = '<img src=x onerror="alert(1)"></script><script>alert(2)</script>'
 
 
-def finding(rule: str, path: str, fp: str, severity: str = "ERROR", component: str = "api", message: str = "a problem", line: int = 3) -> Finding:
-    return Finding(tool="opengrep", rule=rule, severity=severity, path=path, line=line, fingerprint=fp, component=component, message=message)
+def finding(
+    rule: str,
+    path: str,
+    fp: str,
+    severity: str = "ERROR",
+    component: str = "api",
+    message: str = "a problem",
+    line: int = 3,
+) -> Finding:
+    return Finding(
+        tool="opengrep",
+        rule=rule,
+        severity=severity,
+        path=path,
+        line=line,
+        fingerprint=fp,
+        component=component,
+        message=message,
+    )
 
 
-def summary(findings: list[Finding], result: str = "pass", baseline_size: int = 0, suppressions: int = 0, skipped: int = 0, errored: int = 0, new: int = 0) -> dict:
+def summary(
+    findings: list[Finding],
+    result: str = "pass",
+    baseline_size: int = 0,
+    suppressions: int = 0,
+    skipped: int = 0,
+    errored: int = 0,
+    new: int = 0,
+) -> dict:
     sev = Counter(f.severity for f in findings)
     return {
         "result": result,
@@ -60,22 +85,48 @@ def write_findings(directory: Path, findings: list[Finding], extra_meta: dict | 
     return path
 
 
-def checked(directory: Path, findings: list[Finding], baseline: list[Entry], extra_meta: dict | None = None,
-            changed_files: list[str] | None = None, parse_warn_only: tuple[str, ...] = (),
-            non_blocking_paths: tuple[str, ...] = ()) -> tuple[Path, str]:
+def checked(
+    directory: Path,
+    findings: list[Finding],
+    baseline: list[Entry],
+    extra_meta: dict | None = None,
+    changed_files: list[str] | None = None,
+    parse_warn_only: tuple[str, ...] = (),
+    non_blocking_paths: tuple[str, ...] = (),
+) -> tuple[Path, str]:
     """Run the real check comparison and write findings.json and check.json, as `scan` and `check` do."""
     meta = extra_meta or {}
     path = write_findings(directory, findings, meta)
-    result = compare(findings, baseline, ("ERROR", "WARNING"), meta.get("suppressions"), non_blocking_paths, unscanned=meta.get("unscanned"),
-                     changed_files=changed_files, added_lines=lambda p: set(), parse_warn_only=parse_warn_only)
+    result = compare(
+        findings,
+        baseline,
+        ("ERROR", "WARNING"),
+        meta.get("suppressions"),
+        non_blocking_paths,
+        unscanned=meta.get("unscanned"),
+        changed_files=changed_files,
+        added_lines=lambda p: set(),
+        parse_warn_only=parse_warn_only,
+    )
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
     (directory / CHECK_JSON).write_text(json.dumps(details(result, sha), sort_keys=True), encoding="utf-8")
     return path, render_report(result) + "\n" + summary_line(result) + "\n"
 
 
-def record(conn, tmp: Path, repo: str, commit: str, day: int, findings: list[Finding], kind: str = "scheduled",
-           baseline: list[Entry] | None = None, extra_meta: dict | None = None, check_exit: int | None = None,
-           non_blocking_paths: tuple[str, ...] = (), **summary_args) -> history.RecordResult:
+def record(
+    conn,
+    tmp: Path,
+    repo: str,
+    commit: str,
+    day: int,
+    findings: list[Finding],
+    kind: str = "scheduled",
+    baseline: list[Entry] | None = None,
+    extra_meta: dict | None = None,
+    check_exit: int | None = None,
+    non_blocking_paths: tuple[str, ...] = (),
+    **summary_args,
+) -> history.RecordResult:
     directory = tmp / f"{repo.replace('/', '_')}-{commit}-{kind}"
     directory.mkdir(exist_ok=True)
     info = history.RunInfo(repo=repo, ref="main", commit=commit, kind=kind, scanned_at=f"2026-09-{day:02d}T02:00:00Z")
@@ -113,9 +164,21 @@ def sample_history(conn, tmp: Path) -> None:
     gone = Entry("opengrep", "community.python.eval", "src/old.py", "old0:0", "#9", "accepted")
     meta = {
         "suppressions": {"total": 1, "invalid": 0, "suppressed_findings": 1},
-        "suppression_list": [{"path": "web/b.js", "line": 4, "rules": ["shoalscan.plain-http-url"], "issue": "#5", "valid": True, "problem": None}],
+        "suppression_list": [
+            {
+                "path": "web/b.js",
+                "line": 4,
+                "rules": ["shoalscan.plain-http-url"],
+                "issue": "#5",
+                "valid": True,
+                "problem": None,
+            }
+        ],
         "unscanned": {
-            "skipped": [{"path": "big/huge.min.js", "reason": "exceeded_size_limit"}, {"path": "big/other.bin", "reason": "binary"}],
+            "skipped": [
+                {"path": "big/huge.min.js", "reason": "exceeded_size_limit"},
+                {"path": "big/other.bin", "reason": "binary"},
+            ],
             "errors": [{"path": "deploy/Dockerfile", "type": "PartialParsing", "spans": [[2, 9]], "file_lines": 10}],
         },
     }

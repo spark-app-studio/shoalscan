@@ -86,14 +86,19 @@ class CompareTests(unittest.TestCase):
         self.assertFalse(changed.passed)
 
     def test_changed_unscanned_files_fail_unless_excluded(self):
-        unscanned = {"skipped": [{"path": "big.py", "reason": "exceeded_size_limit"}], "errors": [{"path": "gen/x.py", "type": "Timeout"}]}
+        unscanned = {
+            "skipped": [{"path": "big.py", "reason": "exceeded_size_limit"}],
+            "errors": [{"path": "gen/x.py", "type": "Timeout"}],
+        }
         self.assertTrue(compare([], [], BLOCKING, unscanned=unscanned).passed)
         self.assertTrue(compare([], [], BLOCKING, unscanned=unscanned, changed_files=["other.py"]).passed)
         failing = compare([], [], BLOCKING, unscanned=unscanned, changed_files=["big.py", "gen/x.py"])
         self.assertFalse(failing.passed)
         self.assertEqual(len(failing.changed_unscanned), 2)
         self.assertIn("Changed files that were not fully scanned", render_report(failing))
-        excluded = compare([], [], BLOCKING, unscanned=unscanned, changed_files=["big.py", "gen/x.py"], excludes=("gen", "big.py"))
+        excluded = compare(
+            [], [], BLOCKING, unscanned=unscanned, changed_files=["big.py", "gen/x.py"], excludes=("gen", "big.py")
+        )
         self.assertTrue(excluded.passed)
         self.assertEqual(excluded.excluded_changed, ["big.py", "gen/x.py"])
         self.assertIn("CHANGED BUT NOT SCANNED", render_report(excluded))
@@ -118,12 +123,24 @@ class CompareTests(unittest.TestCase):
 
     def test_parse_warn_only_turns_partial_parsing_into_a_warning(self):
         # A Dockerfile whose experimental parser left 70% unparsed, over the added lines.
-        dockerfile = {"path": "services/api/Dockerfile", "type": "PartialParsing", "spans": [[1, 70]], "file_lines": 100}
+        dockerfile = {
+            "path": "services/api/Dockerfile",
+            "type": "PartialParsing",
+            "spans": [[1, 70]],
+            "file_lines": 100,
+        }
         unscanned = {"skipped": [], "errors": [dockerfile]}
 
         def run(u, warn_only=()):
-            return compare([], [], BLOCKING, unscanned=u, changed_files=["services/api/Dockerfile"],
-                           added_lines=lambda p: {5, 6}, parse_warn_only=warn_only)
+            return compare(
+                [],
+                [],
+                BLOCKING,
+                unscanned=u,
+                changed_files=["services/api/Dockerfile"],
+                added_lines=lambda p: {5, 6},
+                parse_warn_only=warn_only,
+            )
 
         self.assertFalse(run(unscanned).passed)
         warned = run(unscanned, ("**/Dockerfile",))
@@ -131,7 +148,11 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(warned.changed_unscanned, [])
         self.assertEqual(len(warned.partial_warn_only), 1)
         report = render_report(warned)
-        self.assertIn("PARTIALLY PARSED (warn-only by policy): services/api/Dockerfile \u2014 70% unparsed, overlaps added lines: yes", report)
+        self.assertIn(
+            "PARTIALLY PARSED (warn-only by policy): services/api/Dockerfile \u2014 70% unparsed, overlaps added "
+            "lines: yes",
+            report,
+        )
         self.assertEqual(summary(warned)["unscanned"]["changed_partially_parsed_warn_only"], 1)
         # A glob that does not match the file changes nothing.
         self.assertFalse(run(unscanned, ("*.sh",)).passed)
@@ -147,8 +168,15 @@ class CompareTests(unittest.TestCase):
 
         def run(errors=(), skipped=(), warn_only=("deploy/**/templates/*.yaml",)):
             unscanned = {"skipped": list(skipped), "errors": list(errors)}
-            return compare([], [], BLOCKING, unscanned=unscanned, changed_files=[template], added_lines=lambda p: {3},
-                           parse_warn_only=warn_only)
+            return compare(
+                [],
+                [],
+                BLOCKING,
+                unscanned=unscanned,
+                changed_files=[template],
+                added_lines=lambda p: {3},
+                parse_warn_only=warn_only,
+            )
 
         syntax = {"path": template, "type": "Other syntax error"}
         warned = run([syntax])
@@ -165,10 +193,21 @@ class CompareTests(unittest.TestCase):
 
     def test_parse_warn_only_matches_file_names_not_directories(self):
         def gap(path):
-            return {"skipped": [], "errors": [{"path": path, "type": "PartialParsing", "spans": [[1, 90]], "file_lines": 100}]}
+            return {
+                "skipped": [],
+                "errors": [{"path": path, "type": "PartialParsing", "spans": [[1, 90]], "file_lines": 100}],
+            }
 
         def passes(path, globs):
-            return compare([], [], BLOCKING, unscanned=gap(path), changed_files=[path], added_lines=lambda p: {1}, parse_warn_only=globs).passed
+            return compare(
+                [],
+                [],
+                BLOCKING,
+                unscanned=gap(path),
+                changed_files=[path],
+                added_lines=lambda p: {1},
+                parse_warn_only=globs,
+            ).passed
 
         self.assertTrue(passes("deploy/run.sh", ("*.sh",)))
         # A directory named like the glob does not make the Python file in it warn-only.
@@ -186,7 +225,19 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(doc["findings_sha256"], "f" * 64)
         self.assertEqual(doc["new"], [[a.tool, a.rule, "src/a.py", "a:0"], [b.tool, b.rule, "src/b.py", "b:0"]])
         self.assertEqual(doc["new_blocking"], [[a.tool, a.rule, "src/a.py", "a:0"]])
-        self.assertEqual(doc["stale"], [{"tool": "opengrep", "rule": "r", "path": "src/gone.py", "fingerprint": "g:0", "issue": "#7", "reason": "accepted"}])
+        self.assertEqual(
+            doc["stale"],
+            [
+                {
+                    "tool": "opengrep",
+                    "rule": "r",
+                    "path": "src/gone.py",
+                    "fingerprint": "g:0",
+                    "issue": "#7",
+                    "reason": "accepted",
+                }
+            ],
+        )
         self.assertEqual(doc["summary"], summary(result))
         self.assertEqual(doc["result"], "fail")
 
@@ -216,18 +267,36 @@ class CompareTests(unittest.TestCase):
         self.assertTrue(compare([], [moved], BLOCKING, base_baseline=base, renames=[]).baseline_additions)
         # Changed reason on the way: an addition.
         changed = Entry(a.tool, a.rule, "src/b.py", a.fingerprint, "#1", "other")
-        self.assertTrue(compare([], [changed], BLOCKING, base_baseline=base, renames=[("src/a.py", "src/b.py")]).baseline_additions)
+        self.assertTrue(
+            compare([], [changed], BLOCKING, base_baseline=base, renames=[("src/a.py", "src/b.py")]).baseline_additions
+        )
         # Into another component, or out of a non-blocking path: an addition.
         self.assertTrue(
-            compare([], [moved], BLOCKING, base_baseline=base, renames=[("src/a.py", "src/b.py")], components={"src/b.py": "x"}).baseline_additions
+            compare(
+                [],
+                [moved],
+                BLOCKING,
+                base_baseline=base,
+                renames=[("src/a.py", "src/b.py")],
+                components={"src/b.py": "x"},
+            ).baseline_additions
         )
         self.assertTrue(
-            compare([], [moved], BLOCKING, base_baseline=base, renames=[("src/a.py", "src/b.py")], non_blocking_paths=("src/a.py",)).baseline_additions
+            compare(
+                [],
+                [moved],
+                BLOCKING,
+                base_baseline=base,
+                renames=[("src/a.py", "src/b.py")],
+                non_blocking_paths=("src/a.py",),
+            ).baseline_additions
         )
         # Only part of the entries moved: an addition.
         a2 = finding(path="src/a.py", fp="a2:0")
         self.assertTrue(
-            compare([], [moved], BLOCKING, base_baseline=base + [entry(a2)], renames=[("src/a.py", "src/b.py")]).baseline_additions
+            compare(
+                [], [moved], BLOCKING, base_baseline=base + [entry(a2)], renames=[("src/a.py", "src/b.py")]
+            ).baseline_additions
         )
 
     def test_stale_entry_fails(self):
@@ -298,7 +367,11 @@ class BaselineFileTests(unittest.TestCase):
             self.assertEqual(load_baseline(path), [])
 
     def test_rename_path(self):
-        a, b, c = finding(path="src/a.py", fp="a:0"), finding(path="src/sub/b.py", fp="b:0"), finding(path="srcx/c.py", fp="c:0")
+        a, b, c = (
+            finding(path="src/a.py", fp="a:0"),
+            finding(path="src/sub/b.py", fp="b:0"),
+            finding(path="srcx/c.py", fp="c:0"),
+        )
         entries = [entry(a), entry(b), entry(c)]
         renamed, changed = rename_path(entries, "src/a.py", "lib/a.py")
         self.assertEqual((changed, [e.path for e in renamed]), (1, ["lib/a.py", "src/sub/b.py", "srcx/c.py"]))

@@ -34,8 +34,8 @@ from urllib.parse import parse_qs, urlsplit
 from shoalscan import PROJECT_URL, __version__, history
 from shoalscan.dashboard import auth, scanning
 from shoalscan.dashboard.configedit import ConfigEditor
-from shoalscan.dashboard.scancontrol import ScanControl
 from shoalscan.dashboard.data import AGE_BUCKETS, FILE_KINDS, REVIEW_FILTERS, SEVERITIES, SORTS, Data
+from shoalscan.dashboard.scancontrol import ScanControl
 from shoalscan.errors import SetupError
 from shoalscan.resources import data_path, default_lock_path
 
@@ -68,11 +68,27 @@ MAX_CONNECTIONS_PER_ADDRESS = 16
 MAX_HANDSHAKING_PER_ADDRESS = 4
 HANDSHAKE_TIMEOUT = 5.0
 CONNECTION_LIFETIME = 60.0
-API_PATHS = frozenset({
-    "/api/session", "/api/about", "/api/repos", "/api/overview", "/api/runs", "/api/run", "/api/findings", "/api/rule",
-    "/api/stale", "/api/files", "/api/suppressions", "/api/changes", "/api/scan/status", "/api/config", "/api/config/baseline",
-    "/api/finding", "/api/review/history",
-})
+API_PATHS = frozenset(
+    {
+        "/api/session",
+        "/api/about",
+        "/api/repos",
+        "/api/overview",
+        "/api/runs",
+        "/api/run",
+        "/api/findings",
+        "/api/rule",
+        "/api/stale",
+        "/api/files",
+        "/api/suppressions",
+        "/api/changes",
+        "/api/scan/status",
+        "/api/config",
+        "/api/config/baseline",
+        "/api/finding",
+        "/api/review/history",
+    }
+)
 _WEEK = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 GENERIC_ERRORS = {
     400: "bad request",
@@ -150,18 +166,79 @@ def about_info() -> dict:
     og, cs, rules = lock.get("opengrep", {}), lock.get("cosign", {}), lock.get("rules", {})
     gl, hl, zz, tv = lock.get("gitleaks"), lock.get("hadolint"), lock.get("zizmor"), lock.get("trivy")
     return {
-        "shoalscan": {"version": __version__, "licence": "Apache-2.0", "project_url": PROJECT_URL, "licence_url": LICENSE_URL},
+        "shoalscan": {
+            "version": __version__,
+            "licence": "Apache-2.0",
+            "project_url": PROJECT_URL,
+            "licence_url": LICENSE_URL,
+        },
         "scanners": [
-            {"name": "Opengrep", "role": "pattern and taint scanner", "version": og.get("version"), "licence": og.get("license"), "source": og.get("source")},
-            {"name": "cosign", "role": "verifies the Opengrep signature at install", "version": cs.get("version"), "licence": cs.get("license"), "source": cs.get("source")},
-            *([{"name": "Gitleaks", "role": "secrets scanner (when enabled)", "version": gl.get("version"), "licence": gl.get("license"),
-                "source": gl.get("source")}] if isinstance(gl, dict) else []),
-            *([{"name": "Hadolint", "role": "Dockerfile linter (when enabled)", "version": hl.get("version"), "licence": hl.get("license"),
-                "source": hl.get("source")}] if isinstance(hl, dict) else []),
-            *([{"name": "zizmor", "role": "GitHub Actions auditor (when enabled)", "version": zz.get("version"), "licence": zz.get("license"),
-                "source": zz.get("source")}] if isinstance(zz, dict) else []),
-            *([{"name": "Trivy", "role": "infrastructure-as-code checker (when enabled)", "version": tv.get("version"), "licence": tv.get("license"),
-                "source": tv.get("source")}] if isinstance(tv, dict) else []),
+            {
+                "name": "Opengrep",
+                "role": "pattern and taint scanner",
+                "version": og.get("version"),
+                "licence": og.get("license"),
+                "source": og.get("source"),
+            },
+            {
+                "name": "cosign",
+                "role": "verifies the Opengrep signature at install",
+                "version": cs.get("version"),
+                "licence": cs.get("license"),
+                "source": cs.get("source"),
+            },
+            *(
+                [
+                    {
+                        "name": "Gitleaks",
+                        "role": "secrets scanner (when enabled)",
+                        "version": gl.get("version"),
+                        "licence": gl.get("license"),
+                        "source": gl.get("source"),
+                    }
+                ]
+                if isinstance(gl, dict)
+                else []
+            ),
+            *(
+                [
+                    {
+                        "name": "Hadolint",
+                        "role": "Dockerfile linter (when enabled)",
+                        "version": hl.get("version"),
+                        "licence": hl.get("license"),
+                        "source": hl.get("source"),
+                    }
+                ]
+                if isinstance(hl, dict)
+                else []
+            ),
+            *(
+                [
+                    {
+                        "name": "zizmor",
+                        "role": "GitHub Actions auditor (when enabled)",
+                        "version": zz.get("version"),
+                        "licence": zz.get("license"),
+                        "source": zz.get("source"),
+                    }
+                ]
+                if isinstance(zz, dict)
+                else []
+            ),
+            *(
+                [
+                    {
+                        "name": "Trivy",
+                        "role": "infrastructure-as-code checker (when enabled)",
+                        "version": tv.get("version"),
+                        "licence": tv.get("license"),
+                        "source": tv.get("source"),
+                    }
+                ]
+                if isinstance(tv, dict)
+                else []
+            ),
         ],
         "rule_sources": [
             {
@@ -171,8 +248,20 @@ def about_info() -> dict:
                 "source": rules.get("repository"),
                 "note": "downloaded by shoalscan install, never bundled",
             },
-            {"name": "Shoalscan rules", "version": __version__, "licence": "Apache-2.0", "source": PROJECT_URL, "note": "ship with Shoalscan"},
-            {"name": "Repository rules", "version": None, "licence": "the repository's own", "source": None, "note": "kept in each scanned repository"},
+            {
+                "name": "Shoalscan rules",
+                "version": __version__,
+                "licence": "Apache-2.0",
+                "source": PROJECT_URL,
+                "note": "ship with Shoalscan",
+            },
+            {
+                "name": "Repository rules",
+                "version": None,
+                "licence": "the repository's own",
+                "source": None,
+                "note": "kept in each scanned repository",
+            },
         ],
     }
 
@@ -186,7 +275,8 @@ class App:
         self.limiter = auth.LoginLimiter()
         icon = data_path("assets/shoalscan-icon.svg").read_bytes()
         self.static = {
-            path: icon if source == "icon" else (STATIC_DIR / source).read_bytes() for path, (source, _, _) in ROUTES.items()
+            path: icon if source == "icon" else (STATIC_DIR / source).read_bytes()
+            for path, (source, _, _) in ROUTES.items()
         }
         self.about = about_info()
         self._cache: OrderedDict = OrderedDict()
@@ -222,7 +312,9 @@ class App:
         return self._cached(("overview", repo_id, data.version(repo_id)), lambda: data.overview(repo_id))
 
     def change_keys(self, data: Data, repo_id: int, week: str, change: str) -> list:
-        return self._cached(("changes", repo_id, data.version(repo_id), week, change), lambda: data.change_keys(repo_id, week, change))
+        return self._cached(
+            ("changes", repo_id, data.version(repo_id), week, change), lambda: data.change_keys(repo_id, week, change)
+        )
 
 
 class DashboardServer(socketserver.ThreadingMixIn, HTTPServer):
@@ -415,7 +507,8 @@ class Handler(BaseHTTPRequestHandler):
     def _log(self, status: str) -> None:
         path = urlsplit(getattr(self, "path", "") or "").path[:200] or "-"
         sys.stderr.write(
-            f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {self.client_address[0]} {getattr(self, 'command', None) or '-'} {path} {status}\n"
+            f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {self.client_address[0]} {getattr(self, 'command', None) or '-'} "
+            f"{path} {status}\n"
         )
 
     def log_request(self, code="-", size="-") -> None:
@@ -506,15 +599,26 @@ class Handler(BaseHTTPRequestHandler):
             # Bodies must carry a Content-Length; an unread chunked body would
             # otherwise be read as the next request on this connection.
             self.close_connection = True
-            return self.send(400, b'{"error":"chunked request bodies are not accepted"}', "application/json; charset=utf-8", {"Connection": "close"})
+            return self.send(
+                400,
+                b'{"error":"chunked request bodies are not accepted"}',
+                "application/json; charset=utf-8",
+                {"Connection": "close"},
+            )
         length = self.headers.get("Content-Length", "0")
         post_path = urlsplit(self.path).path
-        limit = MAX_CONFIG_BODY if post_path in CONFIG_POSTS else (MAX_REVIEW_BODY if post_path == "/api/review" else MAX_BODY)
+        limit = (
+            MAX_CONFIG_BODY
+            if post_path in CONFIG_POSTS
+            else (MAX_REVIEW_BODY if post_path == "/api/review" else MAX_BODY)
+        )
         if not length.isdigit() or int(length) > limit:
             self.close_connection = True
             return self.send_error_json(413, "request body too large")
         body = self.rfile.read(int(length))
-        if not auth.same_origin(self.headers.get("Host"), self.headers.get("Origin"), self.headers.get("Referer"), self.app.allowed_hosts):
+        if not auth.same_origin(
+            self.headers.get("Host"), self.headers.get("Origin"), self.headers.get("Referer"), self.app.allowed_hosts
+        ):
             return self.send_error_json(403, "cross-origin request refused")
         path = urlsplit(self.path).path
         if path == "/login":
@@ -562,8 +666,15 @@ class Handler(BaseHTTPRequestHandler):
             finally:
                 data.conn.close()
         try:
-            count = history.set_reviews(self.app.config.db, repo, keys, request["status"], request["description"],
-                                        f"dashboard user (session {session.tag})", run_id)
+            count = history.set_reviews(
+                self.app.config.db,
+                repo,
+                keys,
+                request["status"],
+                request["description"],
+                f"dashboard user (session {session.tag})",
+                run_id,
+            )
         except LookupError:
             return self.send_error_json(404, "no such finding in this repository")
         except SetupError as exc:
@@ -616,8 +727,12 @@ class Handler(BaseHTTPRequestHandler):
             return None
         # {"target": name} scans the tip of the branch; {"target": name, "rescan": true} does the
         # same from a Rescan button; {"target": name, "run_id": n} scans that run's commit again.
-        if "target" not in request or not set(request) <= {"target", "rescan", "run_id"} or ("rescan" in request and "run_id" in request):
-            return self.send_error_json(400, "send {\"target\": name}, optionally with \"rescan\": true or \"run_id\": n")
+        if (
+            "target" not in request
+            or not set(request) <= {"target", "rescan", "run_id"}
+            or ("rescan" in request and "run_id" in request)
+        ):
+            return self.send_error_json(400, 'send {"target": name}, optionally with "rescan": true or "run_id": n')
         if "rescan" in request and request["rescan"] is not True:
             return self.send_error_json(400, "rescan must be true")
         run_id = request.get("run_id")
@@ -643,7 +758,8 @@ class Handler(BaseHTTPRequestHandler):
     def _not_allowed(self) -> None:
         self.send_error_json(405, "method not allowed")
 
-    do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_TRACE = do_CONNECT = _not_allowed
+    # The names http.server looks up for each method.
+    do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_TRACE = do_CONNECT = _not_allowed  # noqa: N815
 
     # ------------------------------------------------------------ routes
 
@@ -721,7 +837,14 @@ class Handler(BaseHTTPRequestHandler):
                 if not week or not _WEEK.match(week) or change not in ("new", "fixed"):
                     raise ValueError("week and change")
                 picked = self.app.change_keys(data, repo_id, week, change)
-                page = data.changes(repo_id, week, change, _int(query, "limit", 200, 1, 500), _int(query, "offset", 0, 0, 10**9), picked=picked)
+                page = data.changes(
+                    repo_id,
+                    week,
+                    change,
+                    _int(query, "limit", 200, 1, 500),
+                    _int(query, "offset", 0, 0, 10**9),
+                    picked=picked,
+                )
                 return self.send_json(200, {"repo": repo, **page})
             run_id = data.resolve_run(repo_id, _int(query, "run", None, 0, 2**62))
             if run_id is None:
@@ -731,8 +854,10 @@ class Handler(BaseHTTPRequestHandler):
                 found = data.finding(repo_id, run_id, _finding_key(query))
                 if found is None:
                     return self.send_error_json(404, "no such finding in this run")
-                return self.send_json(200, {"repo": repo, "run": run_id, "finding": found,
-                                            "history": data.review_history(repo, found["key"])})
+                return self.send_json(
+                    200,
+                    {"repo": repo, "run": run_id, "finding": found, "history": data.review_history(repo, found["key"])},
+                )
             if path == "/api/run":
                 return self.send_json(200, {"repo": repo, "run": data.run(repo_id, run_id)})
             if path == "/api/stale":
@@ -755,7 +880,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_error_json(400, "severity must be ERROR, WARNING or INFO")
                 age = _age(query)
                 if age is not None and run_id != data.resolve_run(repo_id, None):
-                    return self.send_error_json(400, "age is only available for the latest trend run, the one the age chart describes")
+                    return self.send_error_json(
+                        400, "age is only available for the latest trend run, the one the age chart describes"
+                    )
                 result = data.findings(
                     repo_id,
                     run_id,

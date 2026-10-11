@@ -408,7 +408,9 @@ class RunInfo:
 
     def validate(self) -> None:
         if not _REPO_NAME.fullmatch(self.repo):
-            raise SetupError(f"invalid repository name {self.repo!r}: letters, digits and . _ / @ : + - only, up to 200 characters")
+            raise SetupError(
+                f"invalid repository name {self.repo!r}: letters, digits and . _ / @ : + - only, up to 200 characters"
+            )
         if not _REF.fullmatch(self.ref) or ".." in self.ref:
             raise SetupError(f"invalid ref {self.ref!r}")
         if not _COMMIT.fullmatch(self.commit):
@@ -423,7 +425,10 @@ class RunInfo:
             raise SetupError(f"invalid scan time {self.scanned_at!r}: expected YYYY-MM-DDTHH:MM:SSZ in UTC")
         # A run stamped far ahead would sit at the end of every trend and
         # survive pruning, so a clock or input mistake is refused.
-        if datetime.strptime(self.scanned_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) > datetime.now(timezone.utc) + MAX_FUTURE:
+        if (
+            datetime.strptime(self.scanned_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            > datetime.now(timezone.utc) + MAX_FUTURE
+        ):
             raise SetupError(f"scan time {self.scanned_at} is more than 24 hours in the future")
 
 
@@ -442,7 +447,9 @@ def read_details(path: Path, findings_path: Path, summary: dict, findings: list[
     if not isinstance(doc, dict) or doc.get("format") != 1:
         raise SetupError(f"check details file has an unknown format: {path}")
     if doc.get("findings_sha256") != hashlib.sha256(findings_path.read_bytes()).hexdigest():
-        raise SetupError(f"{path} was made from another findings file than {findings_path}; run `shoalscan check` again")
+        raise SetupError(
+            f"{path} was made from another findings file than {findings_path}; run `shoalscan check` again"
+        )
     if doc.get("summary") != summary:
         raise SetupError(f"{path} does not match the check output: they come from different checks")
     keys = {(f.tool, f.rule, f.path, f.fingerprint) for f in findings}
@@ -452,20 +459,38 @@ def read_details(path: Path, findings_path: Path, summary: dict, findings: list[
         items = doc.get(name)
         if name == "blocking_class" and items is None:
             continue
-        if not isinstance(items, list) or not all(isinstance(k, list) and len(k) == 4 and tuple(k) in keys for k in items):
+        if not isinstance(items, list) or not all(
+            isinstance(k, list) and len(k) == 4 and tuple(k) in keys for k in items
+        ):
             raise SetupError(f"{path}: {name} lists findings that are not in {findings_path}")
     doc.setdefault("baselined", [])
     baselined = doc["baselined"]
     if not isinstance(baselined, list) or not all(
-        isinstance(e, dict) and isinstance(e.get("key"), list) and len(e["key"]) == 4 and tuple(e["key"]) in keys
-        and isinstance(e.get("issue"), str) and isinstance(e.get("reason"), str) for e in baselined
+        isinstance(e, dict)
+        and isinstance(e.get("key"), list)
+        and len(e["key"]) == 4
+        and tuple(e["key"]) in keys
+        and isinstance(e.get("issue"), str)
+        and isinstance(e.get("reason"), str)
+        for e in baselined
     ):
         raise SetupError(f"{path}: baselined lists entries that are not findings in {findings_path}")
-    for name in ("stale", "baseline_additions", "changed_unscanned", "partial_warnings", "partial_warn_only", "excluded_changed"):
+    for name in (
+        "stale",
+        "baseline_additions",
+        "changed_unscanned",
+        "partial_warnings",
+        "partial_warn_only",
+        "excluded_changed",
+    ):
         items = doc.get(name)
         if not isinstance(items, list) or len(items) > MAX_LIST_ITEMS:
             raise SetupError(f"{path}: {name} is missing or too long")
-    if not all(isinstance(e, dict) and all(isinstance(e.get(k), str) for k in ("tool", "rule", "path", "fingerprint", "issue", "reason")) for e in doc["stale"]):
+    if not all(
+        isinstance(e, dict)
+        and all(isinstance(e.get(k), str) for k in ("tool", "rule", "path", "fingerprint", "issue", "reason"))
+        for e in doc["stale"]
+    ):
         raise SetupError(f"{path}: a stale entry is malformed")
     for name in ("changed_unscanned", "partial_warnings", "partial_warn_only"):
         if not all(isinstance(e, dict) and isinstance(e.get("path"), str) for e in doc[name]):
@@ -478,8 +503,13 @@ def read_details(path: Path, findings_path: Path, summary: dict, findings: list[
         raise SetupError(f"{path}: a new blocking finding is not in the new findings")
     for name in ("new", "new_blocking", "stale"):
         if len(doc[name]) != _int(summary, name):
-            raise SetupError(f"{path} lists {len(doc[name])} {name.replace('_', ' ')} entries but the check summary counts {_int(summary, name)}")
-    if doc["blocking_class"] is not None and not {tuple(k) for k in doc["new_blocking"]} <= {tuple(k) for k in doc["blocking_class"]}:
+            raise SetupError(
+                f"{path} lists {len(doc[name])} {name.replace('_', ' ')} entries but the check summary counts "
+                f"{_int(summary, name)}"
+            )
+    if doc["blocking_class"] is not None and not {tuple(k) for k in doc["new_blocking"]} <= {
+        tuple(k) for k in doc["blocking_class"]
+    }:
         raise SetupError(f"{path}: a new blocking finding is missing from blocking_class")
     if not all(isinstance(p, str) for p in doc["excluded_changed"]):
         raise SetupError(f"{path}: excluded_changed must list paths")
@@ -497,7 +527,9 @@ def check_commit(meta: dict, commit: str, allow_no_git: bool) -> None:
     scanned = worktree.get("commit") if isinstance(worktree, dict) else None
     if isinstance(scanned, str) and scanned:
         if scanned != commit:
-            raise SetupError(f"the findings were scanned at commit {scanned}, not {commit}; pass the commit that was scanned")
+            raise SetupError(
+                f"the findings were scanned at commit {scanned}, not {commit}; pass the commit that was scanned"
+            )
         return
     if not allow_no_git:
         raise SetupError(
@@ -517,7 +549,9 @@ def read_inputs(findings_path: Path, check_output: str) -> tuple[list[Finding], 
         raise SetupError("the check output is too large")
     findings, meta = load_findings(findings_path)
     if len(findings) > MAX_FINDINGS_PER_RUN:
-        raise SetupError(f"the run has {len(findings)} findings; the history keeps at most {MAX_FINDINGS_PER_RUN} per run")
+        raise SetupError(
+            f"the run has {len(findings)} findings; the history keeps at most {MAX_FINDINGS_PER_RUN} per run"
+        )
     summary = parse_summary(check_output)
     if _int(summary, "findings") != len(findings):
         raise SetupError(
@@ -530,7 +564,15 @@ def read_inputs(findings_path: Path, check_output: str) -> tuple[list[Finding], 
 # ---------------------------------------------------------------- recording
 
 
-def _content_sha256(findings: list[Finding], summary: dict, meta: dict, info: RunInfo, details: dict | None, outcome: str, check_exit: int | None) -> str:
+def _content_sha256(
+    findings: list[Finding],
+    summary: dict,
+    meta: dict,
+    info: RunInfo,
+    details: dict | None,
+    outcome: str,
+    check_exit: int | None,
+) -> str:
     doc = {
         "info": [info.ref, info.scanned_at],
         "outcome": [outcome, check_exit],
@@ -539,12 +581,16 @@ def _content_sha256(findings: list[Finding], summary: dict, meta: dict, info: Ru
         "unscanned": meta.get("unscanned"),
         "summary": summary,
         "scanners": meta.get("scanners"),
-        "findings": sorted([f.tool, f.rule, f.path, f.fingerprint, f.severity, f.line, f.component, f.message] for f in findings),
+        "findings": sorted(
+            [f.tool, f.rule, f.path, f.fingerprint, f.severity, f.line, f.component, f.message] for f in findings
+        ),
     }
     return hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
-def _row(info: RunInfo, summary: dict, meta: dict, content: str, outcome: str, check_exit: int | None, details: dict | None) -> dict:
+def _row(
+    info: RunInfo, summary: dict, meta: dict, content: str, outcome: str, check_exit: int | None, details: dict | None
+) -> dict:
     sev = summary.get("by_severity") or {}
     nb = summary.get("by_severity_non_blocking_paths") or {}
     duration = meta.get("duration_seconds")
@@ -586,8 +632,12 @@ def _row(info: RunInfo, summary: dict, meta: dict, content: str, outcome: str, c
         "changed_unscanned": _int(summary, "unscanned", "changed_and_unscanned"),
         "policy_ref": _text(policy_ref, 256) if isinstance(policy_ref, str) else None,
         "shoalscan_version": _text(version, 64) if isinstance(version, str) else None,
-        "scanners": json.dumps(meta.get("scanners") if isinstance(meta.get("scanners"), dict) else {}, sort_keys=True)[:20000],
-        "duration_seconds": float(duration) if isinstance(duration, (int, float)) and not isinstance(duration, bool) else None,
+        "scanners": json.dumps(meta.get("scanners") if isinstance(meta.get("scanners"), dict) else {}, sort_keys=True)[
+            :20000
+        ],
+        "duration_seconds": float(duration)
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool)
+        else None,
         "content_sha256": content,
     }
 
@@ -623,7 +673,11 @@ def _file_rows(unscanned: dict, details: dict | None) -> list[tuple[str, str, st
         if isinstance(entry, dict):
             add("error", entry)
     if details:
-        for kind, name in (("changed_unscanned", "changed_unscanned"), ("partial_warning", "partial_warnings"), ("partial_warn_only", "partial_warn_only")):
+        for kind, name in (
+            ("changed_unscanned", "changed_unscanned"),
+            ("partial_warning", "partial_warnings"),
+            ("partial_warn_only", "partial_warn_only"),
+        ):
             for entry in details[name]:
                 add(kind, entry)
         for path in details["excluded_changed"]:
@@ -690,7 +744,9 @@ def record_run(
         raise SetupError(f"the run lists more than {MAX_LIST_ITEMS} suppressions or files")
     new = {tuple(k) for k in details["new"]} if details else set()
     new_blocking = {tuple(k) for k in details["new_blocking"]} if details else set()
-    blocking_class = {tuple(k) for k in details["blocking_class"]} if details and details.get("blocking_class") is not None else None
+    blocking_class = (
+        {tuple(k) for k in details["blocking_class"]} if details and details.get("blocking_class") is not None else None
+    )
     baselined = {tuple(e["key"]): e for e in details.get("baselined", [])} if details else {}
     content = _content_sha256(findings, summary, meta, info, details, outcome, check_exit)
     row = _row(info, summary, meta, content, outcome, check_exit, details)
@@ -720,7 +776,12 @@ def record_run(
         run_id = cur.lastrowid
         seen: set[tuple[str, str, str, str]] = set()
         for f in findings:
-            key = (_label(f.tool, 64), _label(f.rule, MAX_FIELD_CHARS), _text(f.path, MAX_FIELD_CHARS), _text(f.fingerprint, 128))
+            key = (
+                _label(f.tool, 64),
+                _label(f.rule, MAX_FIELD_CHARS),
+                _text(f.path, MAX_FIELD_CHARS),
+                _text(f.fingerprint, 128),
+            )
             if key in seen:
                 raise SetupError(f"the findings file lists one finding twice: {key[1]} in {key[2]}"[:300])
             seen.add(key)
@@ -729,7 +790,8 @@ def record_run(
                 (repo_id, *key),
             )
             key_id = conn.execute(
-                "SELECT id FROM finding_keys WHERE repo_id = ? AND tool = ? AND rule = ? AND path = ? AND fingerprint = ?",
+                "SELECT id FROM finding_keys WHERE repo_id = ? AND tool = ? AND rule = ? AND path = ? AND fingerprint "
+                "= ?",
                 (repo_id, *key),
             ).fetchone()[0]
             message = _text(f.message, MAX_MESSAGE_CHARS)
@@ -739,25 +801,47 @@ def record_run(
             line = f.line if isinstance(f.line, int) and not isinstance(f.line, bool) and f.line >= 0 else 0
             raw_key = (f.tool, f.rule, f.path, f.fingerprint)
             conn.execute(
-                "INSERT INTO run_findings (run_id, key_id, severity, line, component, message_id, is_new, new_blocking, blocking_class, "
+                "INSERT INTO run_findings (run_id, key_id, severity, line, component, message_id, is_new, "
+                "new_blocking, blocking_class, "
                 "baseline_issue, baseline_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_id, key_id, f.severity, line, _label(f.component, 200), message_id,
-                 int(raw_key in new), int(raw_key in new_blocking), None if blocking_class is None else int(raw_key in blocking_class),
-                 _text(baselined[raw_key]["issue"], 500) if raw_key in baselined else None,
-                 _text(baselined[raw_key]["reason"], 2000) if raw_key in baselined else None),
+                (
+                    run_id,
+                    key_id,
+                    f.severity,
+                    line,
+                    _label(f.component, 200),
+                    message_id,
+                    int(raw_key in new),
+                    int(raw_key in new_blocking),
+                    None if blocking_class is None else int(raw_key in blocking_class),
+                    _text(baselined[raw_key]["issue"], 500) if raw_key in baselined else None,
+                    _text(baselined[raw_key]["reason"], 2000) if raw_key in baselined else None,
+                ),
             )
         if details:
             conn.executemany(
-                "INSERT INTO run_stale (run_id, tool, rule, path, fingerprint, issue, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(run_id, _text(e["tool"], 64), _text(e["rule"], MAX_FIELD_CHARS), _text(e["path"], MAX_FIELD_CHARS),
-                  _text(e["fingerprint"], 128), _text(e["issue"], 500), _text(e["reason"], 2000)) for e in details["stale"]],
+                "INSERT INTO run_stale (run_id, tool, rule, path, fingerprint, issue, reason) VALUES (?, ?, ?, ?, ?, "
+                "?, ?)",
+                [
+                    (
+                        run_id,
+                        _text(e["tool"], 64),
+                        _text(e["rule"], MAX_FIELD_CHARS),
+                        _text(e["path"], MAX_FIELD_CHARS),
+                        _text(e["fingerprint"], 128),
+                        _text(e["issue"], 500),
+                        _text(e["reason"], 2000),
+                    )
+                    for e in details["stale"]
+                ],
             )
         conn.executemany(
             "INSERT INTO run_files (run_id, kind, path, detail) VALUES (?, ?, ?, ?)",
             [(run_id, kind, path, detail) for kind, path, detail in files],
         )
         conn.executemany(
-            "INSERT INTO run_suppressions (run_id, path, line, rules, issue, valid, problem) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO run_suppressions (run_id, path, line, rules, issue, valid, problem) VALUES (?, ?, ?, ?, ?, ?, "
+            "?)",
             [_suppression_row(run_id, item) for item in suppressions],
         )
         rule_ids = meta.get("rule_ids")
@@ -765,7 +849,9 @@ def record_run(
             text = json.dumps(sorted(set(rule_ids)))
             digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
             conn.execute("INSERT OR IGNORE INTO rulesets (sha256, rules) VALUES (?, ?)", (digest, text))
-            conn.execute("UPDATE runs SET ruleset_id = (SELECT id FROM rulesets WHERE sha256 = ?) WHERE id = ?", (digest, run_id))
+            conn.execute(
+                "UPDATE runs SET ruleset_id = (SELECT id FROM rulesets WHERE sha256 = ?) WHERE id = ?", (digest, run_id)
+            )
         if isinstance(meta.get("excludes"), list):
             conn.execute("UPDATE runs SET excludes = ? WHERE id = ?", (json.dumps(meta["excludes"])[:20000], run_id))
         # Only a scan of the branch's tip moves reviews; a rescan of an earlier commit never does.
@@ -788,7 +874,9 @@ def prune(conn: sqlite3.Connection, repo_id: int, max_runs: int, keep_pr_days: i
     newest = conn.execute("SELECT MAX(scanned_at) FROM runs WHERE repo_id = ?", (repo_id,)).fetchone()[0]
     if newest is None:
         return 0
-    cutoff = (datetime.strptime(newest, "%Y-%m-%dT%H:%M:%SZ") - timedelta(days=keep_pr_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.strptime(newest, "%Y-%m-%dT%H:%M:%SZ") - timedelta(days=keep_pr_days)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     before = conn.total_changes
     conn.execute("DELETE FROM runs WHERE repo_id = ? AND kind = 'pr' AND scanned_at < ?", (repo_id, cutoff))
     conn.execute(
@@ -809,7 +897,9 @@ def _drop_orphans(conn: sqlite3.Connection, repo_id: int) -> None:
         "(SELECT 1 FROM run_findings WHERE run_findings.key_id = finding_keys.id)",
         (repo_id,),
     )
-    conn.execute("DELETE FROM messages WHERE NOT EXISTS (SELECT 1 FROM run_findings WHERE run_findings.message_id = messages.id)")
+    conn.execute(
+        "DELETE FROM messages WHERE NOT EXISTS (SELECT 1 FROM run_findings WHERE run_findings.message_id = messages.id)"
+    )
 
 
 def _who() -> str:
@@ -836,7 +926,9 @@ def start_trigger(conn: sqlite3.Connection, target: str, who: str, started_at: s
     return cur.lastrowid
 
 
-def finish_trigger(conn: sqlite3.Connection, trigger_id: int, outcome: str, run_id: int | None, detail: str | None, finished_at: str) -> None:
+def finish_trigger(
+    conn: sqlite3.Connection, trigger_id: int, outcome: str, run_id: int | None, detail: str | None, finished_at: str
+) -> None:
     conn.execute(
         "UPDATE scan_triggers SET outcome = ?, run_id = ?, detail = ?, finished_at = ? WHERE id = ?",
         (outcome, run_id, _text(detail, 300) if detail else None, finished_at, trigger_id),
@@ -846,16 +938,33 @@ def finish_trigger(conn: sqlite3.Connection, trigger_id: int, outcome: str, run_
 MAX_POLICY_DIFF = 8000
 
 
-def append_config_change(db: Path, who: str, target: str, action: str, diff: dict, policy_before: str | None,
-                         policy_after: str | None, policy_diff: str | None = None) -> int:
+def append_config_change(
+    db: Path,
+    who: str,
+    target: str,
+    action: str,
+    diff: dict,
+    policy_before: str | None,
+    policy_after: str | None,
+    policy_diff: str | None = None,
+) -> int:
     """Audit a change to the scan targets. This is the dashboard's only write to the
     database: one INSERT on a short-lived connection; everything it shows is read-only."""
     conn = open_for_write(db)
     try:
         cur = conn.execute(
-            "INSERT INTO config_changes (who, changed_at, target, action, diff, policy_before, policy_after, policy_diff) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (_label(who, 100), parse_timestamp(None), _label(target, 200), action, json.dumps(diff, sort_keys=True)[:20000], policy_before,
-             policy_after, policy_diff[:MAX_POLICY_DIFF] if policy_diff else None),
+            "INSERT INTO config_changes (who, changed_at, target, action, diff, policy_before, policy_after, "
+            "policy_diff) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                _label(who, 100),
+                parse_timestamp(None),
+                _label(target, 200),
+                action,
+                json.dumps(diff, sort_keys=True)[:20000],
+                policy_before,
+                policy_after,
+                policy_diff[:MAX_POLICY_DIFF] if policy_diff else None,
+            ),
         )
         return cur.lastrowid
     finally:
@@ -880,45 +989,64 @@ def clean_description(value: object) -> str:
 
 def _review_row(conn: sqlite3.Connection, repo: str, key: tuple) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT status, resolved_at FROM finding_reviews WHERE repo_name = ? AND tool = ? AND rule = ? AND path = ? AND fingerprint = ?",
+        "SELECT status, resolved_at FROM finding_reviews WHERE repo_name = ? AND tool = ? AND rule = ? AND path = ? "
+        "AND fingerprint = ?",
         (repo, *key),
     ).fetchone()
 
 
-def _change_review(conn: sqlite3.Connection, repo: str, key: tuple, status: str, description: str, who: str,
-                   run_id: int | None, at: str) -> None:
+def _change_review(
+    conn: sqlite3.Connection,
+    repo: str,
+    key: tuple,
+    status: str,
+    description: str,
+    who: str,
+    run_id: int | None,
+    at: str,
+) -> None:
     current = _review_row(conn, repo, key)
     before = current[0] if current else "open"
     resolved_at = at if status in RESOLVED_STATUSES else None
     if resolved_at and current and current[0] in RESOLVED_STATUSES and current[1]:
         resolved_at = current[1]  # moving between resolved statuses keeps the first resolution time
     conn.execute(
-        "INSERT INTO finding_reviews (repo_name, tool, rule, path, fingerprint, status, description, updated_at, updated_by, resolved_at) "
+        "INSERT INTO finding_reviews (repo_name, tool, rule, path, fingerprint, status, description, updated_at, "
+        "updated_by, resolved_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (repo_name, tool, rule, path, fingerprint) DO UPDATE SET "
         "status = excluded.status, description = excluded.description, updated_at = excluded.updated_at, "
         "updated_by = excluded.updated_by, resolved_at = excluded.resolved_at",
         (repo, *key, status, description, at, who, resolved_at),
     )
     conn.execute(
-        "INSERT INTO finding_review_events (repo_name, tool, rule, path, fingerprint, who, at, from_status, to_status, description, run_id) "
+        "INSERT INTO finding_review_events (repo_name, tool, rule, path, fingerprint, who, at, from_status, to_status, "
+        "description, run_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (repo, *key, who, at, before, status, description, run_id),
     )
 
 
-def set_reviews(db: Path, repo: str, keys: list, status: str, description: object, who: str, run_id: int | None = None) -> int:
+def set_reviews(
+    db: Path, repo: str, keys: list, status: str, description: object, who: str, run_id: int | None = None
+) -> int:
     """A person's review of one or more findings. Only open, false_positive,
     accepted_risk, wont_fix and fixed can be set by hand; verified_fixed and
     regression come only from scheduled runs. Every change needs a description.
     This writes on its own short-lived connection."""
     if status not in USER_STATUSES:
-        raise SetupError(f"status must be one of {', '.join(USER_STATUSES)}; verified_fixed and regression are set by scheduled runs")
+        raise SetupError(
+            f"status must be one of {', '.join(USER_STATUSES)}; verified_fixed and regression are set by scheduled runs"
+        )
     text = clean_description(description)
     if not isinstance(keys, list) or not 1 <= len(keys) <= MAX_BULK_REVIEWS:
         raise SetupError(f"review 1 to {MAX_BULK_REVIEWS} findings at a time")
     identities = []
     for key in keys:
-        if not (isinstance(key, list) and len(key) == 4 and all(isinstance(p, str) and 0 < len(p) <= MAX_FIELD_CHARS for p in key)):
+        if not (
+            isinstance(key, list)
+            and len(key) == 4
+            and all(isinstance(p, str) and 0 < len(p) <= MAX_FIELD_CHARS for p in key)
+        ):
             raise SetupError("a finding key is [tool, rule, path, fingerprint]")
         identities.append(tuple(key))
     if len(set(identities)) != len(identities):
@@ -932,7 +1060,8 @@ def set_reviews(db: Path, repo: str, keys: list, status: str, description: objec
                 raise LookupError(repo)
             for key in identities:
                 known = conn.execute(
-                    "SELECT 1 FROM finding_keys WHERE repo_id = ? AND tool = ? AND rule = ? AND path = ? AND fingerprint = ?",
+                    "SELECT 1 FROM finding_keys WHERE repo_id = ? AND tool = ? AND rule = ? AND path = ? AND "
+                    "fingerprint = ?",
                     (repo_row[0], *key),
                 ).fetchone()
                 if known is None:
@@ -994,7 +1123,9 @@ def _covered(meta: dict, tool: str, rule: str, path: str, line: int | None) -> b
     return True
 
 
-def apply_review_transitions(conn: sqlite3.Connection, info: RunInfo, run_id: int, present: set, meta: dict | None = None) -> None:
+def apply_review_transitions(
+    conn: sqlite3.Connection, info: RunInfo, run_id: int, present: set, meta: dict | None = None
+) -> None:
     """What a scheduled run of the branch's tip tells about reviewed findings.
 
     A finding claimed fixed is verified only when this run fully scanned its
@@ -1013,7 +1144,8 @@ def apply_review_transitions(conn: sqlite3.Connection, info: RunInfo, run_id: in
     where = f"the scheduled run of {info.scanned_at} at {info.commit[:12]}"
     at = parse_timestamp(None)
     rows = conn.execute(
-        "SELECT tool, rule, path, fingerprint, status FROM finding_reviews WHERE repo_name = ? AND status IN ('fixed', 'verified_fixed')",
+        "SELECT tool, rule, path, fingerprint, status FROM finding_reviews WHERE repo_name = ? AND status IN ('fixed', "
+        "'verified_fixed')",
         (info.repo,),
     ).fetchall()
     for tool, rule, path, fingerprint, status in rows:
@@ -1022,13 +1154,17 @@ def apply_review_transitions(conn: sqlite3.Connection, info: RunInfo, run_id: in
             _change_review(conn, info.repo, key, "regression", f"Found again in {where}.", "shoalscan", run_id, at)
         elif status == "fixed":
             last_line = conn.execute(
-                "SELECT rf.line FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id JOIN runs r ON r.id = rf.run_id "
-                "JOIN repos rp ON rp.id = r.repo_id WHERE rp.name = ? AND fk.tool = ? AND fk.rule = ? AND fk.path = ? AND fk.fingerprint = ? "
+                "SELECT rf.line FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id JOIN runs r ON r.id = "
+                "rf.run_id "
+                "JOIN repos rp ON rp.id = r.repo_id WHERE rp.name = ? AND fk.tool = ? AND fk.rule = ? AND fk.path = ? "
+                "AND fk.fingerprint = ? "
                 "ORDER BY r.scanned_at DESC LIMIT 1",
                 (info.repo, *key),
             ).fetchone()
             if _covered(meta, tool, rule, path, last_line[0] if last_line else None):
-                _change_review(conn, info.repo, key, "verified_fixed", f"No longer found in {where}.", "shoalscan", run_id, at)
+                _change_review(
+                    conn, info.repo, key, "verified_fixed", f"No longer found in {where}.", "shoalscan", run_id, at
+                )
 
 
 def delete_config_change(db: Path, change_id: int) -> None:
@@ -1053,7 +1189,8 @@ def run_commit(conn: sqlite3.Connection, repo: str, run_id: int) -> tuple[str, s
 def list_runs(conn: sqlite3.Connection, repo: str) -> list[dict]:
     """The runs of one repository, newest first."""
     rows = conn.execute(
-        "SELECT runs.id, scanned_at, kind, ref, commit_sha, outcome, findings FROM runs JOIN repos ON repos.id = runs.repo_id "
+        "SELECT runs.id, scanned_at, kind, ref, commit_sha, outcome, findings FROM runs JOIN repos ON repos.id = "
+        "runs.repo_id "
         "WHERE repos.name = ? ORDER BY scanned_at DESC, runs.id DESC",
         (repo,),
     ).fetchall()
@@ -1077,10 +1214,13 @@ def delete_run(conn: sqlite3.Connection, repo: str, run_id: int) -> dict:
             (repo, run_id),
         ).fetchone()
         if row is None:
-            raise SetupError(f"{repo} has no run {run_id} (`shoalscan history list-runs --repo-name {repo}` lists them)")
+            raise SetupError(
+                f"{repo} has no run {run_id} (`shoalscan history list-runs --repo-name {repo}` lists them)"
+            )
         repo_id = row[1]
         conn.execute(
-            "INSERT INTO deletions (repo_name, run_id, kind, ref, commit_sha, scanned_at, outcome, findings, deleted_at, deleted_by) "
+            "INSERT INTO deletions (repo_name, run_id, kind, ref, commit_sha, scanned_at, outcome, findings, "
+            "deleted_at, deleted_by) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (repo, run_id, row[3], row[4], row[5], row[2], row[6], row[7], parse_timestamp(None), _who()),
         )

@@ -16,8 +16,8 @@ from shoalscan.config import Config
 from shoalscan.errors import ScanError, SetupError
 from shoalscan.excludes import ExcludeMatcher
 from shoalscan.findings import Finding, findings_to_json
-from shoalscan.lockfile import verify_sha256
 from shoalscan.gitref import baseline_binding_path, worktree_state
+from shoalscan.lockfile import verify_sha256
 from shoalscan.rulesets import RuleIdFilter
 from shoalscan.sarif import build_sarif
 from shoalscan.suppressions import find_suppressions, lint_findings
@@ -206,7 +206,15 @@ def run_scan(
                 raise SetupError("gitleaks is enabled but tools.lock pins no gitleaks")
             config_file, config_sha256 = pin.files["config"]
             leaks, leak_rules = gitleaks.run(
-                pin.path, pin.sha256, config_file, config_sha256, root, stage, config.limits, config.components, config.excludes
+                pin.path,
+                pin.sha256,
+                config_file,
+                config_sha256,
+                root,
+                stage,
+                config.limits,
+                config.components,
+                config.excludes,
             )
             findings += leaks
             extra_runs.append((gitleaks.TOOL, pin.version, leaks))
@@ -224,7 +232,14 @@ def run_scan(
             if pin is None:
                 raise SetupError("hadolint is enabled but tools.lock pins no hadolint")
             lints, missed, linted = hadolint.run(
-                pin.path, pin.sha256, root, stage, config.limits, config.components, config.excludes, config.hadolint.ignore
+                pin.path,
+                pin.sha256,
+                root,
+                stage,
+                config.limits,
+                config.components,
+                config.excludes,
+                config.hadolint.ignore,
             )
             findings += lints
             extra_runs.append((hadolint.TOOL, pin.version, lints))
@@ -242,7 +257,14 @@ def run_scan(
             if pin is None:
                 raise SetupError("zizmor is enabled but tools.lock pins no zizmor")
             audits, missed, audited, audit_rules = zizmor.run(
-                pin.path, pin.sha256, root, stage, config.limits, config.components, config.excludes, config.zizmor.ignore
+                pin.path,
+                pin.sha256,
+                root,
+                stage,
+                config.limits,
+                config.components,
+                config.excludes,
+                config.zizmor.ignore,
             )
             findings += audits
             extra_runs.append((zizmor.TOOL, pin.version, audits))
@@ -260,7 +282,14 @@ def run_scan(
             if pin is None:
                 raise SetupError("trivy is enabled but tools.lock pins no trivy")
             misconfigs, missed, markers, silenced, misconfig_rules = trivy.run(
-                pin.path, pin.sha256, root, stage, config.limits, config.components, config.excludes, config.trivy.ignore
+                pin.path,
+                pin.sha256,
+                root,
+                stage,
+                config.limits,
+                config.components,
+                config.excludes,
+                config.trivy.ignore,
             )
             findings += misconfigs
             extra_runs.append((trivy.TOOL, pin.version, misconfigs))
@@ -313,4 +342,3 @@ def run_scan(
     write_atomic(out_dir / FINDINGS_SARIF, sarif_text)
     write_atomic(out_dir / FINDINGS_JSON, findings_to_json(findings, meta))
     return ScanResult(findings, meta)
-

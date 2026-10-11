@@ -34,21 +34,45 @@ from shoalscan import history
 from shoalscan.dashboard import scanning
 from shoalscan.errors import SetupError, ShoalscanError
 
-WHO = {"dashboard": "dashboard user", "rescan": "dashboard user", "rescan-commit": "dashboard user",
-       "cli": "command line", "nightly": "nightly job"}
-TRIGGER = {"dashboard": "scan", "rescan": "rescan", "rescan-commit": "rescan-commit", "cli": "command line", "nightly": "nightly"}
+WHO = {
+    "dashboard": "dashboard user",
+    "rescan": "dashboard user",
+    "rescan-commit": "dashboard user",
+    "cli": "command line",
+    "nightly": "nightly job",
+}
+TRIGGER = {
+    "dashboard": "scan",
+    "rescan": "rescan",
+    "rescan-commit": "rescan-commit",
+    "cli": "command line",
+    "nightly": "nightly",
+}
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 STEP_OUTPUT_LINES = 20
-ENV_ALLOW = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME", "SSL_CERT_FILE", "PYTHONPATH",
-             "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME")
+ENV_ALLOW = (
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "USER",
+    "LOGNAME",
+    "SSL_CERT_FILE",
+    "PYTHONPATH",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+)
 _RUN_ID = re.compile(r"\brun (\d+)\b")
 
 
-class ScanTimeout(Exception):
+class ScanTimeout(Exception):  # noqa: N818 - a signal to stop the scan, not an error
     pass
 
 
-class CloneTooLarge(SetupError):
+class CloneTooLargeError(SetupError):
     pass
 
 
@@ -74,7 +98,7 @@ def tree_size(path: Path, limit: int | None = None) -> int:
     return total
 
 
-class Stop(Exception):
+class Stop(Exception):  # noqa: N818 - a signal to stop, not an error
     """SIGTERM or SIGINT: stop, clean up, record nothing."""
 
 
@@ -90,7 +114,15 @@ def child_env() -> dict:
 
 
 class Job:
-    def __init__(self, state_dir: Path, targets: scanning.Targets, target: scanning.Target, who: str, log, pinned: tuple[str, str] | None = None):
+    def __init__(
+        self,
+        state_dir: Path,
+        targets: scanning.Targets,
+        target: scanning.Target,
+        who: str,
+        log,
+        pinned: tuple[str, str] | None = None,
+    ):
         self.pinned = pinned  # (commit, ref) of a run to scan again, from the history database
         self.state_dir = state_dir
         self.targets = targets
@@ -117,8 +149,14 @@ class Job:
         self.log.write(line)
         self.log.flush()
 
-    def run(self, argv: list[str], cwd: Path | None = None, stdout_to: Path | None = None, env: dict | None = None,
-            watch: Path | None = None) -> int:
+    def run(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        stdout_to: Path | None = None,
+        env: dict | None = None,
+        watch: Path | None = None,
+    ) -> int:
         """Run one child in its own process group, with what is left of the deadline.
         With `watch`, the directory's size is checked every second, and the child is
         killed with its group as soon as it passes the clone size limit."""
@@ -127,8 +165,15 @@ class Job:
             raise ScanTimeout()
         out_path = self.work / "step.log"
         with open(out_path, "wb") as out, open(stdout_to, "wb") if stdout_to else open(os.devnull, "wb") as stdout:
-            proc = subprocess.Popen(argv, cwd=str(cwd) if cwd else str(self.work), stdin=subprocess.DEVNULL,
-                                    stdout=stdout if stdout_to else out, stderr=out, env=env or self.env, start_new_session=True)
+            proc = subprocess.Popen(
+                argv,
+                cwd=str(cwd) if cwd else str(self.work),
+                stdin=subprocess.DEVNULL,
+                stdout=stdout if stdout_to else out,
+                stderr=out,
+                env=env or self.env,
+                start_new_session=True,
+            )
             try:
                 code = None
                 deadline = time.monotonic() + remaining
@@ -144,8 +189,10 @@ class Job:
                         if tree_size(watch, self.clone_limit()) > self.clone_limit():
                             _kill_group(proc.pid)
                             proc.wait()
-                            raise CloneTooLarge(f"the clone grew past max_clone_mb ({self.clone_limit() // (1024 * 1024)} MB); "
-                                                "the fetch was stopped and nothing was scanned") from None
+                            raise CloneTooLargeError(
+                                f"the clone grew past max_clone_mb ({self.clone_limit() // (1024 * 1024)} MB); "
+                                "the fetch was stopped and nothing was scanned"
+                            ) from None
             except subprocess.TimeoutExpired:
                 _kill_group(proc.pid)
                 proc.wait()
@@ -170,8 +217,10 @@ class Job:
         pairs = self.git_pairs(admin_fetch)
         env = scanning.git_env(base_env(), pairs, hardened=not admin_fetch)
         try:
-            return self.run(["git", *scanning.git_args(pairs), *args], cwd=cwd, env=env, watch=self.clone if watch else None)
-        except CloneTooLarge:
+            return self.run(
+                ["git", *scanning.git_args(pairs), *args], cwd=cwd, env=env, watch=self.clone if watch else None
+            )
+        except CloneTooLargeError:
             self.discard_partial_clone()
             raise
 
@@ -195,9 +244,15 @@ class Job:
     def git_out(self, *args: str) -> str:
         """A hardened git query in the clone, in its own session, killed with its group at the deadline."""
         pairs = self.git_pairs()
-        proc = subprocess.Popen(["git", *scanning.git_args(pairs), "-C", str(self.clone), *args], stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=scanning.git_env(base_env(), pairs),
-                                start_new_session=True, text=True)
+        proc = subprocess.Popen(
+            ["git", *scanning.git_args(pairs), "-C", str(self.clone), *args],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=scanning.git_env(base_env(), pairs),
+            start_new_session=True,
+            text=True,
+        )
         try:
             out, _ = proc.communicate(timeout=max(1, self.deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
@@ -217,8 +272,21 @@ class Job:
                 self.clone.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 self.say(f"cloning {t.source}")
                 # One branch only, but its full history, so earlier commits can be rescanned.
-                if self.git("clone", "--quiet", "--no-checkout", "--single-branch", "--branch", t.branch, "--", t.source, str(self.clone),
-                            watch=True) != 0:
+                if (
+                    self.git(
+                        "clone",
+                        "--quiet",
+                        "--no-checkout",
+                        "--single-branch",
+                        "--branch",
+                        t.branch,
+                        "--",
+                        t.source,
+                        str(self.clone),
+                        watch=True,
+                    )
+                    != 0
+                ):
                     raise SetupError("git clone failed")
         if not (self.clone / ".git").exists() and not (self.clone / "HEAD").exists():
             raise SetupError("the clone is not a git repository")
@@ -226,7 +294,20 @@ class Job:
         if t.kind != "mirror" and self.git_out("remote", "get-url", "origin"):
             self.say("fetching")
             refspec = f"+refs/heads/{t.branch}:refs/remotes/origin/{t.branch}"
-            if self.git("-C", str(self.clone), "fetch", "--quiet", "--no-tags", "origin", refspec, admin_fetch=t.kind == "clone", watch=True) != 0:
+            if (
+                self.git(
+                    "-C",
+                    str(self.clone),
+                    "fetch",
+                    "--quiet",
+                    "--no-tags",
+                    "origin",
+                    refspec,
+                    admin_fetch=t.kind == "clone",
+                    watch=True,
+                )
+                != 0
+            ):
                 raise SetupError("git fetch failed")
         self.check_clone_size()
         if self.pinned is not None:
@@ -234,11 +315,24 @@ class Job:
             missing = self.git("-C", str(self.clone), "cat-file", "-e", f"{commit}^{{commit}}") != 0
             if missing and t.kind != "mirror" and self.git_out("remote", "get-url", "origin"):
                 # The commit may have left the branch: ask the origin for that commit alone.
-                self.git("-C", str(self.clone), "fetch", "--quiet", "--no-tags", "origin", commit, admin_fetch=t.kind == "clone", watch=True)
+                self.git(
+                    "-C",
+                    str(self.clone),
+                    "fetch",
+                    "--quiet",
+                    "--no-tags",
+                    "origin",
+                    commit,
+                    admin_fetch=t.kind == "clone",
+                    watch=True,
+                )
                 self.check_clone_size()
                 missing = self.git("-C", str(self.clone), "cat-file", "-e", f"{commit}^{{commit}}") != 0
             if missing:
-                raise SetupError(f"commit {commit[:12]} is no longer in the clone (it may have been rewritten away); nothing was scanned")
+                raise SetupError(
+                    f"commit {commit[:12]} is no longer in the clone (it may have been rewritten away); nothing was "
+                    "scanned"
+                )
             return commit
         for ref in (f"refs/remotes/origin/{t.branch}", f"refs/heads/{t.branch}"):
             commit = self.git_out("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
@@ -248,7 +342,9 @@ class Job:
 
     def check_clone_size(self) -> None:
         if tree_size(self.clone, self.clone_limit()) > self.clone_limit():
-            raise SetupError(f"the clone is larger than max_clone_mb ({self.clone_limit() // (1024 * 1024)} MB); nothing was scanned")
+            raise SetupError(
+                f"the clone is larger than max_clone_mb ({self.clone_limit() // (1024 * 1024)} MB); nothing was scanned"
+            )
 
     def shoalscan(self, *args: str) -> list[str]:
         python = str(self.target.python) if self.target.python else sys.executable
@@ -279,15 +375,34 @@ class Job:
         code = self.run(self.shoalscan("scan", "--repo", str(src), "--out", str(out), *tools, *config))
         check_txt = self.work / "check.txt"
         if code == 0:
-            code = self.run(self.shoalscan("check", "--repo", str(src), "--out", str(out), *config, *baseline), stdout_to=check_txt)
+            code = self.run(
+                self.shoalscan("check", "--repo", str(src), "--out", str(out), *config, *baseline), stdout_to=check_txt
+            )
         else:
             self.say(f"the scan failed (exit {code})")
             code = 2
         if code not in (0, 1):
             code = 2
         ref = self.pinned[1] if self.pinned else t.branch
-        record = ["record", "--repo-name", t.name, "--ref", ref, "--commit", commit, "--kind", "scheduled",
-                  "--scanned-at", started, "--check-exit", str(code), "--db", str(self.db), "--findings", str(out / "findings.json")]
+        record = [
+            "record",
+            "--repo-name",
+            t.name,
+            "--ref",
+            ref,
+            "--commit",
+            commit,
+            "--kind",
+            "scheduled",
+            "--scanned-at",
+            started,
+            "--check-exit",
+            str(code),
+            "--db",
+            str(self.db),
+            "--findings",
+            str(out / "findings.json"),
+        ]
         if self.pinned:
             record.append("--commit-rescan")
         if code != 2:
@@ -302,9 +417,15 @@ class Job:
         src = self.work / "src"
         if src.exists():
             pairs = self.git_pairs()
-            subprocess.run(["git", *scanning.git_args(pairs), "-C", str(self.clone), "worktree", "remove", "--force", str(src)],
-                           capture_output=True, stdin=subprocess.DEVNULL, env=scanning.git_env(base_env(), pairs), timeout=60, check=False,
-                           start_new_session=True)
+            subprocess.run(
+                ["git", *scanning.git_args(pairs), "-C", str(self.clone), "worktree", "remove", "--force", str(src)],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                env=scanning.git_env(base_env(), pairs),
+                timeout=60,
+                check=False,
+                start_new_session=True,
+            )
         shutil.rmtree(self.work, ignore_errors=True)
 
 
@@ -314,15 +435,25 @@ def check_free_space(state_dir: Path, targets: scanning.Targets) -> None:
     for place in {state_dir.resolve(), Path(tempfile.gettempdir()).resolve()}:
         free = shutil.disk_usage(place).free
         if free < need:
-            raise SetupError(f"not enough free disk space: {free // (1024 * 1024)} MB free where the scan works; "
-                             f"min_free_mb in scan_targets.toml asks for {targets.min_free_mb} MB")
+            raise SetupError(
+                f"not enough free disk space: {free // (1024 * 1024)} MB free where the scan works; "
+                f"min_free_mb in scan_targets.toml asks for {targets.min_free_mb} MB"
+            )
 
 
 def _write_status(state_dir: Path, **status) -> None:
     scanning.write_private(state_dir / scanning.STATUS_FILE, json.dumps(status))
 
 
-def run_one(state_dir: Path, targets: scanning.Targets, name: str, who: str, log, trigger: str = "scan", run_id: int | None = None) -> str:
+def run_one(
+    state_dir: Path,
+    targets: scanning.Targets,
+    name: str,
+    who: str,
+    log,
+    trigger: str = "scan",
+    run_id: int | None = None,
+) -> str:
     """Scan one registered target under the lock. Returns the outcome.
 
     With `run_id`, scan again the exact commit that run of this repository
@@ -358,7 +489,9 @@ def run_one(state_dir: Path, targets: scanning.Targets, name: str, who: str, log
         job = Job(state_dir, targets, target, who, log, pinned)
         conn = history.open_for_write(job.db)
         trigger_id = history.start_trigger(conn, name, who, started, trigger)
-        _write_status(state_dir, target=name, started=started, finished=None, outcome="running", run_id=None, pid=os.getpid())
+        _write_status(
+            state_dir, target=name, started=started, finished=None, outcome="running", run_id=None, pid=os.getpid()
+        )
         job.say(f"scan of {name} started by {who}")
         outcome, run_id = job.execute()
     except ScanTimeout:
@@ -374,9 +507,18 @@ def run_one(state_dir: Path, targets: scanning.Targets, name: str, who: str, log
         finished = history.parse_timestamp(None)
         if conn is not None:
             if trigger_id is not None:
-                history.finish_trigger(conn, trigger_id, outcome, run_id, scanning.sanitise_log([detail], job.clone if job else None)[0] if detail else None, finished)
+                history.finish_trigger(
+                    conn,
+                    trigger_id,
+                    outcome,
+                    run_id,
+                    scanning.sanitise_log([detail], job.clone if job else None)[0] if detail else None,
+                    finished,
+                )
             conn.close()
-        _write_status(state_dir, target=name, started=started, finished=finished, outcome=outcome, run_id=run_id, pid=None)
+        _write_status(
+            state_dir, target=name, started=started, finished=finished, outcome=outcome, run_id=run_id, pid=None
+        )
         scanning.release_lock(state_dir)
     return outcome
 
@@ -407,7 +549,9 @@ def _on_signal(signum, frame):
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="shoalscan scanjob", description="Run a scan of a registered target (see scan_targets.toml).")
+    parser = argparse.ArgumentParser(
+        prog="shoalscan scanjob", description="Run a scan of a registered target (see scan_targets.toml)."
+    )
     add_arguments(parser)
     return run(parser.parse_args(argv))
 
@@ -415,10 +559,14 @@ def main(argv: list[str] | None = None) -> int:
 def add_arguments(p: argparse.ArgumentParser) -> None:
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--target", help="the registered target to scan, by name")
-    group.add_argument("--nightly", action="store_true", help="scan every enabled target with nightly = true, one after another")
+    group.add_argument(
+        "--nightly", action="store_true", help="scan every enabled target with nightly = true, one after another"
+    )
     p.add_argument("--state-dir", required=True, help="the dashboard's state directory, which holds scan_targets.toml")
     p.add_argument("--trigger", choices=tuple(WHO), default="cli", help=argparse.SUPPRESS)
-    p.add_argument("--run-id", type=int, help="scan again the exact commit of this run of the target (the new record replaces it)")
+    p.add_argument(
+        "--run-id", type=int, help="scan again the exact commit of this run of the target (the new record replaces it)"
+    )
 
 
 def run(args: argparse.Namespace) -> int:
@@ -437,12 +585,21 @@ def run(args: argparse.Namespace) -> int:
             results = run_nightly(state_dir, targets, sys.stdout)
             for name, outcome in results.items():
                 print(f"shoalscan scanjob: {name}: {outcome}")
-            return 0 if all(o in ("passed", "blocked") or o.startswith("skipped: dis") or o.startswith("skipped: not") for o in results.values()) else 1
+            return (
+                0
+                if all(
+                    o in ("passed", "blocked") or o.startswith("skipped: dis") or o.startswith("skipped: not")
+                    for o in results.values()
+                )
+                else 1
+            )
         if not scanning.valid_name(args.target):
             raise SetupError("invalid target name")
         if args.run_id is not None and not 0 < args.run_id < 2**62:
             raise SetupError("invalid run id")
-        outcome = run_one(state_dir, targets, args.target, WHO[args.trigger], sys.stdout, TRIGGER[args.trigger], args.run_id)
+        outcome = run_one(
+            state_dir, targets, args.target, WHO[args.trigger], sys.stdout, TRIGGER[args.trigger], args.run_id
+        )
         print(f"shoalscan scanjob: {args.target}: {outcome}")
         return 0 if outcome in ("passed", "blocked") else 1
     except ShoalscanError as exc:

@@ -110,8 +110,13 @@ def shoalscan_run(findings: list[Finding], name: str = "shoalscan", version: str
     }
 
 
-def build_sarif(opengrep_sarif: Path | None, root: Path, index: dict, own: list[Finding],
-                extra_runs: list[tuple[str, str, list[Finding]]] | None = None) -> str:
+def build_sarif(
+    opengrep_sarif: Path | None,
+    root: Path,
+    index: dict,
+    own: list[Finding],
+    extra_runs: list[tuple[str, str, list[Finding]]] | None = None,
+) -> str:
     """Opengrep's SARIF, rewritten, plus a run of Shoalscan's own findings and one per
     `extra_runs` entry (name, version, findings). Gitleaks' own SARIF holds the
     secrets it found, so its run is built from the findings instead."""

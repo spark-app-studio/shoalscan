@@ -50,18 +50,27 @@ _CONFIG_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".hcl", ".yaml", ".yml", ".jso
 
 def build_command(binary: Path, target: Path, work: Path) -> list[str]:
     return [
-        str(binary), "config",
+        str(binary),
+        "config",
         # The checks embedded in the pinned binary; no downloads, no cache from earlier runs.
-        "--cache-dir", str(work / "cache"),
-        "--skip-check-update", "--skip-version-check", "--disable-telemetry",
+        "--cache-dir",
+        str(work / "cache"),
+        "--skip-check-update",
+        "--skip-version-check",
+        "--disable-telemetry",
         # Empty files and directories, never the repository's or the machine's.
-        "--config", str(work / "trivy.yaml"),
-        "--ignorefile", str(work / "trivyignore"),
-        "--module-dir", str(work / "modules"),
-        "--format", "json",
-        "--exit-code", "0",
+        "--config",
+        str(work / "trivy.yaml"),
+        "--ignorefile",
+        str(work / "trivyignore"),
+        "--module-dir",
+        str(work / "modules"),
+        "--format",
+        "json",
+        "--exit-code",
+        "0",
         str(target),
-    ]  # fmt: skip
+    ]
 
 
 def execute(cmd: list[str], cwd: Path, timeout: int) -> tuple[dict, str]:
@@ -98,7 +107,9 @@ def parse_errors(log: str, root: Path, excludes: tuple[str, ...]) -> list[dict]:
     return sorted(errors.values(), key=lambda e: e["path"])
 
 
-def normalise(doc: dict, root: Path, components: dict[str, str], excludes: tuple[str, ...], ignore: tuple[str, ...]) -> tuple[list[Finding], dict]:
+def normalise(
+    doc: dict, root: Path, components: dict[str, str], excludes: tuple[str, ...], ignore: tuple[str, ...]
+) -> tuple[list[Finding], dict]:
     """Findings, and the rule metadata for the work list."""
     matcher = ExcludeMatcher(list(excludes))
     items, meta = [], {}
@@ -113,7 +124,10 @@ def normalise(doc: dict, root: Path, components: dict[str, str], excludes: tuple
             continue
         rel = _inside(root, result.get("Target"))
         if rel is None:
-            raise ScanError(f"trivy reported a finding in something that is not a file of the repository: {str(result.get('Target'))[:300]}")
+            raise ScanError(
+                "trivy reported a finding in something that is not a file of the repository: "
+                f"{str(result.get('Target'))[:300]}"
+            )
         if rel == ".git" or rel.startswith(".git/") or matcher.excluded(rel):
             continue
         for m in failures:
@@ -143,14 +157,34 @@ def normalise(doc: dict, root: Path, components: dict[str, str], excludes: tuple
                     "message": (f"{title}: {message}" if message and message != title else title)[:1000] or check,
                 }
             )
-            refs = [u for u in [m.get("PrimaryURL"), *(m.get("References") or [])] if isinstance(u, str) and u.startswith("https://") and " " not in u]
+            refs = [
+                u
+                for u in [m.get("PrimaryURL"), *(m.get("References") or [])]
+                if isinstance(u, str) and u.startswith("https://") and " " not in u
+            ]
             resolution = " ".join(str(m.get("Resolution", "")).split())[:500] or None
-            meta[rule] = {"file": None, "cwe": [], "owasp": [], "fix": resolution, "references": list(dict.fromkeys(refs))[:5],
-                          "confidence": None, "likelihood": None, "impact": None}  # fmt: skip
+            meta[rule] = {
+                "file": None,
+                "cwe": [],
+                "owasp": [],
+                "fix": resolution,
+                "references": list(dict.fromkeys(refs))[:5],
+                "confidence": None,
+                "likelihood": None,
+                "impact": None,
+            }
     prints = assign_fingerprints(items)
     findings = [
-        Finding(tool=TOOL, rule=it["rule"], severity=it["severity"], path=it["path"], line=it["line"], fingerprint=fp,
-                component=component_for(it["path"], components), message=it["message"])  # fmt: skip
+        Finding(
+            tool=TOOL,
+            rule=it["rule"],
+            severity=it["severity"],
+            path=it["path"],
+            line=it["line"],
+            fingerprint=fp,
+            component=component_for(it["path"], components),
+            message=it["message"],
+        )
         for it, fp in zip(items, prints)
     ]
     return findings, meta
@@ -163,7 +197,9 @@ def config_files(root: Path, excludes: tuple[str, ...], max_bytes: int) -> list[
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         rel_dir = Path(dirpath).relative_to(root).as_posix()
         rel_dir = "" if rel_dir == "." else rel_dir
-        dirnames[:] = sorted(d for d in dirnames if d != ".git" and not matcher.excluded(f"{rel_dir}/{d}" if rel_dir else d))
+        dirnames[:] = sorted(
+            d for d in dirnames if d != ".git" and not matcher.excluded(f"{rel_dir}/{d}" if rel_dir else d)
+        )
         for name in filenames:
             rel = f"{rel_dir}/{name}" if rel_dir else name
             if (name.lower().endswith(_CONFIG_SUFFIXES) or is_dockerfile(name)) and not matcher.excluded(rel):
@@ -171,8 +207,16 @@ def config_files(root: Path, excludes: tuple[str, ...], max_bytes: int) -> list[
     return sorted(found)
 
 
-def run(binary: Path, binary_sha256: str, root: Path, stage: Path, limits: Limits, components: dict[str, str],
-        excludes: tuple[str, ...], ignore: tuple[str, ...]) -> tuple[list[Finding], dict, list[Suppression], int, dict]:  # fmt: skip
+def run(
+    binary: Path,
+    binary_sha256: str,
+    root: Path,
+    stage: Path,
+    limits: Limits,
+    components: dict[str, str],
+    excludes: tuple[str, ...],
+    ignore: tuple[str, ...],
+) -> tuple[list[Finding], dict, list[Suppression], int, dict]:
     """Check the repository's infrastructure as code.
 
     Returns the findings, the unscanned files, the Trivy markers found, how
@@ -188,6 +232,8 @@ def run(binary: Path, binary_sha256: str, root: Path, stage: Path, limits: Limit
     (work / "trivyignore").write_text("", encoding="utf-8")
     doc, log = execute(build_command(binary, root, work), work, limits.scan_timeout_seconds)
     findings, meta = normalise(doc, root, components, excludes, ignore)
-    markers = find_trivy_suppressions(root, config_files(root, excludes, limits.max_target_bytes), limits.max_target_bytes)
+    markers = find_trivy_suppressions(
+        root, config_files(root, excludes, limits.max_target_bytes), limits.max_target_bytes
+    )
     silenced = len(re.findall(r"\tINFO\t\[[^\]\n]*\] Ignore finding\t", log))
     return findings, {"skipped": [], "errors": parse_errors(log, root, excludes)}, markers, silenced, meta

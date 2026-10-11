@@ -14,11 +14,11 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 import helpers  # noqa: F401
-from test_scanjob import Fixture
 
 from shoalscan import history
 from shoalscan.dashboard import auth, scanning, server, tlsgen
 from shoalscan.errors import SetupError
+from test_scanjob import Fixture
 
 
 class DashboardHarness:
@@ -29,8 +29,17 @@ class DashboardHarness:
         self.token = auth.create_token(base / "token.sha256")
         if not db.exists():
             history.open_for_write(db).close()
-        config = server.ServeConfig(db=db, cert=self.tls["cert"], key=self.tls["key"], token_hash=base / "token.sha256",
-                                    bind="127.0.0.1", port=0, hosts=("127.0.0.1",), state_dir=state, allow_config=allow_config)
+        config = server.ServeConfig(
+            db=db,
+            cert=self.tls["cert"],
+            key=self.tls["key"],
+            token_hash=base / "token.sha256",
+            bind="127.0.0.1",
+            port=0,
+            hosts=("127.0.0.1",),
+            state_dir=state,
+            allow_config=allow_config,
+        )
         self.httpd = server.build_server(config)
         self.port = self.httpd.server_address[1]
         self.origin = f"https://127.0.0.1:{self.port}"
@@ -56,8 +65,12 @@ class DashboardHarness:
             conn.close()
 
     def login(self):
-        _, headers, _ = self.request("POST", "/login", urlencode({"token": self.token}),
-                                     {"Origin": self.origin, "Content-Type": "application/x-www-form-urlencoded"})
+        _, headers, _ = self.request(
+            "POST",
+            "/login",
+            urlencode({"token": self.token}),
+            {"Origin": self.origin, "Content-Type": "application/x-www-form-urlencoded"},
+        )
         sid = re.match(rf"{auth.COOKIE_NAME}=([^;]+)", headers["Set-Cookie"]).group(1)
         status, _, body = self.request("GET", "/api/session", cookie=sid)
         return sid, json.loads(body)["csrf"]
@@ -90,7 +103,9 @@ def kill_scan(f: Fixture, state: Path) -> None:
                 pass
 
 
-@unittest.skipIf(tlsgen.find_openssl() is None, "the openssl command is not installed, so no test certificate can be made")
+@unittest.skipIf(
+    tlsgen.find_openssl() is None, "the openssl command is not installed, so no test certificate can be made"
+)
 class ScanEndpointTests(unittest.TestCase):
     def setUp(self):
         server.Handler._log, self._log = (lambda self, status: None), server.Handler._log
@@ -120,18 +135,38 @@ class ScanEndpointTests(unittest.TestCase):
         self.assertEqual(d.post("/api/scan", {"target": "acme/app"})[0], 401)
         self.assertEqual(d.post("/api/scan", {"target": "acme/app"}, sid=self.sid)[0], 403)
         self.assertEqual(d.post("/api/scan", {"target": "acme/app"}, sid=self.sid, csrf="wrong")[0], 403)
-        self.assertEqual(d.post("/api/scan", {"target": "acme/app"}, sid=self.sid, csrf=self.csrf, origin="https://evil.example")[0], 403)
+        self.assertEqual(
+            d.post("/api/scan", {"target": "acme/app"}, sid=self.sid, csrf=self.csrf, origin="https://evil.example")[0],
+            403,
+        )
         # A Referer alone is enough for logout, not for starting a scan.
-        status, _, _ = d.request("POST", "/api/scan", json.dumps({"target": "acme/app"}),
-                                 {"Content-Type": "application/json", "X-CSRF-Token": self.csrf, "Referer": d.origin + "/"}, cookie=self.sid)
+        status, _, _ = d.request(
+            "POST",
+            "/api/scan",
+            json.dumps({"target": "acme/app"}),
+            {"Content-Type": "application/json", "X-CSRF-Token": self.csrf, "Referer": d.origin + "/"},
+            cookie=self.sid,
+        )
         self.assertEqual(status, 403)
-        self.assertEqual(d.post("/api/scan", "target=acme/app", sid=self.sid, csrf=self.csrf, content_type="text/plain")[0], 415)
+        self.assertEqual(
+            d.post("/api/scan", "target=acme/app", sid=self.sid, csrf=self.csrf, content_type="text/plain")[0], 415
+        )
         self.assertEqual(self.f.calls(), [])
 
     def test_unknown_and_injected_targets_are_refused(self):
         d = self.dash
         self.assertEqual(d.post("/api/scan", {"target": "acme/other"}, sid=self.sid, csrf=self.csrf)[0], 404)
-        for target in ("../acme/app", "--help", "acme/app;id", "acme/app\n", "a b", "/etc/passwd", 5, ["acme/app"], None):
+        for target in (
+            "../acme/app",
+            "--help",
+            "acme/app;id",
+            "acme/app\n",
+            "a b",
+            "/etc/passwd",
+            5,
+            ["acme/app"],
+            None,
+        ):
             with self.subTest(target=target):
                 self.assertEqual(d.post("/api/scan", {"target": target}, sid=self.sid, csrf=self.csrf)[0], 400)
         for payload in ({"target": "acme/app", "branch": "x"}, {"target": "acme/app", "clone": "/tmp"}, [], "null"):
@@ -143,25 +178,48 @@ class ScanEndpointTests(unittest.TestCase):
         d = self.dash
         conn = history.open_for_write(self.f.db)
         try:
-            other = history.record_run(conn, history.RunInfo("acme/other", "main", "a" * 40, "scheduled", "2026-09-01T00:00:00Z"),
-                                       [], {}, {"result": "pass", "findings": 0}).run_id
+            other = history.record_run(
+                conn,
+                history.RunInfo("acme/other", "main", "a" * 40, "scheduled", "2026-09-01T00:00:00Z"),
+                [],
+                {},
+                {"result": "pass", "findings": 0},
+            ).run_id
         finally:
             conn.close()
-        for payload in ({"target": "acme/app", "run_id": "1"}, {"target": "acme/app", "run_id": -1}, {"target": "acme/app", "run_id": 1.5},
-                        {"target": "acme/app", "run_id": True}, {"target": "acme/app", "run_id": 2**70}, {"target": "acme/app", "rescan": 1},
-                        {"target": "acme/app", "rescan": True, "run_id": 1}, {"target": "acme/app", "commit": "a" * 40},
-                        {"target": "acme/app", "run_id": "1; DROP TABLE runs"}):
+        for payload in (
+            {"target": "acme/app", "run_id": "1"},
+            {"target": "acme/app", "run_id": -1},
+            {"target": "acme/app", "run_id": 1.5},
+            {"target": "acme/app", "run_id": True},
+            {"target": "acme/app", "run_id": 2**70},
+            {"target": "acme/app", "rescan": 1},
+            {"target": "acme/app", "rescan": True, "run_id": 1},
+            {"target": "acme/app", "commit": "a" * 40},
+            {"target": "acme/app", "run_id": "1; DROP TABLE runs"},
+        ):
             with self.subTest(payload=payload):
                 self.assertEqual(d.post("/api/scan", payload, sid=self.sid, csrf=self.csrf)[0], 400)
-        self.assertEqual(d.post("/api/scan", {"target": "acme/app", "run_id": other}, sid=self.sid, csrf=self.csrf)[0], 404)
-        self.assertEqual(d.post("/api/scan", {"target": "acme/app", "run_id": 999999}, sid=self.sid, csrf=self.csrf)[0], 404)
+        self.assertEqual(
+            d.post("/api/scan", {"target": "acme/app", "run_id": other}, sid=self.sid, csrf=self.csrf)[0], 404
+        )
+        self.assertEqual(
+            d.post("/api/scan", {"target": "acme/app", "run_id": 999999}, sid=self.sid, csrf=self.csrf)[0], 404
+        )
         conn = history.open_for_write(self.f.db)
         try:
-            pr = history.record_run(conn, history.RunInfo("acme/app", "refs/pull/4/merge", "b" * 40, "pr", "2026-09-01T00:00:00Z"),
-                                    [], {}, {"result": "pass", "findings": 0}).run_id
+            pr = history.record_run(
+                conn,
+                history.RunInfo("acme/app", "refs/pull/4/merge", "b" * 40, "pr", "2026-09-01T00:00:00Z"),
+                [],
+                {},
+                {"result": "pass", "findings": 0},
+            ).run_id
         finally:
             conn.close()
-        self.assertEqual(d.post("/api/scan", {"target": "acme/app", "run_id": pr}, sid=self.sid, csrf=self.csrf)[0], 409)
+        self.assertEqual(
+            d.post("/api/scan", {"target": "acme/app", "run_id": pr}, sid=self.sid, csrf=self.csrf)[0], 409
+        )
         self.assertEqual(self.f.calls(), [])
         status, body = d.post("/api/scan", {"target": "acme/app", "rescan": True}, sid=self.sid, csrf=self.csrf)
         self.assertEqual(status, 202, body)
@@ -202,7 +260,9 @@ class ScanEndpointTests(unittest.TestCase):
         body = self.wait_idle()
         self.assertEqual(body["current"]["outcome"], "passed", body)
         trigger = body["triggers"][0]
-        self.assertEqual((trigger["target"], trigger["who"], trigger["outcome"]), ("acme/app", "dashboard user", "passed"))
+        self.assertEqual(
+            (trigger["target"], trigger["who"], trigger["outcome"]), ("acme/app", "dashboard user", "passed")
+        )
         self.assertEqual(trigger["run_id"], body["current"]["run_id"])
         self.assertGreater(body["targets"][0]["cooldown_remaining"], 500)
         status, body = self.dash.post("/api/scan", {"target": "acme/app"}, sid=self.sid, csrf=self.csrf)
@@ -229,7 +289,9 @@ class StatusOrderTests(unittest.TestCase):
             self.assertEqual(order, ["running", "triggers"])
 
 
-@unittest.skipIf(tlsgen.find_openssl() is None, "the openssl command is not installed, so no test certificate can be made")
+@unittest.skipIf(
+    tlsgen.find_openssl() is None, "the openssl command is not installed, so no test certificate can be made"
+)
 class ScansOffTests(unittest.TestCase):
     def test_no_targets_file_means_no_scans(self):
         server.Handler._log, log = (lambda self, status: None), server.Handler._log

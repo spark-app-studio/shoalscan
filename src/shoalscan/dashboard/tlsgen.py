@@ -44,9 +44,7 @@ CA_FILE, CERT_FILE, KEY_FILE = "ca.pem", "server.pem", "server.key"
 WORK_PREFIX = ".init-tls-"
 NO_DNS_NAME = "shoalscan.invalid"  # .invalid is reserved and never resolves (RFC 2606)
 
-_DNS = re.compile(
-    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"
-)
+_DNS = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _EXTENSIONS = (
     "[ca_ext]\nbasicConstraints = critical,CA:TRUE,pathlen:0\n"
     "keyUsage = critical,keyCertSign,cRLSign\nextendedKeyUsage = serverAuth\nsubjectKeyIdentifier = hash\n"
@@ -124,9 +122,13 @@ def _write_configs(work: Path, constraints: str, san: str) -> None:
     extensions = _EXTENSIONS.format(constraints=constraints, san=san)
     # Separate files, because LibreSSL ignores -subj when the configuration
     # names a subject; each file carries its own.
-    for name, subject in (("ca.cnf", f"Shoalscan dashboard CA {secrets.token_hex(4)}"), ("leaf.cnf", "Shoalscan dashboard")):
+    for name, subject in (
+        ("ca.cnf", f"Shoalscan dashboard CA {secrets.token_hex(4)}"),
+        ("leaf.cnf", "Shoalscan dashboard"),
+    ):
         (work / name).write_text(
-            f"[req]\ndistinguished_name = subject\nprompt = no\n[subject]\nCN = {subject}\n{extensions}", encoding="ascii"
+            f"[req]\ndistinguished_name = subject\nprompt = no\n[subject]\nCN = {subject}\n{extensions}",
+            encoding="ascii",
         )
 
 
@@ -136,21 +138,57 @@ def make_ca(openssl: str, work: Path, ips: list[str], names: list[str]) -> None:
     _openssl(openssl, ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", "ca.key"], work)
     _openssl(
         openssl,
-        ["req", "-new", "-x509", "-sha256", "-days", str(SERVER_DAYS + 1), "-key", "ca.key",
-         "-config", "ca.cnf", "-extensions", "ca_ext", "-out", CA_FILE],
+        [
+            "req",
+            "-new",
+            "-x509",
+            "-sha256",
+            "-days",
+            str(SERVER_DAYS + 1),
+            "-key",
+            "ca.key",
+            "-config",
+            "ca.cnf",
+            "-extensions",
+            "ca_ext",
+            "-out",
+            CA_FILE,
+        ],
         work,
     )
 
 
-def sign_leaf(openssl: str, work: Path, key_file: str, cert_file: str, extfile: str = "leaf.cnf", section: str = "server_ext") -> None:
+def sign_leaf(
+    openssl: str, work: Path, key_file: str, cert_file: str, extfile: str = "leaf.cnf", section: str = "server_ext"
+) -> None:
     """Make a key and have the CA in `work` sign a server certificate for it."""
     _openssl(openssl, ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", key_file], work)
-    _openssl(openssl, ["req", "-new", "-sha256", "-key", key_file, "-config", "leaf.cnf", "-out", f"{key_file}.csr"], work)
+    _openssl(
+        openssl, ["req", "-new", "-sha256", "-key", key_file, "-config", "leaf.cnf", "-out", f"{key_file}.csr"], work
+    )
     _openssl(
         openssl,
-        ["x509", "-req", "-sha256", "-days", str(SERVER_DAYS), "-in", f"{key_file}.csr",
-         "-CA", CA_FILE, "-CAkey", "ca.key", "-set_serial", str(int.from_bytes(secrets.token_bytes(15), "big") | 1),
-         "-extfile", extfile, "-extensions", section, "-out", cert_file],
+        [
+            "x509",
+            "-req",
+            "-sha256",
+            "-days",
+            str(SERVER_DAYS),
+            "-in",
+            f"{key_file}.csr",
+            "-CA",
+            CA_FILE,
+            "-CAkey",
+            "ca.key",
+            "-set_serial",
+            str(int.from_bytes(secrets.token_bytes(15), "big") | 1),
+            "-extfile",
+            extfile,
+            "-extensions",
+            section,
+            "-out",
+            cert_file,
+        ],
         work,
     )
     (work / f"{key_file}.csr").unlink()

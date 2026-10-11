@@ -17,7 +17,15 @@ from shoalscan.config import CONFIG_NAME, Config, config_from_bytes, load_config
 from shoalscan.dashboard.commands import add_commands as add_dashboard_commands
 from shoalscan.errors import ScanError, SetupError, ShoalscanError
 from shoalscan.findings import load_findings
-from shoalscan.install import community_rules_path, install, opengrep_path, signature_verified, tool_file_path, tool_path, verify_rules_dir
+from shoalscan.install import (
+    community_rules_path,
+    install,
+    opengrep_path,
+    signature_verified,
+    tool_file_path,
+    tool_path,
+    verify_rules_dir,
+)
 from shoalscan.locations import default_out_dir, default_tools_dir, refuse_inside_repo
 from shoalscan.lockfile import Lock, current_platform, load_lock
 from shoalscan.resources import default_lock_path, shoalscan_rules_dir
@@ -77,7 +85,9 @@ def _policy(args: argparse.Namespace) -> Policy:
         data = path.read_bytes() if path.is_file() else b""
         return Policy(_config(args), None, None, hashlib.sha256(data).hexdigest())
     if args.config:
-        raise SetupError("--config and --policy-ref cannot be used together: with a policy ref the configuration comes from the ref")
+        raise SetupError(
+            "--config and --policy-ref cannot be used together: with a policy ref the configuration comes from the ref"
+        )
     repo = Path(args.repo)
     commit = gitref.resolve_commit(repo, ref)
     data = gitref.show_file(repo, commit, CONFIG_NAME)
@@ -124,7 +134,10 @@ def _tools(args: argparse.Namespace, config: Config, lock: Lock) -> Tools:
             version=tool.version,
             path=tool_path(tools_dir, name).absolute(),
             sha256=platform_pin.binary_sha256,
-            files={extra: (tool_file_path(tools_dir, name, extra).absolute(), asset.sha256) for extra, asset in tool.files.items()},
+            files={
+                extra: (tool_file_path(tools_dir, name, extra).absolute(), asset.sha256)
+                for extra, asset in tool.files.items()
+            },
         )
     return Tools(
         pinned=pinned,
@@ -214,7 +227,7 @@ def _print_policy_diff(repo: Path, policy: Policy) -> None:
     if diff.strip():
         bar = "!" * 78
         print(bar)
-        print(f"POLICY CHANGES: this change edits the configuration, baseline or rule directories.")
+        print("POLICY CHANGES: this change edits the configuration, baseline or rule directories.")
         print(f"They are NOT applied here: the policy comes from {policy.ref}. Review them carefully.")
         print(bar)
         print(diff)
@@ -268,7 +281,9 @@ def cmd_check(args: argparse.Namespace) -> int:
     repo = Path(args.repo)
     # A check that stops early must not leave an older details file behind.
     (out / CHECK_JSON).unlink(missing_ok=True)
-    findings_sha256 = hashlib.sha256((out / FINDINGS_JSON).read_bytes()).hexdigest() if (out / FINDINGS_JSON).is_file() else ""
+    findings_sha256 = (
+        hashlib.sha256((out / FINDINGS_JSON).read_bytes()).hexdigest() if (out / FINDINGS_JSON).is_file() else ""
+    )
     findings, meta = load_findings(out / FINDINGS_JSON)
     recorded = meta.get("policy") or {}
     if recorded.get("commit") != policy.commit or recorded.get("config_sha256") != policy.config_sha256:
@@ -311,6 +326,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
         def added(path: str) -> set[int]:
             return gitref.added_lines(repo, commit, path)
+
     result = compare(
         findings,
         baseline,
@@ -364,7 +380,10 @@ def cmd_baseline_rename_path(args: argparse.Namespace) -> int:
 def _policy_option(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--policy-ref",
-        help="read the configuration, baseline and repository rule dirs from this git ref (use the base branch on pull requests)",
+        help=(
+            "read the configuration, baseline and repository rule dirs from this git ref (use the base branch on pull "
+            "requests)"
+        ),
     )
 
 
@@ -376,14 +395,18 @@ def _scan_options(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="shoalscan", description="Run pinned security scanners and check findings against a baseline.")
+    parser = argparse.ArgumentParser(
+        prog="shoalscan", description="Run pinned security scanners and check findings against a baseline."
+    )
     parser.add_argument("--version", action="version", version=f"shoalscan {__version__}")
     parser.add_argument("--lock", help="tools lock file (default: the one shipped with Shoalscan)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("install", help="download, verify and install the pinned tools")
     p.add_argument("--dir", help=TOOLS_HELP.replace("installed tools", "tools directory"))
-    p.add_argument("--skip-signature-check", action="store_true", help="install without cosign signature checks (SHA-256 only)")
+    p.add_argument(
+        "--skip-signature-check", action="store_true", help="install without cosign signature checks (SHA-256 only)"
+    )
     p.add_argument("--no-community-rules", action="store_true", help="do not install the community rules snapshot")
     p.set_defaults(func=cmd_install)
 

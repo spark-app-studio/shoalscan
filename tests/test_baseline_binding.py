@@ -20,11 +20,11 @@ import unittest
 from pathlib import Path
 
 import helpers  # noqa: F401 - puts src/ on the import path
+from test_end_to_end import SAMPLE, TOOLS, tools_ready
 
 from shoalscan import gitref
 from shoalscan.cli import _same_tree, main
 from shoalscan.findings import Finding
-from test_end_to_end import SAMPLE, TOOLS, tools_ready
 
 HAS_GIT = shutil.which("git") is not None
 
@@ -32,8 +32,12 @@ HAS_GIT = shutil.which("git") is not None
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", *args],
-        cwd=repo, check=True, capture_output=True, text=True, timeout=60,
-    ).stdout  # fmt: skip
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout
 
 
 @unittest.skipUnless(HAS_GIT and tools_ready(), "needs git and the installed Opengrep")
@@ -95,7 +99,9 @@ class BaselineEditAfterScanTests(unittest.TestCase):
         (self.repo / "docs" / "notes.md").write_text("edited after the scan\n", encoding="utf-8")
         self.assertIn("do not match the current tree", self.assert_check_refuses())
         # So is a new untracked file next to the baseline.
-        (self.repo / "docs" / "notes.md").write_text((SAMPLE / "docs" / "notes.md").read_text(encoding="utf-8"), encoding="utf-8")
+        (self.repo / "docs" / "notes.md").write_text(
+            (SAMPLE / "docs" / "notes.md").read_text(encoding="utf-8"), encoding="utf-8"
+        )
         self.assert_check_passes()
         (self.repo / "baseline.toml.orig").write_text("x\n", encoding="utf-8")
         self.assertIn("do not match the current tree", self.assert_check_refuses())
@@ -203,10 +209,21 @@ class BindingPathTests(unittest.TestCase):
         self.assertFalse(_same_tree(meta, self.state("other.toml"), [], "other.toml"))
         self.assertFalse(_same_tree(meta, self.state(None), [], None))
         # Not when the scan reported anything in the baseline file: it is then a scanned file like any other.
-        finding = Finding(tool="opengrep", rule="r", severity="ERROR", path="baseline.toml", line=1, fingerprint="f" * 16, component="", message="m")
+        finding = Finding(
+            tool="opengrep",
+            rule="r",
+            severity="ERROR",
+            path="baseline.toml",
+            line=1,
+            fingerprint="f" * 16,
+            component="",
+            message="m",
+        )
         self.assertFalse(_same_tree(meta, now, [finding], "baseline.toml"))
-        for where in ({"unscanned": {"skipped": [{"path": "baseline.toml"}], "errors": []}},
-                      {"suppression_list": [{"path": "baseline.toml"}]}):  # fmt: skip
+        for where in (
+            {"unscanned": {"skipped": [{"path": "baseline.toml"}], "errors": []}},
+            {"suppression_list": [{"path": "baseline.toml"}]},
+        ):
             self.assertFalse(_same_tree({**meta, **where}, now, [], "baseline.toml"))
         # Not when the scan was taken without the baseline left out (as under --policy-ref).
         strict = {k: v for k, v in meta["worktree"].items() if k != "without_baseline"}

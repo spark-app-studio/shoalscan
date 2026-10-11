@@ -59,20 +59,43 @@ DEFAULT_HOSTS = ("github.com", "gitlab.com", "bitbucket.org")
 # worktree get them too.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 GIT_HARDENED = (
-    ("core.hooksPath", "/dev/null"), ("core.fsmonitor", "false"), ("submodule.recurse", "false"),
-    ("protocol.file.allow", "never"), ("http.followRedirects", "false"), ("core.symlinks", "false"),
-    ("core.attributesFile", "/dev/null"), ("filter.lfs.smudge", ""), ("filter.lfs.process", ""), ("filter.lfs.required", "false"),
+    ("core.hooksPath", "/dev/null"),
+    ("core.fsmonitor", "false"),
+    ("submodule.recurse", "false"),
+    ("protocol.file.allow", "never"),
+    ("http.followRedirects", "false"),
+    ("core.symlinks", "false"),
+    ("core.attributesFile", "/dev/null"),
+    ("filter.lfs.smudge", ""),
+    ("filter.lfs.process", ""),
+    ("filter.lfs.required", "false"),
 )
 # For sources a browser named (https URLs): no transport but https, and no credential helpers.
 GIT_URL_ONLY = (("protocol.allow", "never"), ("protocol.https.allow", "always"), ("credential.helper", ""))
 # Fetching a clone registered by hand keeps the administrator's own git
 # configuration (it may hold credentials for a private origin), but never
 # runs hooks, submodules or LFS downloads.
-GIT_ADMIN_FETCH = (("core.hooksPath", "/dev/null"), ("core.fsmonitor", "false"), ("submodule.recurse", "false"),
-                   ("filter.lfs.smudge", ""), ("filter.lfs.process", ""), ("filter.lfs.required", "false"))
-GIT_NO_PROMPT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/bin/echo", "SSH_ASKPASS": "/bin/echo", "GIT_LFS_SKIP_SMUDGE": "1"}
-GIT_HARDENED_ENV = {**GIT_NO_PROMPT_ENV, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_ATTR_NOSYSTEM": "1",
-                    "GIT_ATTR_SOURCE": EMPTY_TREE}
+GIT_ADMIN_FETCH = (
+    ("core.hooksPath", "/dev/null"),
+    ("core.fsmonitor", "false"),
+    ("submodule.recurse", "false"),
+    ("filter.lfs.smudge", ""),
+    ("filter.lfs.process", ""),
+    ("filter.lfs.required", "false"),
+)
+GIT_NO_PROMPT_ENV = {
+    "GIT_TERMINAL_PROMPT": "0",
+    "GIT_ASKPASS": "/bin/echo",
+    "SSH_ASKPASS": "/bin/echo",
+    "GIT_LFS_SKIP_SMUDGE": "1",
+}
+GIT_HARDENED_ENV = {
+    **GIT_NO_PROMPT_ENV,
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_ATTR_NOSYSTEM": "1",
+    "GIT_ATTR_SOURCE": EMPTY_TREE,
+}
 
 
 GIT_TOO_OLD = "git 2.40 or later is required: it must honour GIT_ATTR_SOURCE"
@@ -109,14 +132,24 @@ def git_attr_probe(path_env: str | None = None) -> bool:
             ident = ["-c", "user.name=probe", "-c", "user.email=probe@localhost", "-c", "commit.gpgsign=false"]
 
             def run(*args: str) -> subprocess.CompletedProcess:
-                return subprocess.run([git, *git_args(GIT_HARDENED), *ident, *args], cwd=tmp, env=env, capture_output=True,
-                                      text=True, timeout=30, stdin=subprocess.DEVNULL, check=False)
+                return subprocess.run(
+                    [git, *git_args(GIT_HARDENED), *ident, *args],
+                    cwd=tmp,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    stdin=subprocess.DEVNULL,
+                    check=False,
+                )
 
             if run("init", "-q", str(repo)).returncode == 0:
                 (repo / ".gitattributes").write_text("probe filter=shoalscanprobe\n", encoding="utf-8")
                 (repo / "probe").write_text("probe\n", encoding="utf-8")
-                if run("-C", str(repo), "add", ".gitattributes", "probe").returncode == 0 and \
-                        run("-C", str(repo), "commit", "-q", "-m", "probe").returncode == 0:
+                if (
+                    run("-C", str(repo), "add", ".gitattributes", "probe").returncode == 0
+                    and run("-C", str(repo), "commit", "-q", "-m", "probe").returncode == 0
+                ):
                     answer = run("-C", str(repo), "check-attr", "filter", "probe")
                     ok = answer.returncode == 0 and answer.stdout.strip() == "probe: filter: unspecified"
     except (OSError, subprocess.SubprocessError):
@@ -139,6 +172,7 @@ def git_env(base: dict, pairs, hardened: bool = True) -> dict:
         env[f"GIT_CONFIG_KEY_{n}"] = key
         env[f"GIT_CONFIG_VALUE_{n}"] = value
     return env
+
 
 # A target name is a repository name on the dashboard. It must also not look
 # like a path or an option anywhere it is used.
@@ -228,7 +262,9 @@ class Targets:
 
 def validate_name(value: object) -> str:
     if not valid_name(value):
-        raise SetupError("the name must look like owner/project: letters, digits and . _ / @ : + -, up to 200 characters")
+        raise SetupError(
+            "the name must look like owner/project: letters, digits and . _ / @ : + -, up to 200 characters"
+        )
     return value
 
 
@@ -266,8 +302,14 @@ def validate_branch(value: object) -> str:
     if not value.isascii() or any(c <= " " or c == "\x7f" for c in value) or any(c in value for c in "~^:?*[\\@{"):
         raise SetupError("the branch name has a character git does not allow")
     try:
-        proc = subprocess.run(["git", "check-ref-format", "--branch", value], capture_output=True, text=True, timeout=10,
-                              stdin=subprocess.DEVNULL, check=False)
+        proc = subprocess.run(
+            ["git", "check-ref-format", "--branch", value],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
     except (OSError, subprocess.TimeoutExpired):
         raise SetupError("git is not available to check the branch name") from None
     if proc.returncode != 0 or proc.stdout.strip() != value:
@@ -286,7 +328,10 @@ def validate_policy(text: object) -> str:
     except tomllib.TOMLDecodeError as exc:
         raise SetupError(f"the policy is not valid TOML: {exc}") from None
     if "baseline" in data:
-        raise SetupError("the policy may not set baseline: the dashboard manages the baseline's path, and baselines change only from the command line")
+        raise SetupError(
+            "the policy may not set baseline: the dashboard manages the baseline's path, and baselines change only "
+            "from the command line"
+        )
     config_from_bytes(text.encode("utf-8"), "the policy")
     return text
 
@@ -301,7 +346,12 @@ def validate_scanners(value: object) -> tuple[str, ...] | None:
     """None (the policy decides), or a non-empty choice of known scanners, in their usual order."""
     if value is None:
         return None
-    if not isinstance(value, list) or not value or not all(isinstance(v, str) for v in value) or len(set(value)) != len(value):
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(v, str) for v in value)
+        or len(set(value)) != len(value)
+    ):
         raise SetupError("choose at least one scanner, each once")
     unknown = sorted(set(value) - set(KNOWN_SCANNERS))
     if unknown:
@@ -402,8 +452,12 @@ def load_hosts(state_dir: Path) -> tuple[str, ...]:
         return DEFAULT_HOSTS
     data = _read_toml(path)
     hosts = data.get("hosts")
-    if set(data) != {"hosts"} or not isinstance(hosts, list) or not all(isinstance(h, str) and _HOST.fullmatch(h) for h in hosts):
-        raise SetupError(f"{HOSTS_FILE}: write hosts = [\"github.com\", ...] with plain lowercase host names")
+    if (
+        set(data) != {"hosts"}
+        or not isinstance(hosts, list)
+        or not all(isinstance(h, str) and _HOST.fullmatch(h) for h in hosts)
+    ):
+        raise SetupError(f'{HOSTS_FILE}: write hosts = ["github.com", ...] with plain lowercase host names')
     return tuple(hosts)
 
 
@@ -416,7 +470,16 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
     if not path.exists():
         return Targets({}, mirrors=mirrors, allowed_hosts=hosts, state_dir=state_dir) if allow_missing else None
     data = _read_toml(path)
-    top = {"target", "history_db", "tools_dir", "cooldown_minutes", "timeout_minutes", "max_scans_per_hour", "min_free_mb", "max_clone_mb"}
+    top = {
+        "target",
+        "history_db",
+        "tools_dir",
+        "cooldown_minutes",
+        "timeout_minutes",
+        "max_scans_per_hour",
+        "min_free_mb",
+        "max_clone_mb",
+    }
     unknown = set(data) - top
     if unknown:
         raise SetupError(f"{TARGETS_FILE}: unknown keys: {', '.join(sorted(unknown))}")
@@ -424,7 +487,19 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
     if not isinstance(entries, list) or len(entries) > MAX_TARGETS:
         raise SetupError(f"{TARGETS_FILE}: list up to {MAX_TARGETS} [[target]] tables")
     targets: dict[str, Target] = {}
-    allowed = {"name", "branch", "source", "mirror", "clone", "enabled", "nightly", "config", "baseline", "python", "max_clone_mb"}
+    allowed = {
+        "name",
+        "branch",
+        "source",
+        "mirror",
+        "clone",
+        "enabled",
+        "nightly",
+        "config",
+        "baseline",
+        "python",
+        "max_clone_mb",
+    }
     for n, entry in enumerate(entries, 1):
         where = f"target {n}"
         if not isinstance(entry, dict):
@@ -450,7 +525,9 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
                 raise SetupError(f"{TARGETS_FILE}: {name}: {exc}") from None
         elif "mirror" in entry:
             if entry["mirror"] not in mirrors:
-                raise SetupError(f"{TARGETS_FILE}: {name} names the mirror {entry['mirror']!r}, which {SOURCES_FILE} does not list")
+                raise SetupError(
+                    f"{TARGETS_FILE}: {name} names the mirror {entry['mirror']!r}, which {SOURCES_FILE} does not list"
+                )
             fields = {"kind": "mirror", "mirror": entry["mirror"]}
         else:
             fields = {"kind": "clone", "clone": _abs_path(entry["clone"], f"{name} clone")}
@@ -465,8 +542,11 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
         if "max_clone_mb" in entry:
             fields["max_clone_mb"] = _int(entry["max_clone_mb"], f"{name} max_clone_mb", 1, 10_000_000)
         targets[name] = Target(
-            name=name, branch=branch, enabled=_bool(entry.get("enabled", True), f"{name} enabled"),
-            nightly=_bool(entry.get("nightly", False), f"{name} nightly"), **fields,
+            name=name,
+            branch=branch,
+            enabled=_bool(entry.get("enabled", True), f"{name} enabled"),
+            nightly=_bool(entry.get("nightly", False), f"{name} nightly"),
+            **fields,
         )
     return Targets(
         targets=targets,
@@ -493,7 +573,11 @@ def _toml_string(value: str) -> str:
 
 def dump_targets(t: Targets, raw_top: dict) -> str:
     """Write the file back: the top-level settings as they were, then every target."""
-    lines = ["# Scan targets for the Shoalscan dashboard. The Configuration page edits this file;", "# clone, config, baseline and python can only be set here by hand.", ""]
+    lines = [
+        "# Scan targets for the Shoalscan dashboard. The Configuration page edits this file;",
+        "# clone, config, baseline and python can only be set here by hand.",
+        "",
+    ]
     for key in ("history_db", "tools_dir"):
         if key in raw_top:
             lines.append(f"{key} = {_toml_string(str(raw_top[key]))}")
@@ -609,8 +693,15 @@ def process_start(pid: int) -> str | None:
     except PermissionError:
         pass
     try:
-        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10,
-                             stdin=subprocess.DEVNULL, env={"PATH": "/bin:/usr/bin", "LC_ALL": "C"}, check=False)
+        out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            stdin=subprocess.DEVNULL,
+            env={"PATH": "/bin:/usr/bin", "LC_ALL": "C"},
+            check=False,
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     return out.stdout.strip() or None

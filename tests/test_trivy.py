@@ -1,4 +1,7 @@
-"""Trivy: its signed pin, a hardened command line, a fail-closed run, findings, and its inline markers held to Shoalscan's rule."""
+"""Trivy: its signed pin, a hardened command line, a fail-closed run, and findings.
+
+Its inline markers are held to Shoalscan's suppression rule.
+"""
 
 import contextlib
 import copy
@@ -12,8 +15,9 @@ import unittest
 from pathlib import Path
 
 import helpers
-
 from history_fixtures import record
+from test_lock_and_install import PLAT, Assets, sha, tool_tarball
+
 from shoalscan import history, trivy
 from shoalscan import install as inst
 from shoalscan.cli import main
@@ -22,7 +26,6 @@ from shoalscan.errors import ScanError, SetupError, VerificationError
 from shoalscan.findings import Finding
 from shoalscan.lockfile import load_lock, parse_lock, sha256_file
 from shoalscan.suppressions import TRIVY_MARKER, lint_findings, parse_trivy_line
-from test_lock_and_install import PLAT, Assets, sha, tool_tarball
 
 LOCK_PATH = helpers.ROOT / "tools.lock"
 TOOLS = helpers.tools_dir()
@@ -68,26 +71,48 @@ def trivy_ready() -> bool:
 
 
 def misconfig(check, severity, start=1, resource="aws_s3_bucket.logs", content="bucket = 1", status="FAIL"):
-    return {"ID": check, "Title": f"{check} title", "Message": f"{check} message", "Resolution": "Fix it.", "Severity": severity,
-            "Status": status, "PrimaryURL": f"https://avd.aquasec.com/misconfig/{check.lower()}", "References": ["javascript:alert(1)"],
-            "CauseMetadata": {"Resource": resource, "StartLine": start, "EndLine": start,
-                              "Code": {"Lines": [{"Number": start, "Content": content, "IsCause": True}, {"Content": "other", "IsCause": False}]}}}  # fmt: skip
+    return {
+        "ID": check,
+        "Title": f"{check} title",
+        "Message": f"{check} message",
+        "Resolution": "Fix it.",
+        "Severity": severity,
+        "Status": status,
+        "PrimaryURL": f"https://avd.aquasec.com/misconfig/{check.lower()}",
+        "References": ["javascript:alert(1)"],
+        "CauseMetadata": {
+            "Resource": resource,
+            "StartLine": start,
+            "EndLine": start,
+            "Code": {
+                "Lines": [
+                    {"Number": start, "Content": content, "IsCause": True},
+                    {"Content": "other", "IsCause": False},
+                ]
+            },
+        },
+    }
 
 
 class PinTests(unittest.TestCase):
     def test_shipped_lock_pins_a_signed_trivy(self):
         tool = load_lock(LOCK_PATH).tools["trivy"]
         self.assertEqual((tool.version, tool.license, tool.member), ("0.74.0", "Apache-2.0", "trivy"))
-        self.assertEqual(tool.signature.certificate_identity,
-                         "https://github.com/aquasecurity/trivy/.github/workflows/reusable-release.yaml@refs/tags/v0.74.0")  # fmt: skip
+        self.assertEqual(
+            tool.signature.certificate_identity,
+            "https://github.com/aquasecurity/trivy/.github/workflows/reusable-release.yaml@refs/tags/v0.74.0",
+        )
         self.assertEqual(tool.signature.github_workflow_sha, "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994")
         for pin in tool.platforms.values():
             self.assertTrue(pin.bundle.url.endswith(".tar.gz.sigstore.json"))
 
     def test_a_signed_tool_needs_a_bundle_per_platform(self):
         base = tomllib.loads(LOCK_PATH.read_text(encoding="utf-8"))
-        for mutate in (lambda t: t["platforms"][PLAT].pop("bundle_url"), lambda t: t["signature"].pop("github_workflow_sha"),
-                       lambda t: t["signature"].__setitem__("github_workflow_sha", "main")):  # fmt: skip
+        for mutate in (
+            lambda t: t["platforms"][PLAT].pop("bundle_url"),
+            lambda t: t["signature"].pop("github_workflow_sha"),
+            lambda t: t["signature"].__setitem__("github_workflow_sha", "main"),
+        ):
             data = copy.deepcopy(base)
             mutate(data["trivy"])
             with self.subTest(mutate=mutate), self.assertRaises(SetupError):
@@ -109,7 +134,11 @@ class InstallTests(unittest.TestCase):
         data = tomllib.loads(LOCK_PATH.read_text(encoding="utf-8"))
         entry = data["trivy"]["platforms"][PLAT]
         self.archive = tool_tarball({"trivy": b"trivy-binary", "README.md": b"x"})
-        entry["sha256"], entry["binary_sha256"], entry["bundle_sha256"] = sha(self.archive), sha(b"trivy-binary"), sha(b"bundle")
+        entry["sha256"], entry["binary_sha256"], entry["bundle_sha256"] = (
+            sha(self.archive),
+            sha(b"trivy-binary"),
+            sha(b"bundle"),
+        )
         self.tool = parse_lock(data).tools["trivy"]
         self.assets = Assets()
         self.assets.files.update({entry["url"]: self.archive, entry["bundle_url"]: b"bundle"})
@@ -124,7 +153,9 @@ class InstallTests(unittest.TestCase):
 
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            inst.install_pinned_tool(self.tools, self.tool, PLAT, self.assets.fetch, self.work, cosign, verify or accept)
+            inst.install_pinned_tool(
+                self.tools, self.tool, PLAT, self.assets.fetch, self.work, cosign, verify or accept
+            )
         return err.getvalue()
 
     def test_the_signature_is_checked_before_anything_is_extracted(self):
@@ -149,7 +180,9 @@ class InstallTests(unittest.TestCase):
 
 class ConfigTests(unittest.TestCase):
     def test_ignore_takes_check_ids(self):
-        self.assertEqual(parse_config({"trivy": {"ignore": ["KSV-0011", "AWS-0089"]}}).trivy.ignore, ("AWS-0089", "KSV-0011"))
+        self.assertEqual(
+            parse_config({"trivy": {"ignore": ["KSV-0011", "AWS-0089"]}}).trivy.ignore, ("AWS-0089", "KSV-0011")
+        )
         for bad in (["ksv-0011"], ["*"], ["AWS"], "AWS-0089"):
             with self.subTest(bad=bad), self.assertRaises(SetupError):
                 parse_config({"trivy": {"ignore": bad}})
@@ -159,8 +192,16 @@ class CommandTests(unittest.TestCase):
     def test_nothing_from_the_repository_or_the_machine_is_read(self):
         cmd = trivy.build_command(Path("/t/trivy"), Path("/repo"), Path("/s/trivy"))
         joined = " ".join(cmd)
-        for part in ("--cache-dir /s/trivy/cache", "--skip-check-update", "--skip-version-check", "--disable-telemetry",
-                     "--config /s/trivy/trivy.yaml", "--ignorefile /s/trivy/trivyignore", "--module-dir /s/trivy/modules", "--exit-code 0"):  # fmt: skip
+        for part in (
+            "--cache-dir /s/trivy/cache",
+            "--skip-check-update",
+            "--skip-version-check",
+            "--disable-telemetry",
+            "--config /s/trivy/trivy.yaml",
+            "--ignorefile /s/trivy/trivyignore",
+            "--module-dir /s/trivy/modules",
+            "--exit-code 0",
+        ):
             self.assertIn(part, joined)
         self.assertEqual(cmd[-1], "/repo")
 
@@ -197,24 +238,50 @@ class NormaliseTests(unittest.TestCase):
         return trivy.normalise({"Results": results}, self.root, {"infra/": "infra"}, ("vendor",), ignore)
 
     def test_severities_ignores_and_excludes(self):
-        found, meta = self.normalise([
-            {"Target": "infra", "Misconfigurations": []},
-            {"Target": "infra/main.tf", "Misconfigurations": [misconfig("AWS-0087", "HIGH", 6), misconfig("AWS-0090", "MEDIUM"),
-                                                               misconfig("AWS-0089", "LOW"), misconfig("AWS-0001", "CRITICAL"),
-                                                               misconfig("AWS-0002", "UNKNOWN"), misconfig("AWS-0003", "HIGH", status="PASS")]},
-            {"Target": "vendor/x.tf", "Misconfigurations": [misconfig("AWS-0087", "HIGH")]},
-        ], ignore=("AWS-0090",))  # fmt: skip
-        self.assertEqual([(f.rule, f.severity, f.line, f.component) for f in found], [
-            ("trivy.AWS-0087", "ERROR", 6, "infra"), ("trivy.AWS-0089", "INFO", 1, "infra"),
-            ("trivy.AWS-0001", "ERROR", 1, "infra"), ("trivy.AWS-0002", "INFO", 1, "infra")])  # fmt: skip
+        found, meta = self.normalise(
+            [
+                {"Target": "infra", "Misconfigurations": []},
+                {
+                    "Target": "infra/main.tf",
+                    "Misconfigurations": [
+                        misconfig("AWS-0087", "HIGH", 6),
+                        misconfig("AWS-0090", "MEDIUM"),
+                        misconfig("AWS-0089", "LOW"),
+                        misconfig("AWS-0001", "CRITICAL"),
+                        misconfig("AWS-0002", "UNKNOWN"),
+                        misconfig("AWS-0003", "HIGH", status="PASS"),
+                    ],
+                },
+                {"Target": "vendor/x.tf", "Misconfigurations": [misconfig("AWS-0087", "HIGH")]},
+            ],
+            ignore=("AWS-0090",),
+        )
+        self.assertEqual(
+            [(f.rule, f.severity, f.line, f.component) for f in found],
+            [
+                ("trivy.AWS-0087", "ERROR", 6, "infra"),
+                ("trivy.AWS-0089", "INFO", 1, "infra"),
+                ("trivy.AWS-0001", "ERROR", 1, "infra"),
+                ("trivy.AWS-0002", "INFO", 1, "infra"),
+            ],
+        )
         self.assertEqual(found[0].message, "AWS-0087 title: AWS-0087 message")
         self.assertEqual(meta["trivy.AWS-0087"]["references"], ["https://avd.aquasec.com/misconfig/aws-0087"])
         self.assertEqual(meta["trivy.AWS-0087"]["fix"], "Fix it.")
 
     def test_fingerprints_follow_the_resource_and_its_code(self):
         a = self.normalise([{"Target": "infra/main.tf", "Misconfigurations": [misconfig("AWS-0087", "HIGH", 6)]}])[0][0]
-        b = self.normalise([{"Target": "infra/main.tf", "Misconfigurations": [misconfig("AWS-0087", "HIGH", 30)]}])[0][0]
-        c = self.normalise([{"Target": "infra/main.tf", "Misconfigurations": [misconfig("AWS-0087", "HIGH", 6, resource="aws_s3_bucket.other")]}])[0][0]
+        b = self.normalise([{"Target": "infra/main.tf", "Misconfigurations": [misconfig("AWS-0087", "HIGH", 30)]}])[0][
+            0
+        ]
+        c = self.normalise(
+            [
+                {
+                    "Target": "infra/main.tf",
+                    "Misconfigurations": [misconfig("AWS-0087", "HIGH", 6, resource="aws_s3_bucket.other")],
+                }
+            ]
+        )[0][0]
         self.assertEqual(a.fingerprint, b.fingerprint)
         self.assertNotEqual(a.fingerprint, c.fingerprint)
 
@@ -228,18 +295,26 @@ class NormaliseTests(unittest.TestCase):
 
     def test_parse_errors_come_from_the_log(self):
         (self.root / "infra" / "broken.tf").write_text("resource {")
-        log = ('2026-10-11T14:32:12-05:00\tERROR\t[terraform parser] Error parsing file\tmodule="root" file_path="infra/broken.tf" err="x"\n'
-               '2026-10-11T14:32:12-05:00\tERROR\t[terraform parser] Error parsing file\tfile_path="vendor/x.tf"\n'
-               '2026-10-11T14:32:12-05:00\tERROR\t[terraform parser] Error parsing file\tfile_path="../../etc/passwd"\n'
-               '2026-10-11T14:32:12-05:00\tERROR\t[misconfig] Falling back to embedded checks\terr="no cache"\n')  # fmt: skip
-        self.assertEqual(trivy.parse_errors(log, self.root, ("vendor",)), [{"path": "infra/broken.tf", "type": "trivy parse error"}])
+        log = (
+            '2026-10-11T14:32:12-05:00\tERROR\t[terraform parser] Error parsing file\tmodule="root" '
+            'file_path="infra/broken.tf" err="x"\n'
+            '2026-10-11T14:32:12-05:00\tERROR\t[terraform parser] Error parsing file\tfile_path="vendor/x.tf"\n'
+            '2026-10-11T14:32:12-05:00\tERROR\t[terraform parser] Error parsing file\tfile_path="../../etc/passwd"\n'
+            '2026-10-11T14:32:12-05:00\tERROR\t[misconfig] Falling back to embedded checks\terr="no '
+            'cache"\n'
+        )
+        self.assertEqual(
+            trivy.parse_errors(log, self.root, ("vendor",)), [{"path": "infra/broken.tf", "type": "trivy parse error"}]
+        )
 
 
 class MarkerTests(unittest.TestCase):
     def test_markers_need_one_check_and_an_issue(self):
         self.assertEqual(parse_trivy_line(f"{MARK}AVD-AWS-0086 #42 accepted"), [(("AVD-AWS-0086",), "#42", False)])
-        self.assertEqual(parse_trivy_line(f'x = 1 // {TRIVY_MARKER}aws-s3-x:exp:2026-01-01 https://example.com/i/3'),
-                         [(("aws-s3-x",), "https://example.com/i/3", False)])  # fmt: skip
+        self.assertEqual(
+            parse_trivy_line(f"x = 1 // {TRIVY_MARKER}aws-s3-x:exp:2026-01-01 https://example.com/i/3"),
+            [(("aws-s3-x",), "https://example.com/i/3", False)],
+        )
         self.assertEqual(parse_trivy_line(f"{MARK}* #3"), [((), None, True)])
         self.assertEqual(parse_trivy_line("nothing here"), [])
 
@@ -275,23 +350,53 @@ class HistoryTests(unittest.TestCase):
             try:
                 found = Finding("trivy", "trivy.KSV-0017", "ERROR", "k8s/pod.yaml", 7, "tt:0", "k8s", "Privileged.")
                 record(conn, tmp, "acme/app", "1" * 40, 1, [found])
-                history.set_reviews(db, "acme/app", [[found.tool, found.rule, found.path, found.fingerprint]], "fixed", "Dropped privileged.", "me")
+                history.set_reviews(
+                    db,
+                    "acme/app",
+                    [[found.tool, found.rule, found.path, found.fingerprint]],
+                    "fixed",
+                    "Dropped privileged.",
+                    "me",
+                )
                 clean = {"skipped": [], "errors": []}
                 status = lambda: conn.execute("SELECT status FROM finding_reviews").fetchone()[0]  # noqa: E731
-                record(conn, tmp, "acme/app", "2" * 40, 2, [], extra_meta={"unscanned": clean, "scanners": {"trivy": {"ignore": ["KSV-0017"]}}})
+                record(
+                    conn,
+                    tmp,
+                    "acme/app",
+                    "2" * 40,
+                    2,
+                    [],
+                    extra_meta={"unscanned": clean, "scanners": {"trivy": {"ignore": ["KSV-0017"]}}},
+                )
                 self.assertEqual(status(), "fixed")
-                record(conn, tmp, "acme/app", "3" * 40, 3, [], extra_meta={"unscanned": clean, "scanners": {"trivy": {"ignore": []}}})
+                record(
+                    conn,
+                    tmp,
+                    "acme/app",
+                    "3" * 40,
+                    3,
+                    [],
+                    extra_meta={"unscanned": clean, "scanners": {"trivy": {"ignore": []}}},
+                )
                 self.assertEqual(status(), "verified_fixed")
             finally:
                 conn.close()
 
 
 def git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args],
-                   cwd=repo, check=True, capture_output=True, timeout=60)  # fmt: skip
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
 
 
-@unittest.skipUnless(shutil.which("git") and trivy_ready(), f"trivy is not installed in {TOOLS}; run `shoalscan install`")
+@unittest.skipUnless(
+    shutil.which("git") and trivy_ready(), f"trivy is not installed in {TOOLS}; run `shoalscan install`"
+)
 class EndToEndTests(unittest.TestCase):
     def test_a_hostile_repository_cannot_hide_its_misconfigurations(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -303,7 +408,9 @@ class EndToEndTests(unittest.TestCase):
             (repo / "k8s" / "pod.yaml").write_text(POD)
             (repo / ".trivyignore").write_text("KSV-0017\nAVD-KSV-0017\n")
             (repo / "trivy.yaml").write_text("misconfiguration:\n  scanners: [dockerfile]\n")
-            (repo / ".shoalscan.toml").write_text('scanners = ["trivy"]\n[opengrep]\ncommunity_rules = false\n[trivy]\nignore = ["KSV-0011"]\n')
+            (repo / ".shoalscan.toml").write_text(
+                'scanners = ["trivy"]\n[opengrep]\ncommunity_rules = false\n[trivy]\nignore = ["KSV-0011"]\n'
+            )
             git(repo, "init", "-q", "-b", "main")
             git(repo, "add", "-A")
             git(repo, "commit", "-q", "-m", "x")
@@ -313,7 +420,9 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(code, 0, err.getvalue())
             doc = json.loads((out / "findings.json").read_text())
             rules = {f["rule"] for f in doc["findings"]}
-            self.assertTrue({"trivy.KSV-0017", "trivy.AWS-0087", "shoalscan.suppression-without-rule-and-issue"} <= rules, rules)
+            self.assertTrue(
+                {"trivy.KSV-0017", "trivy.AWS-0087", "shoalscan.suppression-without-rule-and-issue"} <= rules, rules
+            )
             self.assertNotIn("trivy.KSV-0011", rules)
             self.assertEqual(doc["unscanned"]["errors"], [{"path": "infra/broken.tf", "type": "trivy parse error"}])
             self.assertEqual(doc["suppressions"], {"total": 2, "invalid": 1, "suppressed_findings": 2})

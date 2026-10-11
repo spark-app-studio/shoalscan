@@ -79,8 +79,11 @@ class Suppression:
 
     @property
     def valid(self) -> bool:
-        return not self.bare and bool(self.rule_ids) and all(_VALID_ID.match(i) for i in self.rule_ids) and (
-            self.issue is not None
+        return (
+            not self.bare
+            and bool(self.rule_ids)
+            and all(_VALID_ID.match(i) for i in self.rule_ids)
+            and (self.issue is not None)
         )
 
     def problem(self) -> str:

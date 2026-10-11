@@ -4,8 +4,8 @@ from pathlib import Path
 
 import helpers  # noqa: F401
 
-from shoalscan.excludes import ExcludeMatcher
 from shoalscan.errors import SetupError
+from shoalscan.excludes import ExcludeMatcher
 from shoalscan.suppressions import LINT_RULE, Suppression, find_suppressions, lint_findings, parse_line
 
 # Spelled in pieces: Opengrep treats any line that contains a marker as a
@@ -23,7 +23,7 @@ class ParseLineTests(unittest.TestCase):
             f"# {NOG}: rule-x #7": (("rule-x",), "#7"),
             f"# {NS.upper()}:rule-x #7": (("rule-x",), "#7"),
             f"# {NS}=rule-x #7": (("rule-x",), "#7"),
-            f'<div data-x="{NS}: \"rule-x\" #7">': (("rule-x",), "#7"),
+            f'<div data-x="{NS}: "rule-x" #7">': (("rule-x",), "#7"),
         }
         for line, (ids, issue) in cases.items():
             with self.subTest(line=line):
@@ -61,11 +61,16 @@ class ParseLineTests(unittest.TestCase):
 
     def test_unicode_case_folding_as_in_opengrep(self):
         long_s = NS.replace("s", "\u017f")
-        for line in (f"x = 1  # {long_s}", f"x = 1  # {long_s.upper()}", f"x = 1  # {NSEM.replace('s', chr(0x17F))}", f"\u017f{NS}"):
+        for line in (
+            f"x = 1  # {long_s}",
+            f"x = 1  # {long_s.upper()}",
+            f"x = 1  # {NSEM.replace('s', chr(0x17F))}",
+            f"\u017f{NS}",
+        ):
             with self.subTest(line=line):
                 self.assertEqual([p[2] for p in parse_line(line)], [True])
         # A no-break space is not whitespace for Opengrep: the id is not read.
-        (ids, _, bare), = parse_line(f"# {NS}:\u00a0x.y #1")
+        ((ids, _, bare),) = parse_line(f"# {NS}:\u00a0x.y #1")
         self.assertFalse(bare)
         self.assertFalse(Suppression("p", 1, "", ids, "#1", False).valid)
 
@@ -100,7 +105,12 @@ class FindSuppressionsTests(unittest.TestCase):
             found = find_suppressions(root, ["src/a.py", "README.md"], 1_000_000)
             self.assertEqual(
                 [(s.path, s.line, s.valid, s.bare) for s in found],
-                [("README.md", 1, False, True), ("src/a.py", 1, True, False), ("src/a.py", 2, False, True), ("src/a.py", 3, False, False)],
+                [
+                    ("README.md", 1, False, True),
+                    ("src/a.py", 1, True, False),
+                    ("src/a.py", 2, False, True),
+                    ("src/a.py", 3, False, False),
+                ],
             )
             findings = lint_findings(found, {"src": "app"})
             self.assertEqual(len(findings), 3)

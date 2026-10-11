@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 
 import helpers
-
 from history_fixtures import record
+
 from shoalscan import history, zizmor
 from shoalscan import install as inst
 from shoalscan.cli import main
@@ -43,16 +43,36 @@ def zizmor_ready() -> bool:
         return False
 
 
-def result(root: Path, ident: str, severity: str, row: int, path: str = ".github/workflows/ci.yml", route=None, feature="run: x"):
+def result(
+    root: Path,
+    ident: str,
+    severity: str,
+    row: int,
+    path: str = ".github/workflows/ci.yml",
+    route=None,
+    feature="run: x",
+):
     return {
-        "ident": ident, "desc": f"{ident} description", "url": f"https://docs.zizmor.sh/audits/#{ident}",
+        "ident": ident,
+        "desc": f"{ident} description",
+        "url": f"https://docs.zizmor.sh/audits/#{ident}",
         "determinations": {"confidence": "High", "severity": severity, "persona": "Regular"},
-        "locations": [{"symbolic": {"key": {"Local": {"verbatim_path": str(root / path)}}, "annotation": "here",
-                                    "route": {"route": route or [{"Key": "jobs"}, {"Key": "build"}, {"Key": "steps"}, {"Index": 1}, {"Key": "run"}]},
-                                    "kind": "Primary"},
-                       "concrete": {"location": {"start_point": {"row": row, "column": 4}}, "feature": feature}}],
+        "locations": [
+            {
+                "symbolic": {
+                    "key": {"Local": {"verbatim_path": str(root / path)}},
+                    "annotation": "here",
+                    "route": {
+                        "route": route
+                        or [{"Key": "jobs"}, {"Key": "build"}, {"Key": "steps"}, {"Index": 1}, {"Key": "run"}]
+                    },
+                    "kind": "Primary",
+                },
+                "concrete": {"location": {"start_point": {"row": row, "column": 4}}, "feature": feature},
+            }
+        ],
         "ignored": False,
-    }  # fmt: skip
+    }
 
 
 class PinAndConfigTests(unittest.TestCase):
@@ -62,7 +82,10 @@ class PinAndConfigTests(unittest.TestCase):
         self.assertEqual(len(tool.platforms), 4)
 
     def test_ignore_takes_audit_names(self):
-        self.assertEqual(parse_config({"zizmor": {"ignore": ["unpinned-uses", "artipacked"]}}).zizmor.ignore, ("artipacked", "unpinned-uses"))
+        self.assertEqual(
+            parse_config({"zizmor": {"ignore": ["unpinned-uses", "artipacked"]}}).zizmor.ignore,
+            ("artipacked", "unpinned-uses"),
+        )
         for bad in (["Artipacked"], ["*"], ["a b"], "artipacked"):
             with self.subTest(bad=bad), self.assertRaises(SetupError):
                 parse_config({"zizmor": {"ignore": bad}})
@@ -72,17 +95,35 @@ class DiscoverTests(unittest.TestCase):
     def test_finds_workflows_actions_and_dependabot(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for rel in (".github/workflows/ci.yml", ".github/workflows/release.yaml", ".github/workflows/sub/x.yml",
-                        ".github/workflows/notes.md", ".github/dependabot.yml", ".github/zizmor.yml", "actions/setup/action.yml",
-                        "action.yaml", "vendor/action.yml", ".git/action.yml", "ci.yml"):  # fmt: skip
+            for rel in (
+                ".github/workflows/ci.yml",
+                ".github/workflows/release.yaml",
+                ".github/workflows/sub/x.yml",
+                ".github/workflows/notes.md",
+                ".github/dependabot.yml",
+                ".github/zizmor.yml",
+                "actions/setup/action.yml",
+                "action.yaml",
+                "vendor/action.yml",
+                ".git/action.yml",
+                "ci.yml",
+            ):
                 (root / rel).parent.mkdir(parents=True, exist_ok=True)
                 (root / rel).write_text("name: x\n")
             (root / "big").mkdir()
             (root / "big" / "action.yml").write_text("x" * 2000)
             os.symlink(root / "action.yaml", root / "actions" / "action.yaml")
             found, skipped = zizmor.discover(root, ("vendor",), 1000)
-        self.assertEqual(sorted(found), [".github/dependabot.yml", ".github/workflows/ci.yml", ".github/workflows/release.yaml",
-                                 "action.yaml", "actions/setup/action.yml"])  # fmt: skip
+        self.assertEqual(
+            sorted(found),
+            [
+                ".github/dependabot.yml",
+                ".github/workflows/ci.yml",
+                ".github/workflows/release.yaml",
+                "action.yaml",
+                "actions/setup/action.yml",
+            ],
+        )
         self.assertEqual(skipped, [{"path": "big/action.yml", "reason": "exceeded_size_limit"}])
 
 
@@ -108,8 +149,10 @@ class RunTests(unittest.TestCase):
         self.stage.mkdir()
         self.binary = Path(self.tmp.name) / "zizmor"
         out = json.dumps([result(self.root, "template-injection", "High", 7)])
-        self.binary.write_text("#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in *broken.yml) echo \"failed to load $a\" >&2; exit 1;; esac; done\n"
-                               f"case \"$*\" in *ci.yml*) echo '{out}';; *) echo '[]';; esac\n")  # fmt: skip
+        self.binary.write_text(
+            '#!/bin/sh\nfor a in "$@"; do case "$a" in *broken.yml) echo "failed to load $a" >&2; exit 1;; esac; done\n'
+            f"case \"$*\" in *ci.yml*) echo '{out}';; *) echo '[]';; esac\n"
+        )
         self.binary.chmod(0o755)
 
     def tearDown(self):
@@ -125,11 +168,16 @@ class RunTests(unittest.TestCase):
         self.assertEqual(audited, 1)
         self.assertEqual([e["path"] for e in unscanned["errors"]], [".github/workflows/broken.yml"])
         self.assertNotIn(str(self.root), unscanned["errors"][0]["message"])
-        self.assertEqual(rules["zizmor.template-injection"]["references"], ["https://docs.zizmor.sh/audits/#template-injection"])
+        self.assertEqual(
+            rules["zizmor.template-injection"]["references"], ["https://docs.zizmor.sh/audits/#template-injection"]
+        )
 
     def test_a_failure_no_single_file_explains_fails_the_scan(self):
         flaky = Path(self.tmp.name) / "flaky"
-        flaky.write_text("#!/bin/sh\nn=0\nfor a in \"$@\"; do case \"$a\" in *.yml) n=$((n+1));; esac; done\n[ $n -gt 1 ] && exit 1\necho '[]'\n")
+        flaky.write_text(
+            '#!/bin/sh\nn=0\nfor a in "$@"; do case "$a" in *.yml) n=$((n+1));; esac; done\n[ $n -gt 1 ] && exit '
+            "1\necho '[]'\n"
+        )
         flaky.chmod(0o755)
         (self.root / ".github" / "workflows" / "broken.yml").unlink()
         (self.root / ".github" / "workflows" / "other.yml").write_text(WORKFLOW)
@@ -155,12 +203,23 @@ class NormaliseTests(unittest.TestCase):
         return zizmor.normalise(results, self.root, self.scanned, {".github/": "ci"}, ignore)
 
     def test_severities_lines_and_ignores(self):
-        found = self.normalise([result(self.root, "template-injection", "High", 7), result(self.root, "artipacked", "Medium", 6),
-                                result(self.root, "unpinned-images", "Low", 3), result(self.root, "excessive-permissions", "Informational", 1)],
-                               ignore=("artipacked",))  # fmt: skip
-        self.assertEqual([(f.rule, f.severity, f.line, f.component) for f in found], [
-            ("zizmor.template-injection", "ERROR", 8, "ci"), ("zizmor.unpinned-images", "INFO", 4, "ci"),
-            ("zizmor.excessive-permissions", "INFO", 2, "ci")])  # fmt: skip
+        found = self.normalise(
+            [
+                result(self.root, "template-injection", "High", 7),
+                result(self.root, "artipacked", "Medium", 6),
+                result(self.root, "unpinned-images", "Low", 3),
+                result(self.root, "excessive-permissions", "Informational", 1),
+            ],
+            ignore=("artipacked",),
+        )
+        self.assertEqual(
+            [(f.rule, f.severity, f.line, f.component) for f in found],
+            [
+                ("zizmor.template-injection", "ERROR", 8, "ci"),
+                ("zizmor.unpinned-images", "INFO", 4, "ci"),
+                ("zizmor.excessive-permissions", "INFO", 2, "ci"),
+            ],
+        )
         self.assertEqual(found[0].message, "template-injection description: here")
 
     def test_fingerprints_ignore_step_indexes_and_line_shifts(self):
@@ -173,8 +232,14 @@ class NormaliseTests(unittest.TestCase):
 
     def test_malformed_output_fails(self):
         good = result(self.root, "artipacked", "Medium", 1)
-        bad = [["x"], [{**good, "ident": "Bad Ident"}], [{**good, "determinations": {"severity": "Critical"}}], [{**good, "locations": []}],
-               [result(self.root, "artipacked", "Medium", 1, path="../elsewhere.yml")], [result(self.root, "artipacked", "Medium", 1, path="other.yml")]]
+        bad = [
+            ["x"],
+            [{**good, "ident": "Bad Ident"}],
+            [{**good, "determinations": {"severity": "Critical"}}],
+            [{**good, "locations": []}],
+            [result(self.root, "artipacked", "Medium", 1, path="../elsewhere.yml")],
+            [result(self.root, "artipacked", "Medium", 1, path="other.yml")],
+        ]
         for results in bad:
             with self.subTest(results=str(results)[:80]), self.assertRaises(ScanError):
                 self.normalise(results)
@@ -187,25 +252,64 @@ class HistoryTests(unittest.TestCase):
             db = tmp / "h.db"
             conn = history.open_for_write(db)
             try:
-                audit = Finding("zizmor", "zizmor.artipacked", "WARNING", ".github/workflows/ci.yml", 7, "zz:0", "ci", "Credentials persist.")
+                audit = Finding(
+                    "zizmor",
+                    "zizmor.artipacked",
+                    "WARNING",
+                    ".github/workflows/ci.yml",
+                    7,
+                    "zz:0",
+                    "ci",
+                    "Credentials persist.",
+                )
                 record(conn, tmp, "acme/app", "1" * 40, 1, [audit])
-                history.set_reviews(db, "acme/app", [[audit.tool, audit.rule, audit.path, audit.fingerprint]], "fixed", "Set persist-credentials.", "me")
+                history.set_reviews(
+                    db,
+                    "acme/app",
+                    [[audit.tool, audit.rule, audit.path, audit.fingerprint]],
+                    "fixed",
+                    "Set persist-credentials.",
+                    "me",
+                )
                 clean = {"skipped": [], "errors": []}
                 status = lambda: conn.execute("SELECT status FROM finding_reviews").fetchone()[0]  # noqa: E731
-                record(conn, tmp, "acme/app", "2" * 40, 2, [], extra_meta={"unscanned": clean, "scanners": {"zizmor": {"ignore": ["artipacked"]}}})
+                record(
+                    conn,
+                    tmp,
+                    "acme/app",
+                    "2" * 40,
+                    2,
+                    [],
+                    extra_meta={"unscanned": clean, "scanners": {"zizmor": {"ignore": ["artipacked"]}}},
+                )
                 self.assertEqual(status(), "fixed")
-                record(conn, tmp, "acme/app", "3" * 40, 3, [], extra_meta={"unscanned": clean, "scanners": {"zizmor": {"ignore": []}}})
+                record(
+                    conn,
+                    tmp,
+                    "acme/app",
+                    "3" * 40,
+                    3,
+                    [],
+                    extra_meta={"unscanned": clean, "scanners": {"zizmor": {"ignore": []}}},
+                )
                 self.assertEqual(status(), "verified_fixed")
             finally:
                 conn.close()
 
 
 def git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args],
-                   cwd=repo, check=True, capture_output=True, timeout=60)  # fmt: skip
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
 
 
-@unittest.skipUnless(shutil.which("git") and zizmor_ready(), f"zizmor is not installed in {TOOLS}; run `shoalscan install`")
+@unittest.skipUnless(
+    shutil.which("git") and zizmor_ready(), f"zizmor is not installed in {TOOLS}; run `shoalscan install`"
+)
 class EndToEndTests(unittest.TestCase):
     def test_a_hostile_repository_cannot_hide_its_workflow_flaws(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -214,7 +318,9 @@ class EndToEndTests(unittest.TestCase):
             (repo / ".github" / "workflows" / "ci.yml").write_text(WORKFLOW)
             (repo / ".github" / "workflows" / "broken.yml").write_text("on: [push\njobs: {\n")
             (repo / ".github" / "zizmor.yml").write_text("rules:\n  template-injection:\n    disable: true\n")
-            (repo / ".shoalscan.toml").write_text('scanners = ["zizmor"]\n[opengrep]\ncommunity_rules = false\n[zizmor]\nignore = ["artipacked"]\n')
+            (repo / ".shoalscan.toml").write_text(
+                'scanners = ["zizmor"]\n[opengrep]\ncommunity_rules = false\n[zizmor]\nignore = ["artipacked"]\n'
+            )
             git(repo, "init", "-q", "-b", "main")
             git(repo, "add", "-A")
             git(repo, "commit", "-q", "-m", "x")
@@ -224,7 +330,9 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(code, 0, err.getvalue())
             doc = json.loads((out / "findings.json").read_text())
             rules = {f["rule"] for f in doc["findings"]}
-            self.assertTrue({"zizmor.template-injection", "zizmor.unpinned-uses", "zizmor.dangerous-triggers"} <= rules, rules)
+            self.assertTrue(
+                {"zizmor.template-injection", "zizmor.unpinned-uses", "zizmor.dangerous-triggers"} <= rules, rules
+            )
             self.assertNotIn("zizmor.artipacked", rules)
             self.assertEqual([e["path"] for e in doc["unscanned"]["errors"]], [".github/workflows/broken.yml"])
 

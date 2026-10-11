@@ -46,7 +46,8 @@ if args[:3] == ["-m", "shoalscan", "scan"]:
         (here / "seen_app.txt").write_bytes((repo / "app.py").read_bytes())
     config = Path(opts["--config"]) if "--config" in opts else repo / ".shoalscan.toml"
     data = config.read_bytes() if config.is_file() else b""
-    meta = {{"policy": {{"ref": None, "commit": None, "config_sha256": hashlib.sha256(data).hexdigest(), "adoption": False}},
+    digest = hashlib.sha256(data).hexdigest()
+    meta = {{"policy": {{"ref": None, "commit": None, "config_sha256": digest, "adoption": False}},
             "worktree": worktree_state(repo), "suppressions": {{"total": 0, "invalid": 0, "suppressed_findings": 0}},
             "unscanned": {{"skipped": [], "errors": []}}, "scanners": {{}}, "shoalscan_version": "test"}}
     (out / "findings.json").write_text(findings_to_json([], meta))
@@ -56,8 +57,13 @@ os.execv({python!r}, [{python!r}, *args])
 
 
 def git(*args, cwd=None):
-    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=cwd, check=True,
-                   capture_output=True, timeout=60)
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
 
 
 class Fixture:
@@ -80,14 +86,17 @@ class Fixture:
         self.python.write_text(STAND_IN.format(python=sys.executable, src=str(helpers.SRC)), encoding="utf-8")
         self.python.chmod(0o755)
         self.db = base / "history.sqlite3"
-        self.write(targets_toml or f"""
+        self.write(
+            targets_toml
+            or f"""
             [[target]]
             name = "acme/app"
             clone = "{self.clone}"
             branch = "main"
             python = "{self.python}"
             nightly = true
-            """)
+            """
+        )
         if mirror:
             path = self.state / scanning.SOURCES_FILE
             path.write_text(f'[[mirror]]\nname = "mirror1"\npath = "{self.clone}"\n', encoding="utf-8")
@@ -141,8 +150,12 @@ class TargetsFileTests(WorkerTestCase):
         bad = {
             "unknown key": f'[[target]]\nname = "a/b"\nclone = "{f.clone}"\nbranch = "main"\nshell = "rm"\n',
             "relative clone": '[[target]]\nname = "a/b"\nclone = "clone"\nbranch = "main"\n',
-            "two sources": f'[[target]]\nname = "a/b"\nclone = "{f.clone}"\nsource = "https://github.com/a/b"\nbranch = "main"\n',
-            "config in clone": f'[[target]]\nname = "a/b"\nclone = "{f.clone}"\nbranch = "main"\nconfig = "{f.clone}/x.toml"\n',
+            "two sources": (
+                f'[[target]]\nname = "a/b"\nclone = "{f.clone}"\nsource = "https://github.com/a/b"\nbranch = "main"\n'
+            ),
+            "config in clone": (
+                f'[[target]]\nname = "a/b"\nclone = "{f.clone}"\nbranch = "main"\nconfig = "{f.clone}/x.toml"\n'
+            ),
             "path name": f'[[target]]\nname = "../etc"\nclone = "{f.clone}"\nbranch = "main"\n',
             "option name": f'[[target]]\nname = "-x"\nclone = "{f.clone}"\nbranch = "main"\n',
             "markup name": f'[[target]]\nname = "<img src=x onerror=alert(1)>"\nclone = "{f.clone}"\nbranch = "main"\n',
@@ -168,14 +181,28 @@ class WorkerTests(WorkerTestCase):
         self.assertEqual([c[2] for c in calls], ["scan", "check", "record"])
         record = calls[2]
         opts = dict(zip(record[3::2], record[4::2]))
-        head = subprocess.run(["git", "-C", str(f.clone), "rev-parse", "refs/remotes/origin/main"], capture_output=True, text=True, check=True).stdout.strip()
-        self.assertEqual((opts["--repo-name"], opts["--ref"], opts["--commit"], opts["--kind"], opts["--check-exit"], opts["--db"]),
-                         ("acme/app", "main", head, "scheduled", "0", str(f.db)))
+        head = subprocess.run(
+            ["git", "-C", str(f.clone), "rev-parse", "refs/remotes/origin/main"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(
+            (opts["--repo-name"], opts["--ref"], opts["--commit"], opts["--kind"], opts["--check-exit"], opts["--db"]),
+            ("acme/app", "main", head, "scheduled", "0", str(f.db)),
+        )
         # The scan ran in a temporary worktree of the registered clone, which is gone again.
         scan_repo = Path(dict(zip(calls[0][3::2], calls[0][4::2]))["--repo"])
         self.assertFalse(scan_repo.exists())
         self.assertNotIn(str(f.clone), json.dumps(calls[0]))
-        self.assertEqual(len(subprocess.run(["git", "-C", str(f.clone), "worktree", "list"], capture_output=True, text=True).stdout.splitlines()), 1)
+        self.assertEqual(
+            len(
+                subprocess.run(
+                    ["git", "-C", str(f.clone), "worktree", "list"], capture_output=True, text=True
+                ).stdout.splitlines()
+            ),
+            1,
+        )
         self.assertIsNone(scanning.lock_holder(f.state))
 
     def test_an_unregistered_or_injected_name_is_refused(self):
@@ -229,13 +256,15 @@ class RescanTests(WorkerTestCase):
     def test_rescan_commit_replaces_the_right_run(self):
         f = Fixture(self.base)
         scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO())
-        (first_id, first_commit, first_scanned), = f.rows("SELECT id, commit_sha, scanned_at FROM runs")
+        ((first_id, first_commit, first_scanned),) = f.rows("SELECT id, commit_sha, scanned_at FROM runs")
         time.sleep(1.1)  # scan times have one-second resolution: keep the two runs apart
         self.commit_on_origin(f, "x = 2\n")
         scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO())
-        (second_id, second_commit), = f.rows(f"SELECT id, commit_sha FROM runs WHERE id != {first_id}")
+        ((second_id, second_commit),) = f.rows(f"SELECT id, commit_sha FROM runs WHERE id != {first_id}")
         self.assertNotEqual(first_commit, second_commit)
-        outcome = scanjob.run_one(f.state, f.targets(), "acme/app", "dashboard user", io.StringIO(), "rescan-commit", first_id)
+        outcome = scanjob.run_one(
+            f.state, f.targets(), "acme/app", "dashboard user", io.StringIO(), "rescan-commit", first_id
+        )
         self.assertEqual(outcome, "passed")
         runs = {c: (i, t) for c, i, t in f.rows("SELECT commit_sha, id, scanned_at FROM runs")}
         self.assertEqual(len(runs), 2)
@@ -260,7 +289,9 @@ class RescanTests(WorkerTestCase):
             run_id = history.record_run(conn, info, [], {}, {"result": "pass", "findings": 0}).run_id
         finally:
             conn.close()
-        outcome = scanjob.run_one(f.state, f.targets(), "acme/app", "dashboard user", io.StringIO(), "rescan-commit", run_id)
+        outcome = scanjob.run_one(
+            f.state, f.targets(), "acme/app", "dashboard user", io.StringIO(), "rescan-commit", run_id
+        )
         self.assertEqual(outcome, "failed")
         self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(1,)])
         detail = f.rows("SELECT detail FROM scan_triggers")[0][0]
@@ -282,11 +313,18 @@ class RescanTests(WorkerTestCase):
 
     def test_a_pull_request_run_is_not_rescanned_by_commit(self):
         f = Fixture(self.base)
-        head = subprocess.run(["git", "-C", str(f.clone), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        head = subprocess.run(
+            ["git", "-C", str(f.clone), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
         conn = history.open_for_write(f.db)
         try:
-            pr = history.record_run(conn, history.RunInfo("acme/app", "refs/pull/4/merge", head, "pr", "2026-09-01T00:00:00Z"), [], {},
-                                    {"result": "pass", "findings": 0}).run_id
+            pr = history.record_run(
+                conn,
+                history.RunInfo("acme/app", "refs/pull/4/merge", head, "pr", "2026-09-01T00:00:00Z"),
+                [],
+                {},
+                {"result": "pass", "findings": 0},
+            ).run_id
         finally:
             conn.close()
         with self.assertRaisesRegex(SetupError, "only scheduled runs"):
@@ -303,7 +341,10 @@ class RescanTests(WorkerTestCase):
 class CloneSizeTests(WorkerTestCase):
     def test_low_disk_space_refuses_the_scan_clearly(self):
         f = Fixture(self.base)
-        f.write(f'min_free_mb = 10000000\n[[target]]\nname = "acme/app"\nclone = "{f.clone}"\nbranch = "main"\npython = "{f.python}"\n')
+        f.write(
+            f'min_free_mb = 10000000\n[[target]]\nname = "acme/app"\nclone = "{f.clone}"\nbranch = "main"\npython = '
+            f'"{f.python}"\n'
+        )
         self.assertEqual(scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO()), "failed")
         self.assertIn("not enough free disk space", f.rows("SELECT detail FROM scan_triggers")[0][0])
         self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(0,)])
@@ -318,7 +359,11 @@ class CloneSizeTests(WorkerTestCase):
         git("commit", "-q", "-m", "other", cwd=f.origin)
         git("checkout", "-q", "main", cwd=f.origin)
         self.assertEqual(scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO()), "passed")
-        refs = subprocess.run(["git", "-C", str(f.clone), "for-each-ref", "--format=%(refname)", "refs/remotes"], capture_output=True, text=True).stdout
+        refs = subprocess.run(
+            ["git", "-C", str(f.clone), "for-each-ref", "--format=%(refname)", "refs/remotes"],
+            capture_output=True,
+            text=True,
+        ).stdout
         self.assertIn("refs/remotes/origin/main", refs)
         self.assertNotIn("refs/remotes/origin/other", refs)
 
@@ -327,7 +372,10 @@ class CloneSizeTests(WorkerTestCase):
         (f.origin / "big.dat").write_bytes(os.urandom(2 * 1024 * 1024))
         git("add", "big.dat", cwd=f.origin)
         git("commit", "-q", "-m", "big", cwd=f.origin)
-        f.write(f'[[target]]\nname = "acme/app"\nclone = "{f.clone}"\nbranch = "main"\npython = "{f.python}"\nmax_clone_mb = 1\n')
+        f.write(
+            f'[[target]]\nname = "acme/app"\nclone = "{f.clone}"\nbranch = "main"\npython = "{f.python}"\nmax_clone_mb '
+            "= 1\n"
+        )
         self.assertEqual(scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO()), "failed")
         self.assertIn("max_clone_mb", f.rows("SELECT detail FROM scan_triggers")[0][0])
         self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(0,)])
@@ -344,17 +392,24 @@ class CloneSizeTests(WorkerTestCase):
             '  clone=""; prev=""; for a in "$@"; do [ "$prev" = "-C" ] && clone="$a"; prev="$a"; done\n'
             '  head -c 3145728 /dev/zero > "$clone/.git/objects/pack/tmp_pack_growing"; sleep 60; exit 0 ;;\n'
             "esac\n"
-            f'exec "{real}" "$@"\n', encoding="utf-8")
+            f'exec "{real}" "$@"\n',
+            encoding="utf-8",
+        )
         (fake_dir / "git").chmod(0o755)
         os.environ["PATH"] = f"{fake_dir}:{os.environ['PATH']}"
-        f.write(f'max_clone_mb = 1\n[[target]]\nname = "acme/app"\nclone = "{f.clone}"\nbranch = "main"\npython = "{f.python}"\n')
+        f.write(
+            f'max_clone_mb = 1\n[[target]]\nname = "acme/app"\nclone = "{f.clone}"\nbranch = "main"\npython = '
+            f'"{f.python}"\n'
+        )
         self.assertEqual(f.targets().max_clone_mb, 1)
         started = time.monotonic()
         outcome = scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO())
         self.assertLess(time.monotonic() - started, 20, "the fetch was stopped, not waited for")
         self.assertEqual(outcome, "failed")
         self.assertIn("max_clone_mb", f.rows("SELECT detail FROM scan_triggers")[0][0])
-        self.assertFalse((f.clone / ".git" / "objects" / "pack" / "tmp_pack_growing").exists(), "the partial fetch is cleaned up")
+        self.assertFalse(
+            (f.clone / ".git" / "objects" / "pack" / "tmp_pack_growing").exists(), "the partial fetch is cleaned up"
+        )
         self.assertEqual(f.calls(), [])
 
     def test_the_default_clone_limit(self):
@@ -375,7 +430,7 @@ class CloneSizeTests(WorkerTestCase):
 
 
 class IsolationTests(WorkerTestCase):
-    def test_children_start_with_P_and_the_log_is_bounded(self):
+    def test_children_start_with_dash_p_and_the_log_is_bounded(self):
         f = Fixture(self.base)
         scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO())
         self.assertTrue((f.bin / "saw-P").exists(), "the children run python -P")
@@ -421,7 +476,9 @@ class GitProbeTests(WorkerTestCase):
         calls = self.base / "git-calls"
         fake = fake_dir / "git"
         # Behaves like git, but like git before 2.40 it ignores GIT_ATTR_SOURCE.
-        fake.write_text(f'#!/bin/sh\necho "$*" >> "{calls}"\nunset GIT_ATTR_SOURCE\nexec "{real}" "$@"\n', encoding="utf-8")
+        fake.write_text(
+            f'#!/bin/sh\necho "$*" >> "{calls}"\nunset GIT_ATTR_SOURCE\nexec "{real}" "$@"\n', encoding="utf-8"
+        )
         fake.chmod(0o755)
         os.environ["PATH"] = f"{fake_dir}:{os.environ['PATH']}"
         self.assertFalse(scanning.git_attr_probe())
@@ -445,10 +502,13 @@ class GitHardeningTests(WorkerTestCase):
             return f"sh -c 'touch {marks}/{name}; cat'"
 
         # The repository asks for filters, an LFS download from a URL of its choosing, and carries an LFS pointer.
-        (f.origin / ".gitattributes").write_text("* filter=evil\n*.bin filter=lfs diff=lfs merge=lfs -text\n", encoding="utf-8")
+        (f.origin / ".gitattributes").write_text(
+            "* filter=evil\n*.bin filter=lfs diff=lfs merge=lfs -text\n", encoding="utf-8"
+        )
         (f.origin / ".lfsconfig").write_text("[lfs]\n\turl = http://127.0.0.1:9/attacker-lfs\n", encoding="utf-8")
-        (f.origin / "big.bin").write_text("version https://git-lfs.github.com/spec/v1\noid sha256:" + "0" * 64 + "\nsize 12345678\n",
-                                          encoding="utf-8")
+        (f.origin / "big.bin").write_text(
+            "version https://git-lfs.github.com/spec/v1\noid sha256:" + "0" * 64 + "\nsize 12345678\n", encoding="utf-8"
+        )
         git("add", "-A", cwd=f.origin)
         git("commit", "-q", "-m", "filters", cwd=f.origin)
         # The user's global configuration defines those drivers and a hooks directory.
@@ -460,8 +520,11 @@ class GitHardeningTests(WorkerTestCase):
             (hooks / hook).chmod(0o755)
         (home / ".gitconfig").write_text(
             f'[filter "evil"]\n\tsmudge = {touch("global-evil-smudge")}\n\tprocess = {touch("global-evil-process")}\n'
-            f'[filter "lfs"]\n\tsmudge = {touch("global-lfs-smudge")}\n\tprocess = {touch("global-lfs-process")}\n\trequired = true\n'
-            f"[core]\n\thooksPath = {hooks}\n", encoding="utf-8")
+            f'[filter "lfs"]\n\tsmudge = {touch("global-lfs-smudge")}\n\tprocess = '
+            f"{touch('global-lfs-process')}\n\trequired = true\n"
+            f"[core]\n\thooksPath = {hooks}\n",
+            encoding="utf-8",
+        )
         os.environ["HOME"] = str(home)
         # The clone's own configuration defines the driver too, as required, and has a hook.
         git("-C", str(f.clone), "config", "filter.evil.process", touch("local-evil-process"))
@@ -502,7 +565,10 @@ class LockTests(WorkerTestCase):
 
     def test_parallel_acquisition_from_separate_processes(self):
         script = HOLD_LOCK.format(src=str(helpers.SRC), state=str(self.base))
-        procs = [subprocess.Popen([sys.executable, "-c", script, f"t{n}", "2"], stdout=subprocess.PIPE, text=True) for n in range(6)]
+        procs = [
+            subprocess.Popen([sys.executable, "-c", script, f"t{n}", "2"], stdout=subprocess.PIPE, text=True)
+            for n in range(6)
+        ]
         results = [p.communicate(timeout=60)[0].strip() for p in procs]
         self.assertEqual(sorted(results), ["busy"] * 5 + ["got"], results)
         self.assertIsNone(scanning.lock_holder(self.base), "the lock is free once its holder has gone")
@@ -524,8 +590,13 @@ class LockTests(WorkerTestCase):
         f = Fixture(self.base)
         (f.bin / "slow").write_text("1")
         env = {**os.environ, "PYTHONPATH": str(helpers.SRC)}
-        worker = subprocess.Popen([sys.executable, "-m", "shoalscan.scanjob", "--state-dir", str(f.state), "--target", "acme/app"],
-                                  env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        worker = subprocess.Popen(
+            [sys.executable, "-m", "shoalscan.scanjob", "--state-dir", str(f.state), "--target", "acme/app"],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
         try:
             for _ in range(200):
                 if (f.bin / "scan.pid").exists():
@@ -598,17 +669,23 @@ class NightlyTests(WorkerTestCase):
         self.assertEqual(f.rows("SELECT who FROM scan_triggers"), [("nightly job",), ("nightly job",)])
 
 
-@unittest.skipUnless((helpers.tools_dir() / "opengrep").exists(), "the pinned scanners are not installed (run shoalscan install)")
+@unittest.skipUnless(
+    (helpers.tools_dir() / "opengrep").exists(), "the pinned scanners are not installed (run shoalscan install)"
+)
 class EndToEndWorkerTests(WorkerTestCase):
     def test_a_real_scan_of_a_tiny_repository(self):
         f = Fixture(self.base)
         rules = self.base / "rules"
         rules.mkdir()
         (rules / "eval.yaml").write_text(
-            "rules:\n  - id: no-eval\n    languages: [python]\n    severity: ERROR\n    message: eval is dangerous\n    pattern: eval(...)\n",
-            encoding="utf-8")
+            "rules:\n  - id: no-eval\n    languages: [python]\n    severity: ERROR\n    message: eval is dangerous\n   "
+            " pattern: eval(...)\n",
+            encoding="utf-8",
+        )
         policy = self.base / "policy.toml"
-        policy.write_text(f'[opengrep]\ncommunity_rules = false\nshoalscan_rules = false\nrule_dirs = ["rules"]\n', encoding="utf-8")
+        policy.write_text(
+            '[opengrep]\ncommunity_rules = false\nshoalscan_rules = false\nrule_dirs = ["rules"]\n', encoding="utf-8"
+        )
         # The rule directory is read from the scanned tree, so it is committed there.
         (f.origin / "rules").mkdir()
         (f.origin / "rules" / "eval.yaml").write_text((rules / "eval.yaml").read_text(), encoding="utf-8")
@@ -626,7 +703,9 @@ class EndToEndWorkerTests(WorkerTestCase):
             """)
         outcome = scanjob.run_one(f.state, f.targets(), "acme/real", scanjob.WHO["cli"], io.StringIO())
         self.assertEqual(outcome, "blocked")
-        self.assertEqual(f.rows("SELECT fk.path FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id"), [("app.py",)])
+        self.assertEqual(
+            f.rows("SELECT fk.path FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id"), [("app.py",)]
+        )
         self.assertEqual(f.rows("SELECT outcome, run_id IS NOT NULL FROM scan_triggers"), [("blocked", 1)])
 
 

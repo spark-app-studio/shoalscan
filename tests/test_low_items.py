@@ -14,7 +14,14 @@ from shoalscan.errors import SetupError
 
 class EnvironmentTests(unittest.TestCase):
     def test_only_allowlisted_variables_reach_the_scanner(self):
-        env = {"PATH": "/usr/bin", "HOME": "/home/u", "LC_CTYPE": "C.UTF-8", "HTTPS_PROXY": "http://proxy", "SEMGREP_RULES": "x", "AWS_SECRET_ACCESS_KEY": "s"}
+        env = {
+            "PATH": "/usr/bin",
+            "HOME": "/home/u",
+            "LC_CTYPE": "C.UTF-8",
+            "HTTPS_PROXY": "http://proxy",
+            "SEMGREP_RULES": "x",
+            "AWS_SECRET_ACCESS_KEY": "s",
+        }
         with mock.patch.dict(os.environ, env, clear=True):
             self.assertEqual(opengrep._scanner_env(), {"PATH": "/usr/bin", "HOME": "/home/u", "LC_CTYPE": "C.UTF-8"})
 
@@ -51,7 +58,11 @@ class DeadlineTests(unittest.TestCase):
         response = _SlowResponse(clock)
         opener = mock.Mock()
         opener.open.return_value = response
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(download.urllib.request, "build_opener", return_value=opener), mock.patch.object(download.time, "monotonic", lambda: clock[0]):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(download.urllib.request, "build_opener", return_value=opener),
+            mock.patch.object(download.time, "monotonic", lambda: clock[0]),
+        ):
             with self.assertRaises(SetupError) as ctx:
                 download.fetch("https://example.invalid/file", Path(tmp) / "f")
         self.assertIn("longer than", str(ctx.exception))
@@ -69,7 +80,11 @@ class ExitCodeTests(unittest.TestCase):
             repo.mkdir()
             out.mkdir()
             err = io.StringIO()
-            with mock.patch.object(cli, "load_findings", side_effect=RuntimeError("boom")), contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            with (
+                mock.patch.object(cli, "load_findings", side_effect=RuntimeError("boom")),
+                contextlib.redirect_stderr(err),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
                 self.assertEqual(cli.main(["check", "--repo", str(repo), "--out", str(out)]), 2)
             self.assertIn("internal error", err.getvalue())
 

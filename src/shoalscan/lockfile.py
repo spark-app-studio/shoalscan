@@ -118,9 +118,7 @@ def verify_sha256(path: Path, expected: str) -> None:
     """Raise VerificationError unless the file's SHA-256 equals `expected`."""
     actual = sha256_file(path)
     if actual != expected:
-        raise VerificationError(
-            f"SHA-256 mismatch for {path.name}: expected {expected}, got {actual}"
-        )
+        raise VerificationError(f"SHA-256 mismatch for {path.name}: expected {expected}, got {actual}")
 
 
 def _table(data: object, where: str, keys: set[str]) -> dict:
@@ -166,8 +164,15 @@ def _platforms(data: object, where: str) -> dict:
 
 
 def _signature(data: object, where: str) -> OpengrepSignature:
-    """A release workflow identity for cosign: the certificate identity and issuer, and the workflow's repository and commit."""
-    sig = _table(data, f"[{where}]", {"certificate_identity", "certificate_oidc_issuer", "github_workflow_repository", "github_workflow_sha"})
+    """A release workflow identity for cosign.
+
+    The certificate identity and issuer, and the workflow's repository and commit.
+    """
+    sig = _table(
+        data,
+        f"[{where}]",
+        {"certificate_identity", "certificate_oidc_issuer", "github_workflow_repository", "github_workflow_sha"},
+    )
     signature = OpengrepSignature(
         certificate_identity=_url(sig, "certificate_identity", where),
         certificate_oidc_issuer=_url(sig, "certificate_oidc_issuer", where),
@@ -191,7 +196,9 @@ def _pinned_tool(name: str, data: object, extra_files: tuple[str, ...]) -> Pinne
             keys.add(optional)
     tool = _table(data, where, keys)
     member = tool.get("member")
-    if member is not None and (not isinstance(member, str) or not _MEMBER_RE.match(member) or ".." in member.split("/")):
+    if member is not None and (
+        not isinstance(member, str) or not _MEMBER_RE.match(member) or ".." in member.split("/")
+    ):
         raise SetupError(f"tools.lock: {name}.member must be a relative path inside the archive")
     _url(tool, "source", name)
     _str(tool, "verification", name)
@@ -202,14 +209,22 @@ def _pinned_tool(name: str, data: object, extra_files: tuple[str, ...]) -> Pinne
         pwhere = f"{name}.platforms.{plat}"
         entry = _table(entry, f"[{pwhere}]", platform_keys)
         bundle = Asset(_url(entry, "bundle_url", pwhere), _sha(entry, "bundle_sha256", pwhere)) if signature else None
-        platforms[plat] = ToolPlatform(Asset(_url(entry, "url", pwhere), _sha(entry, "sha256", pwhere)), _sha(entry, "binary_sha256", pwhere), bundle)
+        platforms[plat] = ToolPlatform(
+            Asset(_url(entry, "url", pwhere), _sha(entry, "sha256", pwhere)),
+            _sha(entry, "binary_sha256", pwhere),
+            bundle,
+        )
         if not member and platforms[plat].binary_sha256 != platforms[plat].download.sha256:
-            raise SetupError(f"tools.lock: {pwhere}.binary_sha256 must equal sha256 when the download is the binary itself")
+            raise SetupError(
+                f"tools.lock: {pwhere}.binary_sha256 must equal sha256 when the download is the binary itself"
+            )
     files = {}
     for extra in extra_files:
         entry = _table(tool[extra], f"[{name}.{extra}]", {"url", "sha256"})
         files[extra] = Asset(_url(entry, "url", f"{name}.{extra}"), _sha(entry, "sha256", f"{name}.{extra}"))
-    return PinnedTool(name, _str(tool, "version", name), _str(tool, "license", name), member, platforms, files, signature)
+    return PinnedTool(
+        name, _str(tool, "version", name), _str(tool, "license", name), member, platforms, files, signature
+    )
 
 
 def parse_lock(data: dict) -> Lock:

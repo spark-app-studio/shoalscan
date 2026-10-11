@@ -68,12 +68,12 @@ class ConfigTests(unittest.TestCase):
             'baseline = "/etc/baseline.toml"',
             'baseline = "../baseline.toml"',
             '[opengrep]\nrule_dirs = ["../other-repo/rules"]',
-            "[opengrep]\ncommunity_rules = \"no\"",
+            '[opengrep]\ncommunity_rules = "no"',
             "[opengrep]\ncommunity_rules = false\nshoalscan_rules = false",
             "[limits]\njobs = 0",
             "[limits]\njobs = true",
             "[limits]\nscan_timeout_seconds = 1",
-            "excludes = [\"\"]",
+            'excludes = [""]',
             '[components]\n"api/" = ""',
         ):
             with self.subTest(text=text), self.assertRaises(SetupError):
@@ -95,14 +95,20 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(component_for("README", comps), "other")
 
 
-
 class ParseWarnOnlyTests(unittest.TestCase):
     def test_a_list_that_would_cover_everything_is_refused(self):
         vowels = ["*a*", "*e*", "*i*", "*o*", "*u*", "*y*"]
         for pattern in vowels:
             with self.subTest(pattern=pattern), self.assertRaises(SetupError):
                 parse_config({"parse_warn_only": [pattern]})
-        for pattern in ("Dockerfile", "Dockerfile.*", "*.sh", "*.min.js", "deploy/**/templates/*.yaml", "scripts/*/run.sh"):
+        for pattern in (
+            "Dockerfile",
+            "Dockerfile.*",
+            "*.sh",
+            "*.min.js",
+            "deploy/**/templates/*.yaml",
+            "scripts/*/run.sh",
+        ):
             with self.subTest(pattern=pattern):
                 parse_config({"parse_warn_only": [pattern]})
 
@@ -112,8 +118,30 @@ class ParseWarnOnlyTests(unittest.TestCase):
         self.assertEqual(parse_config({}).parse_warn_only, ())
 
     def test_invalid_globs_are_refused(self):
-        for bad in ("**", "**/*", "*", "/etc/Dockerfile", "../x/Dockerfile", "a//b", "!Dockerfile", "[ab].sh",
-                    "C:\\x", "a b", "a\nb", "", 7, "*e*", "**a**", "*a", "src/*", "src/**", "a*b/c.sh", "*.*", "?.sh", ".*"):
+        for bad in (
+            "**",
+            "**/*",
+            "*",
+            "/etc/Dockerfile",
+            "../x/Dockerfile",
+            "a//b",
+            "!Dockerfile",
+            "[ab].sh",
+            "C:\\x",
+            "a b",
+            "a\nb",
+            "",
+            7,
+            "*e*",
+            "**a**",
+            "*a",
+            "src/*",
+            "src/**",
+            "a*b/c.sh",
+            "*.*",
+            "?.sh",
+            ".*",
+        ):
             with self.subTest(bad=bad), self.assertRaises(SetupError):
                 parse_config({"parse_warn_only": [bad]})
         with self.assertRaises(SetupError):
@@ -122,13 +150,44 @@ class ParseWarnOnlyTests(unittest.TestCase):
 
 class ExcludeTests(unittest.TestCase):
     def test_catch_all_excludes_are_refused(self):
-        for bad in ("**", "*", "**/*", "/**", "*/", "*e*", "?", "**/*/**", "*.*", "/*", "**/**", "*ab*",
-                    "[a-z]*", "[!0]*", "**/[!0]*", "*[!0]", "{a,b}*", "src/{x,y}", "../vendor", "a/../b", "[abcd]efgh"):
+        for bad in (
+            "**",
+            "*",
+            "**/*",
+            "/**",
+            "*/",
+            "*e*",
+            "?",
+            "**/*/**",
+            "*.*",
+            "/*",
+            "**/**",
+            "*ab*",
+            "[a-z]*",
+            "[!0]*",
+            "**/[!0]*",
+            "*[!0]",
+            "{a,b}*",
+            "src/{x,y}",
+            "../vendor",
+            "a/../b",
+            "[abcd]efgh",
+        ):
             with self.subTest(bad=bad), self.assertRaises(SetupError):
                 parse_config({"excludes": [bad]})
 
     def test_real_excludes_are_kept(self):
-        good = ["target", "node_modules", "**/fixtures/**", "*.min.js", "**/*redteam*", "*.h", "build*", "/dist/", "vendor/"]
+        good = [
+            "target",
+            "node_modules",
+            "**/fixtures/**",
+            "*.min.js",
+            "**/*redteam*",
+            "*.h",
+            "build*",
+            "/dist/",
+            "vendor/",
+        ]
         self.assertEqual(parse_config({"excludes": good}).excludes, tuple(good))
 
 

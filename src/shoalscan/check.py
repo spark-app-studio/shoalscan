@@ -129,7 +129,9 @@ def compare(
             total = entry.get("file_lines", 0)
             if warn_only.matches(entry["path"]):
                 percent = round(100 * len(gap) / total) if total else 100
-                partial_warn_only.append({**entry, "unparsed_percent": min(percent, 100), "overlaps_added_lines": bool(gap & added)})
+                partial_warn_only.append(
+                    {**entry, "unparsed_percent": min(percent, 100), "overlaps_added_lines": bool(gap & added)}
+                )
                 continue
             if gap & added:
                 changed_unscanned.append({**entry, "kind": "errors", "why": "unparsed lines overlap added lines"})
@@ -246,10 +248,21 @@ def details(result: CheckResult, findings_sha256: str) -> dict:
         return [f.tool, f.rule, f.path, f.fingerprint]
 
     def entry(e: Entry) -> dict:
-        return {"tool": e.tool, "rule": e.rule, "path": e.path, "fingerprint": e.fingerprint, "issue": e.issue, "reason": e.reason}
+        return {
+            "tool": e.tool,
+            "rule": e.rule,
+            "path": e.path,
+            "fingerprint": e.fingerprint,
+            "issue": e.issue,
+            "reason": e.reason,
+        }
 
     def file_detail(e: dict) -> dict:
-        return {k: e[k] for k in ("path", "kind", "type", "reason", "why", "spans", "unparsed_percent", "overlaps_added_lines") if k in e}
+        return {
+            k: e[k]
+            for k in ("path", "kind", "type", "reason", "why", "spans", "unparsed_percent", "overlaps_added_lines")
+            if k in e
+        }
 
     return {
         "format": DETAILS_FORMAT,
@@ -288,7 +301,8 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         f"Shoalscan check: {'PASSED' if result.passed else 'FAILED'}",
         f"  Findings: {s['findings']} (ERROR {sev['ERROR']}, WARNING {sev['WARNING']}, INFO {sev['INFO']})",
         f"  Baseline: {result.baseline_size} entries{no_file}",
-        f"  New findings: {len(result.new)}, of which blocking: {len(result.new_blocking)} (blocking severities: {blocking})",
+        f"  New findings: {len(result.new)}, of which blocking: {len(result.new_blocking)} (blocking severities: "
+        f"{blocking})",
         f"  Stale baseline entries: {len(result.stale)}",
     ]
     if result.suppressions:
@@ -358,7 +372,10 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         out.append(bar)
     if result.partial_warnings:
         out.append("")
-        out.append(f"Warning: changed files with small parse gaps away from the changed lines ({len(result.partial_warnings)}):")
+        out.append(
+            "Warning: changed files with small parse gaps away from the changed lines "
+            f"({len(result.partial_warnings)}):"
+        )
         for e in result.partial_warnings[:max_items]:
             out.append(f"  {e['path']}  unparsed lines {e.get('spans')}")
     if result.partial_warn_only:
@@ -385,7 +402,10 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
             "Language-aware rules could not read them; generic rules still ran:"
         )
         for e in result.syntax_warn_only[:max_items]:
-            out.append(f"  SYNTAX ERROR (warn-only by policy): {e['path']} \u2014 {e.get('type')}; the whole file could not be parsed")
+            out.append(
+                f"  SYNTAX ERROR (warn-only by policy): {e['path']} \u2014 {e.get('type')}; the whole file could not "
+                "be parsed"
+            )
         out.append(bar)
     if result.moves:
         bar = "!" * 78
