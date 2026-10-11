@@ -14,17 +14,23 @@ the policy text before and after.
 
 from __future__ import annotations
 
-import threading
 import difflib
+import threading
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 
 from shoalscan import history
 from shoalscan.baseline import load_baseline
 from shoalscan.dashboard import scanning
+from shoalscan.config import KNOWN_SCANNERS, config_from_bytes
 from shoalscan.errors import SetupError
+from shoalscan.install import opengrep_path, tool_path
+from shoalscan.locations import default_tools_dir
+from shoalscan.lockfile import load_lock
+from shoalscan.resources import default_lock_path
 
-TARGET_KEYS = {"original", "name", "source", "branch", "enabled", "nightly", "policy"}
+TARGET_KEYS = {"original", "name", "source", "branch", "enabled", "nightly", "policy", "scanners"}
 MAX_BASELINE_ENTRIES = 500
 _write_lock = threading.Lock()
 
@@ -54,13 +60,40 @@ def _flag(value: object, name: str) -> bool:
 
 
 def _fields(t: scanning.Target, policy: str) -> dict:
+    chosen = scanning.split_policy(policy)[1]
     return {"name": t.name, "source": t.public_source(), "branch": t.branch, "enabled": t.enabled, "nightly": t.nightly,
-            "policy_sha256": scanning.policy_sha256(policy)}
+            "scanners": list(chosen) if chosen is not None else None, "policy_sha256": scanning.policy_sha256(policy)}
 
 
 def _diff(before: dict | None, after: dict | None) -> dict:
     keys = sorted(set(before or {}) | set(after or {}))
     return {k: [(before or {}).get(k), (after or {}).get(k)] for k in keys if (before or {}).get(k) != (after or {}).get(k)}
+
+
+def _policy_scanners(text: str) -> list[str] | None:
+    """The scanners a managed policy runs, or None when there is none (the repository's own file decides)."""
+    if not text:
+        return None
+    try:
+        return list(config_from_bytes(text.encode("utf-8"), "the policy").scanners)
+    except SetupError:
+        return None
+
+
+def available_scanners(tools_dir: Path | None) -> list[dict]:
+    """Every scanner a policy can choose, its pinned version, and whether this server has it installed."""
+    lock = load_lock(default_lock_path())
+    tools = tools_dir or default_tools_dir()
+    out = []
+    for name in KNOWN_SCANNERS:
+        if name == "opengrep":
+            version, installed = lock.opengrep_version, opengrep_path(tools).is_file()
+        elif name in lock.tools:
+            version, installed = lock.tools[name].version, tool_path(tools, name).is_file()
+        else:
+            version, installed = None, False
+        out.append({"name": name, "version": version, "installed": installed})
+    return out
 
 
 class ConfigEditor:
@@ -89,7 +122,7 @@ class ConfigEditor:
     def save_target(self, request: dict, who: str) -> tuple[int, dict]:
         """Create a target (original is null) or update one (original names it)."""
         if set(request) != TARGET_KEYS:
-            return 400, {"error": "send exactly: original, name, source, branch, enabled, nightly, policy"}
+            return 400, {"error": "send exactly: original, name, source, branch, enabled, nightly, policy, scanners"}
         try:
             with _write_lock:
                 targets = self.load()
@@ -110,9 +143,13 @@ class ConfigEditor:
                 branch = scanning.validate_branch(request["branch"])
                 enabled = _flag(request["enabled"], "enabled")
                 nightly = _flag(request["nightly"], "nightly")
-                policy = scanning.validate_policy(request["policy"])
-                if current is not None and current.config is not None and policy != "":
+                body = scanning.validate_policy(request["policy"])
+                scanners = scanning.validate_scanners(request["scanners"])
+                if current is not None and current.config is not None and (body != "" or scanners is not None):
                     raise SetupError("this target's configuration file is set by hand in scan_targets.toml; edit it there")
+                if scanners is not None and body and "scanners" in tomllib.loads(body):
+                    raise SetupError("the policy text sets scanners too: remove that line, or let the policy decide the scanners")
+                policy = scanning.validate_policy(scanning.compose_policy(body, scanners))
                 kept = {k: getattr(current, k) for k in ("config", "baseline", "python", "max_clone_mb")} if current else {}
                 target = scanning.Target(name=name, branch=branch, enabled=enabled, nightly=nightly,
                                          kind=source["kind"], source=source["source"], mirror=source["mirror"], clone=source["clone"], **kept)
@@ -197,9 +234,13 @@ class ConfigEditor:
         out = []
         for t in targets.targets.values():
             baseline = self.baseline_entries(targets, t)
+            full = scanning.read_policy(targets, t) if t.config is None else ""
+            body, chosen = scanning.split_policy(full)
             out.append({
                 **_fields(t, ""),
-                "policy": scanning.read_policy(targets, t) if t.config is None else None,
+                "scanners": list(chosen) if chosen is not None else None,
+                "policy_scanners": _policy_scanners(full),
+                "policy": body if t.config is None else None,
                 "policy_editable": t.config is None,
                 "set_by_hand": [k for k in ("clone", "config", "baseline", "python") if getattr(t, k) is not None],
                 "last_run": latest_run(t.name),
@@ -207,6 +248,7 @@ class ConfigEditor:
             })
         return {
             "targets": out,
+            "scanners": available_scanners(targets.tools_dir),
             "mirrors": sorted(targets.mirrors),
             "allowed_hosts": list(targets.allowed_hosts),
             "changes": changes,

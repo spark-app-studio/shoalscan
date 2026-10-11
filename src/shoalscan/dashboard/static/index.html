@@ -214,6 +214,13 @@
       <label>Branch <input name="branch" maxlength="200" spellcheck="false" autocomplete="off" placeholder="main"></label>
       <label class="check"><input type="checkbox" name="enabled"> Enabled</label>
       <label class="check"><input type="checkbox" name="nightly"> Scan every night</label>
+      <fieldset id="config-scanners">
+        <legend>Scanners</legend>
+        <label class="check"><input type="radio" name="scanner_mode" value="policy"> As the policy says</label>
+        <label class="check"><input type="radio" name="scanner_mode" value="choose"> Choose here</label>
+        <div id="config-scanner-list"></div>
+        <p class="muted small" id="config-scanners-note"></p>
+      </fieldset>
       <label>Policy (.shoalscan.toml, optional)
         <textarea name="policy" rows="10" spellcheck="false" maxlength="32768"></textarea></label>
       <p class="muted small" id="config-policy-note">Checked with Shoalscan's configuration rules before it is saved. The baseline's location is managed for you, so a baseline key is refused.</p>

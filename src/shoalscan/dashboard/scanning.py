@@ -31,7 +31,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from shoalscan.config import config_from_bytes
+from shoalscan.config import KNOWN_SCANNERS, config_from_bytes
 from shoalscan.errors import SetupError
 
 TARGETS_FILE = "scan_targets.toml"
@@ -289,6 +289,47 @@ def validate_policy(text: object) -> str:
         raise SetupError("the policy may not set baseline: the dashboard manages the baseline's path, and baselines change only from the command line")
     config_from_bytes(text.encode("utf-8"), "the policy")
     return text
+
+
+# The managed policy starts with this header and one `scanners` line when the
+# scanners were chosen on the Configuration page; the rest is the policy text
+# the page shows and edits.
+SCANNERS_HEADER = "# Scanners chosen on the dashboard's Configuration page.\n"
+
+
+def validate_scanners(value: object) -> tuple[str, ...] | None:
+    """None (the policy decides), or a non-empty choice of known scanners, in their usual order."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value or not all(isinstance(v, str) for v in value) or len(set(value)) != len(value):
+        raise SetupError("choose at least one scanner, each once")
+    unknown = sorted(set(value) - set(KNOWN_SCANNERS))
+    if unknown:
+        raise SetupError(f"unknown scanner: {unknown[0]!r} (known: {', '.join(KNOWN_SCANNERS)})")
+    return tuple(s for s in KNOWN_SCANNERS if s in value)
+
+
+def compose_policy(body: str, scanners: tuple[str, ...] | None) -> str:
+    """The managed policy file: the scanners line the page chose, if any, then the policy text."""
+    if scanners is None:
+        return body
+    line = "scanners = [" + ", ".join(_toml_string(s) for s in scanners) + "]\n"
+    return SCANNERS_HEADER + line + ("\n" + body if body else "")
+
+
+def split_policy(text: str) -> tuple[str, tuple[str, ...] | None]:
+    """The policy text and the chosen scanners. A file without the header is all policy text."""
+    if not text.startswith(SCANNERS_HEADER):
+        return text, None
+    line, _, body = text[len(SCANNERS_HEADER) :].partition("\n")
+    try:
+        data = tomllib.loads(line)
+    except tomllib.TOMLDecodeError:
+        return text, None
+    chosen = data.get("scanners")
+    if set(data) != {"scanners"} or not isinstance(chosen, list) or not all(isinstance(c, str) for c in chosen):
+        return text, None
+    return body[1:] if body.startswith("\n") else body, tuple(chosen)
 
 
 def policy_sha256(text: str | None) -> str | None:
