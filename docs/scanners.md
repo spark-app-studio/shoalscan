@@ -7,9 +7,10 @@
 | Opengrep | insecure code patterns, with Shoalscan's, the community's and your own rules | on | SHA-256, and a cosign signature checked against the Opengrep release workflow |
 | Gitleaks | secrets: API keys, tokens, private keys, passwords | off | SHA-256 of the release archive, of the binary in it and of its default rules |
 | Hadolint | Dockerfile mistakes, with ShellCheck for `RUN` lines: running as root, unpinned images and packages, unsafe shell pipes | off | SHA-256 of the binary |
+| zizmor | GitHub Actions flaws: template injection, dangerous triggers, unpinned actions, broad permissions, persisted credentials | off | SHA-256 of the release archive and of the binary in it; build provenance checked when pinned |
 
 ```toml
-scanners = ["opengrep", "gitleaks", "hadolint"]
+scanners = ["opengrep", "gitleaks", "hadolint", "zizmor"]
 ```
 
 ## Gitleaks
@@ -68,5 +69,32 @@ Hadolint normally reads a `.hadolint.yaml` from the working directory or the hom
 ### Its pin
 
 Hadolint publishes bare binaries and a checksums file, but no signature or provenance, so its pin rests on SHA-256 only. Each hash in `tools.lock` was checked against the project's published checksums, and `scan` checks the binary again before every run. Hadolint is licensed GPL-3.0; Shoalscan downloads and runs it, and does not bundle it.
+
+## zizmor
+
+zizmor audits GitHub Actions: workflows, action definitions and Dependabot configuration. Findings are named `zizmor.<audit>`, such as `zizmor.template-injection` or `zizmor.unpinned-uses`. zizmor's `High` severity becomes ERROR, `Medium` WARNING, and `Low` and `Informational` INFO. It runs its "regular" persona, the one with the fewest false positives. The triage work list links each audit to its documentation.
+
+### Which files
+
+Shoalscan gives zizmor the workflows directly in `.github/workflows` (`*.yml` and `*.yaml`), every `action.yml` or `action.yaml` in the repository, and `.github/dependabot.yml`, outside `.git` and the excludes, without following links, and not over `max_target_bytes` (such a file is listed as skipped). A `.gitignore` does not hide a file from it.
+
+All the files are audited in one run. If zizmor cannot read one of them (a YAML syntax error, say), each file is audited alone: the ones it cannot read are listed as not fully scanned, and the findings of the others still count. On a pull request, a changed workflow that could not be audited fails the check.
+
+### Leaving audits out
+
+```toml
+[zizmor]
+ignore = ["artipacked"]   # zizmor audit names
+```
+
+This is policy: on a pull request run with `--policy-ref`, it comes from the base branch. Findings of an ignored audit are never taken as fixed on the dashboard.
+
+### Offline, and nothing in the repository can silence it
+
+zizmor normally reads a `zizmor.yml` (or `.github/zizmor.yml`) that can turn audits off, honours `# zizmor: ignore[...]` comments, and can call the GitHub API. Shoalscan passes `--offline`, `--no-config` and `--no-ignores`, and runs it with the scanners' allowlisted environment, so no token and no `ZIZMOR_*` variable reaches it. Audits that need the network do not run.
+
+### Its pin
+
+zizmor publishes no checksums file, but its release archives carry GitHub build provenance. Before they were pinned, the four archives in `tools.lock` were verified with `gh attestation verify` against zizmor's release workflow at the v1.30.1 tag. `install` checks the SHA-256 of each archive and of the `zizmor` binary in it, and `scan` checks the binary again before every run; neither fetches the attestation again.
 
 **Next:** [Rules](rules.md).

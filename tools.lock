@@ -167,3 +167,37 @@ binary_sha256 = "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c50
 url = "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-arm64"
 sha256 = "f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d"
 binary_sha256 = "f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d"
+
+# zizmor audits GitHub Actions workflows, composite actions and Dependabot
+# configuration. Its release archives carry GitHub build provenance; each
+# archive below was verified with `gh attestation verify` against the
+# zizmorcore/zizmor release-binaries.yml workflow at refs/tags/v1.30.1
+# (commit 99a054ed9283c90abdd2d5b9fb5101d27dde9783) before it was pinned.
+# `install` checks the SHA-256 of the archive and of the `zizmor` binary in
+# it; it does not fetch the attestation again.
+[zizmor]
+version = "1.30.1"
+source = "https://github.com/zizmorcore/zizmor/releases/tag/v1.30.1"
+license = "MIT"
+verification = "sha256 (build provenance checked when pinned)"
+member = "zizmor"
+
+[zizmor.platforms.darwin-x86_64]
+url = "https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-x86_64-apple-darwin.tar.gz"
+sha256 = "10e6b18b11ea07e515a16f0f0518c7b07527bc9977c1fd5698181ce7f3554202"
+binary_sha256 = "ca04f59e9ccdc58eed3641abcd304a4cd37e7f416f1bfacf019da77b66d62dcb"
+
+[zizmor.platforms.darwin-arm64]
+url = "https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-aarch64-apple-darwin.tar.gz"
+sha256 = "e28d22b087f9ebb8d99da6e740d348c930f559961c7c3f12badda54f882195a2"
+binary_sha256 = "0cd1e69b329cdbc2ded5cd3b5161f21ffd89652eab6563153e4af5a69344c64d"
+
+[zizmor.platforms.linux-x86_64]
+url = "https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+sha256 = "e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a"
+binary_sha256 = "d39db5594fd89d57fdadd744079e1b3a405f24ff312714904f8bd708c69f322f"
+
+[zizmor.platforms.linux-arm64]
+url = "https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-aarch64-unknown-linux-gnu.tar.gz"
+sha256 = "7ff1dce33bdd18fd2a4affe63bdd47efcccca97b2cec1c1863ec26e9e2647540"
+binary_sha256 = "72715e768ed9eda0fb7ace42ce50168c99c9146246710858fd2daf9b31ab14b1"

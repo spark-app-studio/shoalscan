@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shoalscan import __version__, gitleaks, hadolint, opengrep
+from shoalscan import __version__, gitleaks, hadolint, opengrep, zizmor
 from shoalscan.check import CHECK_JSON
 from shoalscan.config import Config
 from shoalscan.errors import ScanError, SetupError
@@ -236,6 +236,24 @@ def run_scan(
                 "files_scanned": linted,
                 "ignore": list(config.hadolint.ignore),
                 "findings": len(lints),
+            }
+        if "zizmor" in config.scanners:
+            pin = tools.pinned.get("zizmor")
+            if pin is None:
+                raise SetupError("zizmor is enabled but tools.lock pins no zizmor")
+            audits, missed, audited, audit_rules = zizmor.run(
+                pin.path, pin.sha256, root, stage, config.limits, config.components, config.excludes, config.zizmor.ignore
+            )
+            findings += audits
+            extra_runs.append((zizmor.TOOL, pin.version, audits))
+            unscanned = {kind: [*unscanned.get(kind, []), *missed[kind]] for kind in ("skipped", "errors")}
+            meta.setdefault("rules", {}).update(audit_rules)
+            meta["scanners"]["zizmor"] = {
+                "version": pin.version,
+                "verification": "sha256",
+                "files_scanned": audited,
+                "ignore": list(config.zizmor.ignore),
+                "findings": len(audits),
             }
         sarif_text = build_sarif(sarif_source, root, sarif_index, own_findings, extra_runs)
     finally:
