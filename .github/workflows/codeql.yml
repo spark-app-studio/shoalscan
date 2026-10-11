@@ -32,6 +32,8 @@ jobs:
           languages: ${{ matrix.language }}
           # Python and workflow files are analysed from source; nothing is built.
           build-mode: none
+          # Leaves out the deliberately insecure test fixtures.
+          config-file: ./.github/codeql/codeql-config.yml
       - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           category: /language:${{ matrix.language }}
