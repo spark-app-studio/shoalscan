@@ -48,10 +48,25 @@ shoalscan check
   - a partial parse fails when an unparsed span overlaps a line the change added, or covers more than half the file, and is otherwise reported as a warning;
   - a file that matches [`parse_warn_only`](configuration.md#partial-parses) only warns about a partial parse, whatever its size or place. It is listed loudly as `PARTIALLY PARSED (warn-only by policy)` with the share of the file left unparsed and whether that overlaps the added lines, and counted in the summary. A skipped file, a timeout or any other error still fails;
   - a syntax error that Opengrep does not report (some Python parse errors) is not seen.
-- `check` refuses findings that do not match the current tree: `scan` records the HEAD tree hash and whether the working tree had changes, and any edit or commit after the scan means scanning again. `check` refuses a directory that is not a git work tree unless you pass `--no-git`; the findings are then not tied to a commit.
+- `check` refuses findings that do not match the current tree: `scan` records the HEAD tree hash and whether the working tree had changes, and any edit or commit after the scan means scanning again. The one exception is the baseline file `check` reads; see [The tree binding](#the-tree-binding). `check` refuses a directory that is not a git work tree unless you pass `--no-git`; the findings are then not tied to a commit.
 - With `--policy-ref`, changed files that the configured excludes skip are listed loudly as CHANGED BUT NOT SCANNED. They do not fail the check, but reviewers should confirm the exclusion is intended.
 
 `check` also writes `check.json` next to `findings.json`, with the lists behind the summary's counts. `shoalscan record` stores it in the history; see [The dashboard](dashboard.md#recording-a-run).
+
+## The tree binding
+
+`scan` records what it scanned: the HEAD commit and tree, whether the working tree had changes, and a digest of those changes (the full diff against HEAD, the status and the content of every untracked file). `check` computes the same values again and refuses the findings when anything differs, so findings always describe the tree being checked.
+
+The baseline file `check` reads is left out of that comparison: the `baseline` key of the configuration, or the `--baseline` path when it is inside the repository. The baseline is the input `check` compares the findings against, not something the findings describe, so writing or editing it cannot change what was scanned. This is what lets `shoalscan scan`, `shoalscan baseline init` and `shoalscan check` run in that order without a commit in between. Everything else stays strict:
+
+- Any other edit, commit or new untracked file after the scan still makes `check` refuse the findings.
+- The configuration is not left out: a change to it can change what is scanned, so it always means scanning again.
+- The exception applies only when `scan` and `check` name the same baseline file. Without a policy ref, `scan` records the configured baseline (or the `--baseline` of `baseline init`); if `check` reads another file, the comparison is fully strict.
+- If the scan reported anything in the baseline file itself (a finding, a suppression, or a skipped or unparsed file), the baseline is a scanned file like any other, and the comparison is fully strict.
+- A baseline path outside the repository, inside `.git`, reached through a symbolic link, or naming a directory is never left out. `..` in `--baseline` is resolved before the path is compared. Git renames are not paired here, so moving a file onto the baseline's path still shows as a deletion.
+- With `--policy-ref`, the comparison is fully strict, as it always was: on a pull request the baseline is part of the change under review, and scan and check run back to back.
+
+Edits to the baseline after the scan are not scanned until the next scan, but `check` still reads the edited file under its strict rules: it must be a valid baseline, and every entry must match a finding.
 
 ## Inline suppressions
 

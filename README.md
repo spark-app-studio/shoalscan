@@ -35,7 +35,7 @@ A shoal is a hidden hazard under the water. A lighthouse warns ships about it; S
 Shoalscan needs Python 3.11 or later, git, and Linux or macOS. Install it from the release, then install the pinned scanners:
 
 ```sh
-python3 -m pip install https://github.com/spark-app-studio/shoalscan/releases/download/v0.1.0/shoalscan-0.1.0-py3-none-any.whl
+python3 -m pip install https://github.com/spark-app-studio/shoalscan/releases/download/v0.1.1/shoalscan-0.1.1-py3-none-any.whl
 shoalscan install
 ```
 
@@ -46,11 +46,17 @@ excludes = ["node_modules", "vendor"]
 blocking = ["ERROR", "WARNING"]
 ```
 
-Scan, record today's findings as the baseline, and commit both files:
+Scan, record today's findings as the baseline, and check:
 
 ```sh
 shoalscan scan
 shoalscan baseline init --issue "#1" --reason "Existing findings at adoption, triaged in #1"
+shoalscan check
+```
+
+Commit both files:
+
+```sh
 git add .shoalscan.toml .shoalscan/baseline.toml && git commit -m "Adopt Shoalscan"
 ```
 
@@ -60,7 +66,7 @@ From now on, every change is scanned and checked against that baseline:
 shoalscan scan && shoalscan check
 ```
 
-`check` exits with 0 when the check passes, 1 when it fails, and 2 when the setup is broken or the scan failed. It refuses findings from before the last edit or commit, so always scan again before you check. [Getting started](docs/getting-started.md) explains each step.
+`check` exits with 0 when the check passes, 1 when it fails, and 2 when the setup is broken or the scan failed. It refuses findings from before the last commit or from before any edit other than to the baseline file, so scan again before you check. [Getting started](docs/getting-started.md) explains each step.
 
 ## Documentation
 

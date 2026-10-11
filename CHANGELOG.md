@@ -2,7 +2,11 @@
 
 All notable changes to Shoalscan are recorded here.
 
-## Unreleased
+## 0.1.1 (2026-10-11)
+
+### Fixed
+
+- `shoalscan scan`, then `shoalscan baseline init`, then `shoalscan check` no longer exits with 2. `check` refused the findings because writing the baseline changed the working tree. The baseline file `check` reads (the `baseline` key, or `--baseline` inside the repository) is now left out of the tree binding, since editing it cannot change what was scanned. Every other edit, the configuration included, still makes `check` refuse the findings; so does any finding, suppression or unscanned entry the scan reported in the baseline file itself. Under `--policy-ref` the binding is unchanged. The quickstart runs in its natural order again.
 
 ### Project
 

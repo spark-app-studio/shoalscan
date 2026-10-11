@@ -9,10 +9,10 @@ Shoalscan needs Python 3.11 or later and has no Python dependencies. It runs on 
 Each release on [GitHub](https://github.com/spark-app-studio/shoalscan/releases) carries a wheel, a source archive and a `SHA256SUMS` file. Download the wheel and the checksums, check the wheel, and install it:
 
 ```sh
-base=https://github.com/spark-app-studio/shoalscan/releases/download/v0.1.0
-curl -fsSLO "$base/shoalscan-0.1.0-py3-none-any.whl" -O "$base/SHA256SUMS"
+base=https://github.com/spark-app-studio/shoalscan/releases/download/v0.1.1
+curl -fsSLO "$base/shoalscan-0.1.1-py3-none-any.whl" -O "$base/SHA256SUMS"
 shasum -a 256 --check --ignore-missing SHA256SUMS
-python3 -m pip install ./shoalscan-0.1.0-py3-none-any.whl
+python3 -m pip install ./shoalscan-0.1.1-py3-none-any.whl
 ```
 
 You can also install the command from a commit you have reviewed:
@@ -76,14 +76,15 @@ shoalscan baseline init --issue "#123" --reason "Existing findings at adoption, 
 
 The issue can be `#123` or a URL. `baseline init` refuses to overwrite an existing baseline unless you pass `--force`. The file is sorted and deterministic, so the same scan always writes the same baseline. When there are no findings, it writes an empty baseline; commit it anyway.
 
-Commit `.shoalscan.toml` and the baseline (`.shoalscan/baseline.toml` by default). Then scan again and compare the findings with the baseline:
+Then compare the findings with the baseline:
 
 ```sh
-shoalscan scan
 shoalscan check
 ```
 
-`check` refuses findings that do not match the current tree, so scan again after any edit or commit, including the one that adds the baseline.
+`check` refuses findings that do not match the current tree, so scan again after any edit or commit. The baseline file `check` reads is the one exception: writing or editing it does not change what was scanned, so `scan`, `baseline init` and `check` work in that order without a commit in between. [The baseline and the check](baseline-and-check.md#the-tree-binding) explains why.
+
+Commit `.shoalscan.toml` and the baseline (`.shoalscan/baseline.toml` by default). From then on, run `shoalscan scan` and `shoalscan check` together on every change.
 
 Every command takes `--repo`, `--config`, `--tools-dir` and `--out` where they apply. Run `shoalscan <command> --help` for the details.
 
