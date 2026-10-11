@@ -201,3 +201,51 @@ binary_sha256 = "d39db5594fd89d57fdadd744079e1b3a405f24ff312714904f8bd708c69f322
 url = "https://github.com/zizmorcore/zizmor/releases/download/v1.30.1/zizmor-aarch64-unknown-linux-gnu.tar.gz"
 sha256 = "7ff1dce33bdd18fd2a4affe63bdd47efcccca97b2cec1c1863ec26e9e2647540"
 binary_sha256 = "72715e768ed9eda0fb7ace42ce50168c99c9146246710858fd2daf9b31ab14b1"
+
+# Trivy checks infrastructure as code (Terraform, CloudFormation, Kubernetes,
+# Helm, Dockerfiles, Azure ARM and Ansible) with its `config` command. v0.74.0
+# is pinned rather than the newest release: it had been out for two months
+# when it was pinned. Each archive's SHA-256 was checked against
+# trivy_0.74.0_checksums.txt, and its Sigstore bundle with `cosign
+# verify-blob --bundle` against the release workflow below; `install`
+# checks that signature again unless --skip-signature-check is given.
+[trivy]
+version = "0.74.0"
+source = "https://github.com/aquasecurity/trivy/releases/tag/v0.74.0"
+license = "Apache-2.0"
+verification = "sha256 and a cosign signature"
+member = "trivy"
+
+[trivy.signature]
+certificate_identity = "https://github.com/aquasecurity/trivy/.github/workflows/reusable-release.yaml@refs/tags/v0.74.0"
+certificate_oidc_issuer = "https://token.actions.githubusercontent.com"
+github_workflow_repository = "aquasecurity/trivy"
+github_workflow_sha = "e1fd17a0ea4a8cf24bc4b4dd7e2cfbf4bb31b994"
+
+[trivy.platforms.darwin-x86_64]
+url = "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_macOS-64bit.tar.gz"
+sha256 = "472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485"
+binary_sha256 = "43ae1fd02532315b44a9d0496ae06326d5a1f3496cae26499be624807813fa8c"
+bundle_url = "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_macOS-64bit.tar.gz.sigstore.json"
+bundle_sha256 = "42be6f21f1d4c093f4fda10e6fe3b23ab581f8a7b6387a54dc176e462b4696e0"
+
+[trivy.platforms.darwin-arm64]
+url = "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_macOS-ARM64.tar.gz"
+sha256 = "1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11"
+binary_sha256 = "0ed07c205ca9ecc1065dc57b9f9f77adc79393bb469d9d1de9ec90c8c94ffc2f"
+bundle_url = "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_macOS-ARM64.tar.gz.sigstore.json"
+bundle_sha256 = "3d0fbe2d9a4dd43fb973443109916c62d3062bd5c60de9a0d0150dd7876b24ce"
+
+[trivy.platforms.linux-x86_64]
+url = "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz"
+sha256 = "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a"
+binary_sha256 = "d89bcc6510a267f11b773398cbf1be5520ce39f9e8b6633178c4487f05b7d791"
+bundle_url = "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-64bit.tar.gz.sigstore.json"
+bundle_sha256 = "da49092f6909bbbe943255ac8ec4c4cee503a05576c5dd20dc2fd9fc49c07779"
+
+[trivy.platforms.linux-arm64]
+url = "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-ARM64.tar.gz"
+sha256 = "b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5"
+binary_sha256 = "fed2c9ca7d27191ada34524b5eaf5216a845c6d6f3246143c3b475552ffe5358"
+bundle_url = "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-ARM64.tar.gz.sigstore.json"
+bundle_sha256 = "f74491a5b45a4941426372f5c6a6e7a5bff99a6ed3a098bfa1bf6826656b17a5"

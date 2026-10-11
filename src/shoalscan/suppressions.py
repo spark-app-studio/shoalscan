@@ -20,6 +20,12 @@ or a URL), as in `<marker>: shoalscan.plain-http-url #123 local test server`.
 Anything else is a finding that blocks; a bare marker is reported as bare.
 Every suppression is counted. This module spells the markers in pieces so
 that its own source carries none.
+
+Trivy has its own inline marker, the word "trivy" then ":ignore:" and a
+check id, in a comment in the file it applies to; `*` in place of the id
+silences every check. Trivy cannot be told to disregard these, so Shoalscan
+holds them to the same rule: a specific check id and an issue on the same
+line, or a blocking finding. A `*` is reported like a bare marker.
 """
 
 from __future__ import annotations
@@ -53,6 +59,11 @@ _INLINE = re.compile(
     re.IGNORECASE,
 )
 _VALID_ID = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-/:]*$", re.ASCII)
+TRIVY_MARKER = "trivy" + ":ignore:"
+TRIVY_EXAMPLE = "#" + TRIVY_MARKER + "<check-id> #<issue> <reason>"
+# Matched anywhere on a line: reporting a marker Trivy would not honour is safer than missing one it would.
+_TRIVY = re.compile(re.escape(TRIVY_MARKER) + r"(?P<id>[^\s:\[\]]*)", re.ASCII)
+_TRIVY_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*$", re.ASCII)
 _ISSUE = re.compile(r"(?<![\w&])#\d+\b|https?://[^\s)\]>\"']+", re.ASCII)
 
 
@@ -64,6 +75,7 @@ class Suppression:
     rule_ids: tuple[str, ...]
     issue: str | None
     bare: bool
+    kind: str = "opengrep"  # whose marker: "opengrep" or "trivy"
 
     @property
     def valid(self) -> bool:
@@ -72,6 +84,8 @@ class Suppression:
         )
 
     def problem(self) -> str:
+        if self.bare and self.kind == "trivy":
+            return "a Trivy suppression of every check (*)"
         if self.bare:
             return "a bare suppression (it silences every rule on the line)"
         if not self.rule_ids or not all(_VALID_ID.match(i) for i in self.rule_ids):
@@ -125,6 +139,38 @@ def find_suppressions(root: Path, rel_paths: list[str], max_bytes: int) -> list[
     return found
 
 
+def parse_trivy_line(text: str) -> list[tuple[tuple[str, ...], str | None, bool]]:
+    """Return (check ids, issue, bare) for each Trivy marker on a line."""
+    out = []
+    for match in _TRIVY.finditer(text):
+        check = match.group("id")
+        issue = _ISSUE.search(text, match.end())
+        if check == "*":
+            out.append(((), None, True))
+        else:
+            out.append(((check,) if _TRIVY_ID.match(check) else ("",), issue.group(0) if issue else None, False))
+    return out
+
+
+def find_trivy_suppressions(root: Path, rel_paths: list[str], max_bytes: int) -> list[Suppression]:
+    """Find Trivy markers in the given files."""
+    found = []
+    for rel in sorted(set(rel_paths)):
+        full = root / rel
+        try:
+            if full.is_symlink() or not full.is_file() or full.stat().st_size > max_bytes:
+                continue
+            data = full.read_bytes()
+        except OSError:
+            continue
+        if TRIVY_MARKER.encode() not in data:
+            continue
+        for number, line in enumerate(split_lines(data.decode("utf-8", errors="replace")), start=1):
+            for ids, issue, bare in parse_trivy_line(line):
+                found.append(Suppression(rel, number, line.strip(), ids, issue, bare, kind="trivy"))
+    return found
+
+
 def lint_findings(suppressions: list[Suppression], components: dict[str, str]) -> list[Finding]:
     bad = [s for s in suppressions if not s.valid]
     items = [{"tool": LINT_TOOL, "rule": LINT_RULE, "path": s.path, "code": s.text, "line": s.line} for s in bad]
@@ -139,7 +185,9 @@ def lint_findings(suppressions: list[Suppression], components: dict[str, str]) -
             fingerprint=fp,
             component=component_for(s.path, components),
             message=(
-                f"This line holds {s.problem()}. Write it as `{EXAMPLE}`, with the colon right after the "
+                f"This line holds {s.problem()}. Write it as `{TRIVY_EXAMPLE}`, naming one check."
+                if s.kind == "trivy"
+                else f"This line holds {s.problem()}. Write it as `{EXAMPLE}`, with the colon right after the "
                 "marker and one space before the rule id."
             ),
         )

@@ -105,4 +105,4 @@ The page also lists:
 1. Opengrep: install, scan, baseline and check, with CI examples for GitHub Actions and a plain shell runner.
 2. History, `record` and the dashboard, fed by a nightly scan of the default branch.
 3. Triage and report, and the first triage pass.
-4. More scanners: gitleaks, zizmor, hadolint, trivy config and clippy security lints.
+4. More scanners: gitleaks, zizmor, hadolint and trivy config. Clippy's security lints are left out: running them compiles the scanned crate, which executes its build scripts and procedural macros, and fetches its dependencies.

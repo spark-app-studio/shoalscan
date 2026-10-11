@@ -1003,7 +1003,7 @@
     e.name.focus();
   }
 
-  var SCANNER_NAMES = { opengrep: "Opengrep", gitleaks: "Gitleaks", hadolint: "Hadolint", zizmor: "zizmor" };
+  var SCANNER_NAMES = { opengrep: "Opengrep", gitleaks: "Gitleaks", hadolint: "Hadolint", zizmor: "zizmor", trivy: "Trivy" };
 
   function scannerLabel(name) { return SCANNER_NAMES[name] || name; }
 

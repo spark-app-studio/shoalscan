@@ -58,6 +58,8 @@ class ToolPlatform:
 
     download: Asset
     binary_sha256: str
+    # A Sigstore bundle for the download, when the tool's table has a [<name>.signature].
+    bundle: Asset | None = None
 
 
 @dataclass(frozen=True)
@@ -75,10 +77,12 @@ class PinnedTool:
     member: str | None
     platforms: dict[str, ToolPlatform]
     files: dict[str, Asset]
+    # The release workflow identity `cosign verify-blob --bundle` checks at install, if any.
+    signature: OpengrepSignature | None = None
 
 
 # Scanners pinned in their own [<name>] table, and the extra files each needs.
-PINNED_TOOLS: dict[str, tuple[str, ...]] = {"gitleaks": ("config",), "hadolint": (), "zizmor": ()}
+PINNED_TOOLS: dict[str, tuple[str, ...]] = {"gitleaks": ("config",), "hadolint": (), "zizmor": (), "trivy": ()}
 
 
 @dataclass(frozen=True)
@@ -161,33 +165,51 @@ def _platforms(data: object, where: str) -> dict:
     return data
 
 
+def _signature(data: object, where: str) -> OpengrepSignature:
+    """A release workflow identity for cosign: the certificate identity and issuer, and the workflow's repository and commit."""
+    sig = _table(data, f"[{where}]", {"certificate_identity", "certificate_oidc_issuer", "github_workflow_repository", "github_workflow_sha"})
+    signature = OpengrepSignature(
+        certificate_identity=_url(sig, "certificate_identity", where),
+        certificate_oidc_issuer=_url(sig, "certificate_oidc_issuer", where),
+        github_workflow_repository=_str(sig, "github_workflow_repository", where),
+        github_workflow_sha=_str(sig, "github_workflow_sha", where),
+    )
+    if not COMMIT_RE.match(signature.github_workflow_sha):
+        raise SetupError(f"tools.lock: {where}.github_workflow_sha must be a 40-character commit")
+    return signature
+
+
 _MEMBER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*(/[A-Za-z0-9_][A-Za-z0-9_.\-]*)*$")
 
 
 def _pinned_tool(name: str, data: object, extra_files: tuple[str, ...]) -> PinnedTool:
     where = f"[{name}]"
     keys = {"version", "source", "license", "verification", "platforms", *extra_files}
-    # `member` is there only when the download is an archive.
-    if isinstance(data, dict) and "member" in data:
-        keys.add("member")
+    # `member` is there only when the download is an archive, `signature` only when releases are signed.
+    for optional in ("member", "signature"):
+        if isinstance(data, dict) and optional in data:
+            keys.add(optional)
     tool = _table(data, where, keys)
     member = tool.get("member")
     if member is not None and (not isinstance(member, str) or not _MEMBER_RE.match(member) or ".." in member.split("/")):
         raise SetupError(f"tools.lock: {name}.member must be a relative path inside the archive")
     _url(tool, "source", name)
     _str(tool, "verification", name)
+    signature = _signature(tool["signature"], f"{name}.signature") if "signature" in tool else None
     platforms = {}
+    platform_keys = {"url", "sha256", "binary_sha256"} | ({"bundle_url", "bundle_sha256"} if signature else set())
     for plat, entry in _platforms(tool["platforms"], f"[{name}.platforms]").items():
         pwhere = f"{name}.platforms.{plat}"
-        entry = _table(entry, f"[{pwhere}]", {"url", "sha256", "binary_sha256"})
-        platforms[plat] = ToolPlatform(Asset(_url(entry, "url", pwhere), _sha(entry, "sha256", pwhere)), _sha(entry, "binary_sha256", pwhere))
+        entry = _table(entry, f"[{pwhere}]", platform_keys)
+        bundle = Asset(_url(entry, "bundle_url", pwhere), _sha(entry, "bundle_sha256", pwhere)) if signature else None
+        platforms[plat] = ToolPlatform(Asset(_url(entry, "url", pwhere), _sha(entry, "sha256", pwhere)), _sha(entry, "binary_sha256", pwhere), bundle)
         if not member and platforms[plat].binary_sha256 != platforms[plat].download.sha256:
             raise SetupError(f"tools.lock: {pwhere}.binary_sha256 must equal sha256 when the download is the binary itself")
     files = {}
     for extra in extra_files:
         entry = _table(tool[extra], f"[{name}.{extra}]", {"url", "sha256"})
         files[extra] = Asset(_url(entry, "url", f"{name}.{extra}"), _sha(entry, "sha256", f"{name}.{extra}"))
-    return PinnedTool(name, _str(tool, "version", name), _str(tool, "license", name), member, platforms, files)
+    return PinnedTool(name, _str(tool, "version", name), _str(tool, "license", name), member, platforms, files, signature)
 
 
 def parse_lock(data: dict) -> Lock:
@@ -199,19 +221,7 @@ def parse_lock(data: dict) -> Lock:
         raise SetupError("tools.lock: unsupported lock_version (expected 1)")
 
     og = _table(top["opengrep"], "[opengrep]", {"version", "source", "license", "signature", "platforms"})
-    sig = _table(
-        og["signature"],
-        "[opengrep.signature]",
-        {"certificate_identity", "certificate_oidc_issuer", "github_workflow_repository", "github_workflow_sha"},
-    )
-    signature = OpengrepSignature(
-        certificate_identity=_url(sig, "certificate_identity", "opengrep.signature"),
-        certificate_oidc_issuer=_url(sig, "certificate_oidc_issuer", "opengrep.signature"),
-        github_workflow_repository=_str(sig, "github_workflow_repository", "opengrep.signature"),
-        github_workflow_sha=_str(sig, "github_workflow_sha", "opengrep.signature"),
-    )
-    if not COMMIT_RE.match(signature.github_workflow_sha):
-        raise SetupError("tools.lock: opengrep.signature.github_workflow_sha must be a 40-character commit")
+    signature = _signature(og["signature"], "opengrep.signature")
     opengrep = {}
     for name, entry in _platforms(og["platforms"], "[opengrep.platforms]").items():
         where = f"opengrep.platforms.{name}"

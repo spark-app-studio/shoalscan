@@ -110,6 +110,10 @@ def make_lock(assets: Assets, tarball: bytes, binary=b"opengrep-binary", cosign=
     archive = tool_tarball({"zizmor": b"zizmor-binary"})
     blobs[zz["url"]] = archive
     zz["sha256"], zz["binary_sha256"] = sha(archive), sha(b"zizmor-binary")
+    tv = data["trivy"]["platforms"][PLAT]
+    archive = tool_tarball({"trivy": b"trivy-binary"})
+    blobs[tv["url"]], blobs[tv["bundle_url"]] = archive, b"bundle"
+    tv["sha256"], tv["binary_sha256"], tv["bundle_sha256"] = sha(archive), sha(b"trivy-binary"), sha(b"bundle")
     assets.files.update(blobs)
     return parse_lock(data)
 
@@ -157,6 +161,7 @@ class InstallTests(unittest.TestCase):
         self.assets = Assets()
         self.lock = make_lock(self.assets, rules_tarball())
         self.signature_checks = []
+        self.bundle_checks = []
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -164,11 +169,15 @@ class InstallTests(unittest.TestCase):
     def accept_signature(self, cosign, blob, sig, cert, identity):
         self.signature_checks.append((cosign.name, blob.read_bytes(), identity.certificate_identity))
 
+    def accept_bundle(self, cosign, blob, bundle, identity):
+        self.bundle_checks.append((cosign.name, bundle.read_bytes(), identity.certificate_identity))
+
     def reject_signature(self, *args):
         raise VerificationError("cosign signature verification failed")
 
     def run_install(self, **kwargs):
         kwargs.setdefault("verify_signature", self.accept_signature)
+        kwargs.setdefault("verify_bundle", self.accept_bundle)
         with redirect_stderr(io.StringIO()) as err:
             inst.install(self.dir, self.lock, fetch=self.assets.fetch, plat=PLAT, **kwargs)
         return err.getvalue()
@@ -290,7 +299,8 @@ class InstallTests(unittest.TestCase):
         object.__setattr__(lock.rules, "files_sha256", "0" * 64)
         with self.assertRaises(VerificationError):
             with redirect_stderr(io.StringIO()):
-                inst.install(self.dir, lock, fetch=self.assets.fetch, plat=PLAT, verify_signature=self.accept_signature)
+                inst.install(self.dir, lock, fetch=self.assets.fetch, plat=PLAT, verify_signature=self.accept_signature,
+                             verify_bundle=self.accept_bundle)
         self.assertFalse(inst.community_rules_path(self.dir).exists())
 
     def test_archive_path_escape_is_refused(self):

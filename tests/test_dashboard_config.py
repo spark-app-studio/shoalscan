@@ -119,7 +119,7 @@ class ConfigApiTests(unittest.TestCase):
         page = editor.page(lambda name: None, [])
         t = page["targets"][0]
         self.assertEqual((t["scanners"], t["policy"], t["policy_scanners"]), (["opengrep", "gitleaks", "zizmor"], body, ["opengrep", "gitleaks", "zizmor"]))
-        self.assertEqual([s["name"] for s in page["scanners"]], ["opengrep", "gitleaks", "hadolint", "zizmor"])
+        self.assertEqual([s["name"] for s in page["scanners"]], ["opengrep", "gitleaks", "hadolint", "zizmor", "trivy"])
         self.assertTrue(all(set(s) == {"name", "version", "installed"} for s in page["scanners"]))
         diff = json.loads(self.audit()[-1][3])
         self.assertEqual(diff["scanners"], [None, ["opengrep", "gitleaks", "zizmor"]])
