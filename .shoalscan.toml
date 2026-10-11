@@ -1,0 +1,14 @@
+# Shoalscan scans itself with this configuration.
+
+# Rule tests and the end-to-end sample contain insecure code on purpose. The
+# rules are checked with `opengrep scan --test rules/` instead.
+excludes = [
+  "rules/",
+  "tests/data/",
+]
+baseline = ".shoalscan/baseline.toml"
+
+[components]
+"src/" = "cli"
+"tests/" = "tests"
+"examples/" = "examples"

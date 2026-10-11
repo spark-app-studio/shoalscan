@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+/tools/
+/.shoalscan-out/
+*.sqlite3
+.DS_Store
+/.shoalscan/tools/
+build/
+*.egg-info/

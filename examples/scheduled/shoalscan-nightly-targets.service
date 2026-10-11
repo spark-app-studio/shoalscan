@@ -1,0 +1,23 @@
+# One nightly job for every repository registered in the dashboard's
+# scan_targets.toml with nightly = true, started by
+# shoalscan-nightly-targets.timer. It uses the same worker, lock and audit
+# as the dashboard's Run a fresh scan.
+#
+#   1. Edit the path to shoalscan below.
+#   2. Copy both files to ~/.config/systemd/user/
+#   3. systemctl --user daemon-reload
+#      systemctl --user enable --now shoalscan-nightly-targets.timer
+
+[Unit]
+Description=Shoalscan nightly scans of the registered repositories
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.cache/shoalscan/venv/bin/shoalscan scanjob --nightly --state-dir %h/.config/shoalscan/dashboard
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+TimeoutStartSec=12h

@@ -1,0 +1,13 @@
+blocking = ["ERROR", "WARNING"]
+baseline = "baseline.toml"
+
+[opengrep]
+community_rules = false
+shoalscan_rules = true
+
+[components]
+"src/" = "app"
+
+[limits]
+scan_timeout_seconds = 300
+jobs = 2

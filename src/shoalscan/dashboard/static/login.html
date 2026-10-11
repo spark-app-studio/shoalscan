@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin">
+<title>Shoalscan: log in</title>
+<link rel="icon" href="/static/shoalscan-icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/login.js" defer></script>
+</head>
+<body class="login-page">
+<main class="login-card">
+  <img src="/static/shoalscan-icon.svg" alt="" width="96" height="96">
+  <h1>Shoalscan</h1>
+  <p class="muted">Enter the dashboard token. <code>shoalscan serve token</code> makes a new one.</p>
+  <p id="login-error" class="error" role="alert" hidden></p>
+  <form method="post" action="/login" autocomplete="off">
+    <label for="token">Token</label>
+    <input id="token" name="token" type="password" required maxlength="128" autocomplete="current-password" spellcheck="false">
+    <button type="submit">Log in</button>
+  </form>
+</main>
+</body>
+</html>

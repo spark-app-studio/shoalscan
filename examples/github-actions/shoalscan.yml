@@ -1,0 +1,93 @@
+# Shoalscan on GitHub Actions.
+#
+# Copy this file to .github/workflows/shoalscan.yml in the repository you
+# want to scan. Every action is pinned to a full commit SHA; the comment
+# after each SHA names the release it came from. Update them together, on
+# purpose, in a reviewed change.
+#
+# The job needs no secrets. It reads the code, downloads the pinned tools
+# (verified by SHA-256 and, for Opengrep, by its cosign signature), scans
+# offline and compares the findings with the baseline.
+#
+# On a pull request the configuration, the baseline and the repository's own
+# rule directories come from the base branch (--policy-ref), so a pull
+# request cannot relax its own checks. Put those files, and this workflow,
+# under CODEOWNERS (see examples/CODEOWNERS).
+
+name: shoalscan
+
+on:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *" # nightly full scan of the default branch, for the trend
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write # only for the SARIF upload step
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the base commit is needed for --policy-ref
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # Install Shoalscan from a pinned commit. Replace the SHA with the
+      # Shoalscan commit you have reviewed.
+      - name: Install Shoalscan
+        run: python -m pip install --no-deps "shoalscan @ git+https://github.com/spark-app-studio/shoalscan@0000000000000000000000000000000000000000"
+
+      - name: Install the pinned scanners
+        run: shoalscan install --dir "$RUNNER_TEMP/shoalscan-tools"
+
+      # On a pull request, read the policy from the base commit, by its full
+      # SHA: a short name such as origin/main could be shadowed by a tag. The
+      # SHA reaches the shell as an environment variable, never as template
+      # text.
+      - name: Scan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          policy=()
+          if [ -n "$BASE_SHA" ]; then policy=(--policy-ref "$BASE_SHA"); fi
+          shoalscan scan --tools-dir "$RUNNER_TEMP/shoalscan-tools" --out "$RUNNER_TEMP/shoalscan-out" "${policy[@]}"
+
+      - name: Check against the baseline
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          policy=()
+          if [ -n "$BASE_SHA" ]; then policy=(--policy-ref "$BASE_SHA"); fi
+          shoalscan check --out "$RUNNER_TEMP/shoalscan-out" "${policy[@]}"
+
+      # hashFiles() only sees the workspace, so test for the file in a step.
+      - name: Find the SARIF file
+        id: sarif
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f "$RUNNER_TEMP/shoalscan-out/findings.sarif" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Upload SARIF to code scanning
+        if: ${{ !cancelled() && steps.sarif.outputs.present == 'true' }}
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: ${{ runner.temp }}/shoalscan-out/findings.sarif
+          category: shoalscan
+
+      - name: Keep the findings
+        if: ${{ !cancelled() && steps.sarif.outputs.present == 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shoalscan-findings
+          path: ${{ runner.temp }}/shoalscan-out/
+          retention-days: 30

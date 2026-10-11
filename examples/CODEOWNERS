@@ -1,0 +1,8 @@
+# Shoalscan's policy files decide what fails a pull request. Require a review
+# from the people who own security for every change to them. Copy these lines
+# into .github/CODEOWNERS and replace the team name.
+
+/.shoalscan.toml                     @your-org/security
+/.shoalscan/                         @your-org/security
+/security/rules/                     @your-org/security
+/.github/workflows/shoalscan.yml     @your-org/security

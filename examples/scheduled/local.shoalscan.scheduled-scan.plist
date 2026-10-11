@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  A nightly Shoalscan scan on macOS, as a per-user launchd agent.
+
+  1. Replace /Users/you, the clone path and SHOALSCAN_SPEC below.
+  2. Copy this file to ~/Library/LaunchAgents/local.shoalscan.scheduled-scan.plist
+  3. launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.shoalscan.scheduled-scan.plist
+
+  Run it once by hand with: launchctl kickstart gui/$(id -u)/local.shoalscan.scheduled-scan
+  launchd runs a job missed while the Mac slept when it wakes.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.shoalscan.scheduled-scan</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/you/shoalscan/examples/scheduled-scan.sh</string>
+    <string>/Users/you/scans/project</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>SHOALSCAN_SPEC</key>
+    <string>shoalscan @ git+https://github.com/spark-app-studio/shoalscan@COMMIT_SHA</string>
+    <key>SHOALSCAN_REPO_NAME</key>
+    <string>owner/project</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>2</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/you/Library/Logs/shoalscan-scheduled-scan.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/Library/Logs/shoalscan-scheduled-scan.log</string>
+</dict>
+</plist>

@@ -1,0 +1,100 @@
+# Shoalscan tools lock.
+#
+# Every file that `shoalscan install` downloads is pinned here by version and
+# SHA-256. A download whose SHA-256 differs is refused. Opengrep binaries are
+# also checked with `cosign verify-blob` against the certificate identity of
+# the Opengrep release workflow below.
+#
+# To update a pin, download the new asset, compute its SHA-256 yourself, check
+# it against the project's published checksums or signature, and change the
+# version, URLs and hashes together in one reviewed commit.
+
+lock_version = 1
+
+[opengrep]
+version = "1.30.2"
+source = "https://github.com/opengrep/opengrep/releases/tag/v1.30.2"
+license = "LGPL-2.1"
+
+# The release binaries are signed keylessly by the release workflow. The
+# certificate names the workflow on the release branch, and the workflow commit
+# is the commit that the v1.30.2 tag points to.
+[opengrep.signature]
+certificate_identity = "https://github.com/opengrep/opengrep/.github/workflows/rolling-release.yml@refs/heads/release-v1.30.2"
+certificate_oidc_issuer = "https://token.actions.githubusercontent.com"
+github_workflow_repository = "opengrep/opengrep"
+github_workflow_sha = "062fc871dbe9951887d0b985ea30977d3c36d315"
+
+[opengrep.platforms.darwin-x86_64]
+url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_osx_x86"
+sha256 = "fcf47da30d5c3a11119f2ec4e0d1ee55e3c3822e8f90d909bf9f33dfce99044a"
+signature_url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_osx_x86.sig"
+signature_sha256 = "e209451af0ba5cb504fad16db57f063da4c87b94d4ae891c1d4f138f784ce84a"
+certificate_url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_osx_x86.cert"
+certificate_sha256 = "fd123426f95e348cae8eb26959943ddde088eaf08ba6e94a08577a719785fb7e"
+
+[opengrep.platforms.darwin-arm64]
+url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_osx_arm64"
+sha256 = "f1aaa30b88959cb82522c4e1475816278a1f161f994509a518453c0455f9d24b"
+signature_url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_osx_arm64.sig"
+signature_sha256 = "f28cf33b6778ff68be838d860ab7c01e735e61f19efb483552e870582b50c08c"
+certificate_url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_osx_arm64.cert"
+certificate_sha256 = "47e345264283346a7a4289ee596515dd619b48fe0f1e85cc6924707dffdb8c5e"
+
+[opengrep.platforms.linux-x86_64]
+url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_manylinux_x86"
+sha256 = "a66aa3278457f02b287b985a45b6762aebcaba5000f2689245fd1ed86d1456c7"
+signature_url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_manylinux_x86.sig"
+signature_sha256 = "135e38f7fb97a75c2dc8d35d6c2ab49b5dcde7d361236f5bdc17b829c4d0975b"
+certificate_url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_manylinux_x86.cert"
+certificate_sha256 = "c5a06c611bd2c6bd96380e9e40c4f82f25bbb31de6d6b1e7458c3f8a96be9aa0"
+
+[opengrep.platforms.linux-arm64]
+url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_manylinux_aarch64"
+sha256 = "90acea5df4b733083f388d4feeb250ca802f671b33d1f222653d1e571dd2b0d8"
+signature_url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_manylinux_aarch64.sig"
+signature_sha256 = "e2a84ecb3a09968fcdbc8bbbaa91ec60aed441235f83710ebfe66e46e0713cd6"
+certificate_url = "https://github.com/opengrep/opengrep/releases/download/v1.30.2/opengrep_manylinux_aarch64.cert"
+certificate_sha256 = "7085cb3cfc91e159d70b8ececc94c11a763afd10c01d27ce1d214c845ff90b49"
+
+[cosign]
+version = "3.1.3"
+source = "https://github.com/sigstore/cosign/releases/tag/v3.1.3"
+# The hashes below come from this file, which is itself signed by the
+# Sigstore project (cosign_checksums.txt.sigstore.json), and were checked
+# against the downloaded binaries.
+checksums_url = "https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign_checksums.txt"
+license = "Apache-2.0"
+
+[cosign.platforms.darwin-x86_64]
+url = "https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-darwin-amd64"
+sha256 = "2347488e5d5b25336644024dfeca5601b190e91197a71a917bda44744aff106c"
+
+[cosign.platforms.darwin-arm64]
+url = "https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-darwin-arm64"
+sha256 = "5cf948c2f4dfe59687bdd0b8523709067383e03982cc543475c8a7dc70e92a76"
+
+[cosign.platforms.linux-x86_64]
+url = "https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-amd64"
+sha256 = "4629c757b7618056f8ddd7e2625ae9fdd94c0372a65049520bc7d9df9efc7f71"
+
+[cosign.platforms.linux-arm64]
+url = "https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-arm64"
+sha256 = "c5d324e091826b0d7a78eb16fef316450b4eb9aaec045611c08ba06f5e73220a"
+
+# The opengrep-rules repository is archived. This is its final commit.
+[rules]
+name = "opengrep-rules"
+repository = "https://github.com/opengrep/opengrep-rules"
+commit = "f1d2b562b414783763fd02a6ed2736eaed622efa"
+url = "https://codeload.github.com/opengrep/opengrep-rules/tar.gz/f1d2b562b414783763fd02a6ed2736eaed622efa"
+sha256 = "9a5f1cd5c625418cc1c776120123e2d4371df9bb66e099426b17c3488e13619d"
+license = "LGPL-2.1 with the Commons Clause"
+# Only these top-level directories are extracted. yaml/ includes
+# yaml/github-actions.
+languages = ["python", "javascript", "typescript", "rust", "bash", "dockerfile", "yaml", "generic"]
+# SHA-256 of the sorted list of "<path>\t<sha256>\n" lines for every file
+# that install extracts (the rule files for the languages above and LICENSE).
+# Installed rules are checked against this value, never against a file in
+# the tools directory.
+files_sha256 = "a68b561be77859f3987e0beb4b8f579083824a04eaf5bcc755c0e19a33bcf5e9"

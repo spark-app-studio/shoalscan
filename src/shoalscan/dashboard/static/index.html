@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin">
+<title>Shoalscan dashboard</title>
+<link rel="icon" href="/static/shoalscan-icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/model.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/overview"><img src="/static/shoalscan-icon.svg" alt="" width="32" height="32"><span>Shoalscan</span></a>
+  <nav aria-label="Pages">
+    <a href="#/overview" data-view="overview">Overview</a>
+    <a href="#/findings" data-view="findings">Findings</a>
+    <a href="#/runs" data-view="runs">Runs</a>
+    <a href="#/config" data-view="config" id="nav-config" hidden>Configuration</a>
+    <a href="#/about" data-view="about">About</a>
+  </nav>
+  <div class="top-right">
+    <label class="repo-picker">Repository <select id="repo"></select></label>
+    <button id="logout" type="button" class="secondary">Log out</button>
+  </div>
+</header>
+
+<main>
+  <p id="status" class="muted" role="status"></p>
+
+  <section id="view-overview" hidden>
+    <h1>Overview</h1>
+    <p class="muted" id="trend-note"></p>
+    <section class="status-panel" id="latest-status" aria-label="Latest run"></section>
+    <section class="blocking-panel" id="blocking-panel" aria-labelledby="blocking-title">
+      <div class="blocking-head">
+        <h2 id="blocking-title">Blocking findings</h2>
+        <p class="muted small">Findings with a blocking severity outside the non-blocking paths, in the latest trend run. New ones fail pull requests; baselined ones are the backlog to burn down.</p>
+      </div>
+      <div class="blocking-body">
+        <div id="blocking-counts" class="blocking-counts"></div>
+        <figure class="blocking-trend"><figcaption class="small muted">Blocking findings over the scheduled runs</figcaption><div id="blocking-spark" class="chart"></div></figure>
+      </div>
+      <ol id="blocking-top" class="blocking-top" aria-label="Fix these first"></ol>
+      <p id="blocking-all"></p>
+    </section>
+    <figure class="card heat-panel" aria-labelledby="heat-title"><figcaption id="heat-title">Where the findings are: components by heat (latest trend run)</figcaption>
+      <p class="muted small">Heat score = ERROR &times; 10 + WARNING &times; 3 + INFO. Components with new blocking findings come first.</p>
+      <div id="chart-components" class="chart"></div>
+      <p><button type="button" id="heat-toggle" class="secondary" hidden></button></p></figure>
+    <div class="tiles" id="tiles"></div>
+    <div class="grid">
+      <figure class="card wide"><figcaption>Open findings by severity</figcaption><div id="chart-open" class="chart"></div></figure>
+      <figure class="card"><figcaption>Baseline size (burn-down)</figcaption><div id="chart-baseline" class="chart"></div></figure>
+      <figure class="card"><figcaption>New and fixed findings per week</figcaption><div id="chart-weekly" class="chart"></div></figure>
+      <figure class="card"><figcaption>Age of open findings</figcaption><div id="chart-age" class="chart"></div></figure>
+      <figure class="card"><figcaption>Inline suppressions</figcaption><div id="chart-suppressions" class="chart"></div></figure>
+      <figure class="card"><figcaption>Files not fully scanned</figcaption><div id="chart-unscanned" class="chart"></div></figure>
+    </div>
+  </section>
+
+  <section id="view-findings" hidden>
+    <h1>Findings</h1>
+    <p class="muted" id="findings-note"></p>
+    <ul class="chips" id="findings-chips" aria-label="Active filters"></ul>
+    <form id="filters" class="filters">
+      <label>Severity <select name="severity"></select></label>
+      <label>Rule <select name="rule"></select></label>
+      <label>Component <select name="component"></select></label>
+      <label>Path contains <input name="path" type="search" maxlength="200" spellcheck="false"></label>
+      <label>Age <select name="age">
+        <option value="">Any</option><option value="0">0-7 days</option><option value="1">8-30 days</option>
+        <option value="2">31-90 days</option><option value="3">91-365 days</option><option value="4">over a year</option>
+      </select></label>
+      <label class="check"><input name="new" type="checkbox" value="1"> New only</label>
+      <label class="check"><input name="new_blocking" type="checkbox" value="1"> New and blocking only</label>
+      <label class="check"><input name="blocking" type="checkbox" value="1"> Blocking only</label>
+      <label>Review status <select name="review"></select></label>
+      <label>Sort <select name="sort"><option value="">Severity and path</option><option value="priority">Fix priority</option></select></label>
+      <button type="submit">Filter</button>
+      <button type="reset" class="secondary">Clear</button>
+    </form>
+    <form id="bulk-review" class="bulk-review" hidden>
+      <strong id="bulk-count"></strong>
+      <label>Mark as <select name="status"></select></label>
+      <label>Description (10 to 2000 characters) <textarea name="description" rows="2" maxlength="2000" required></textarea></label>
+      <button type="submit">Apply</button>
+      <span id="bulk-message" role="status"></span>
+    </form>
+    <div class="table-wrap"><table id="findings-table" class="data">
+      <thead><tr><th><input type="checkbox" id="findings-all" aria-label="Select every finding on this page"></th><th>Severity</th><th>Rule</th><th>Component</th><th>Location</th><th>First seen</th><th>New</th><th>Status</th><th>Resolved</th><th>Review</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="pager" id="findings-pager"></div>
+  </section>
+
+  <section id="view-finding" hidden>
+    <p><a id="finding-back">&larr; Back to findings</a></p>
+    <h1 id="finding-title" class="mono"></h1>
+    <dl class="facts" id="finding-facts"></dl>
+    <p class="message" id="finding-message"></p>
+    <section class="review-panel" aria-labelledby="review-title">
+      <h2 id="review-title">Review</h2>
+      <p id="review-current"></p>
+      <p id="review-baseline" class="muted"></p>
+      <form id="review-form" class="config-form">
+        <label>Status <select name="status"></select></label>
+        <label>Description (required, 10 to 2000 characters)
+          <textarea name="description" rows="4" maxlength="2000" required></textarea></label>
+        <p class="muted small">A review records your judgement on the dashboard. It does not change what blocks CI: that is the baseline's job.</p>
+        <p class="error" id="review-error" role="alert"></p>
+        <p><button type="submit">Save review</button></p>
+      </form>
+      <h3>History</h3>
+      <ol id="review-history" class="review-history"></ol>
+    </section>
+  </section>
+
+  <section id="view-rule" hidden>
+    <p><a href="#/findings">&larr; Back to findings</a></p>
+    <h1 id="rule-title" class="mono"></h1>
+    <div id="rule-messages"></div>
+    <h2>Where it was found</h2>
+    <div class="table-wrap"><table id="rule-table" class="data">
+      <thead><tr><th>Severity</th><th>Component</th><th>Location</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-runs" hidden>
+    <h1>Runs</h1>
+    <section id="scan-panel" class="scan-panel" hidden aria-labelledby="scan-title">
+      <h2 id="scan-title">Run a fresh scan</h2>
+      <form id="scan-form" class="filters">
+        <label>Target <select id="scan-target" name="target"></select></label>
+        <button type="submit" id="scan-start">Run a fresh scan</button>
+      </form>
+      <p id="scan-state" role="status" class="muted"></p>
+      <p id="scan-result"></p>
+      <pre id="scan-log" class="scan-log" hidden></pre>
+      <details id="scan-history">
+        <summary>Scans started from here, the command line or the nightly job</summary>
+        <div class="table-wrap"><table id="scan-triggers" class="data">
+          <thead><tr><th>Started</th><th>Target</th><th>Who</th><th>Outcome</th><th>Run</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </details>
+    </section>
+    <section id="run-detail" class="run-detail" hidden aria-label="Run detail"></section>
+    <p id="runs-deleted" class="muted small"></p>
+    <div class="table-wrap"><table id="runs-table" class="data">
+      <thead><tr><th>Run</th><th>Scanned</th><th>Kind</th><th>Ref</th><th>Commit</th><th>Status</th><th class="num">ERROR</th><th class="num">WARNING</th><th class="num">INFO</th><th class="num">New</th><th class="num">New blocking</th><th class="num">Stale</th><th class="num">Baseline</th><th class="num">Suppressions</th><th class="num">Not fully scanned</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="pager" id="runs-pager"></div>
+  </section>
+
+  <section id="view-stale" hidden>
+    <h1>Stale baseline entries</h1>
+    <p class="muted" id="stale-note"></p>
+    <div class="table-wrap"><table id="stale-table" class="data">
+      <thead><tr><th>Location</th><th>Rule</th><th>Fingerprint</th><th>Issue</th><th>Reason</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-files" hidden>
+    <h1>Files not fully scanned</h1>
+    <p class="muted" id="files-note"></p>
+    <ul class="chips" id="files-kinds" aria-label="Kinds"></ul>
+    <div class="table-wrap"><table id="files-table" class="data">
+      <thead><tr><th>Kind</th><th>Path</th><th>Detail</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-suppressions" hidden>
+    <h1>Inline suppressions</h1>
+    <p class="muted" id="suppressions-note"></p>
+    <div class="table-wrap"><table id="suppressions-table" class="data">
+      <thead><tr><th>Location</th><th>Rules</th><th>Issue</th><th>Valid</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-changes" hidden>
+    <h1 id="changes-title"></h1>
+    <p class="muted" id="changes-note"></p>
+    <div class="table-wrap"><table id="changes-table" class="data">
+      <thead><tr><th>Run</th><th>Severity</th><th>Rule</th><th>Component</th><th>Location</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="pager" id="changes-pager"></div>
+  </section>
+
+  <section id="view-config" hidden>
+    <h1>Configuration</h1>
+    <p class="muted">The repositories this dashboard can scan. Changes are saved to <code>scan_targets.toml</code> and audited below. Baselines change only from the command line.</p>
+    <p><button type="button" id="config-add">Add a repository</button></p>
+    <p id="config-message" role="status"></p>
+    <form id="config-form" class="config-form" hidden>
+      <h2 id="config-form-title"></h2>
+      <label>Name <input name="name" maxlength="200" spellcheck="false" autocomplete="off" placeholder="owner/project"></label>
+      <fieldset>
+        <legend>Source</legend>
+        <label class="check"><input type="radio" name="kind" value="url"> A public https repository</label>
+        <label class="check"><input type="radio" name="kind" value="mirror"> A local mirror registered on this server</label>
+        <label class="check" id="config-kind-clone"><input type="radio" name="kind" value="clone" disabled> A local clone set in scan_targets.toml by hand</label>
+        <label>URL <input name="url" maxlength="300" spellcheck="false" autocomplete="off" placeholder="https://github.com/owner/project.git"></label>
+        <label>Mirror <select name="mirror"></select></label>
+        <p class="muted small" id="config-hosts"></p>
+      </fieldset>
+      <label>Branch <input name="branch" maxlength="200" spellcheck="false" autocomplete="off" placeholder="main"></label>
+      <label class="check"><input type="checkbox" name="enabled"> Enabled</label>
+      <label class="check"><input type="checkbox" name="nightly"> Scan every night</label>
+      <label>Policy (.shoalscan.toml, optional)
+        <textarea name="policy" rows="10" spellcheck="false" maxlength="32768"></textarea></label>
+      <p class="muted small" id="config-policy-note">Checked with Shoalscan's configuration rules before it is saved. The baseline's location is managed for you, so a baseline key is refused.</p>
+      <p class="error" id="config-error" role="alert"></p>
+      <p><button type="submit">Save</button> <button type="button" class="secondary" id="config-cancel">Cancel</button></p>
+    </form>
+    <section id="config-remove" class="config-form" hidden aria-labelledby="config-remove-title">
+      <h2 id="config-remove-title"></h2>
+      <p>Removing a repository stops scans of it. Its runs, findings and baseline stay. Type its name to confirm.</p>
+      <label>Name <input id="config-remove-name" spellcheck="false" autocomplete="off"></label>
+      <p><button type="button" id="config-remove-confirm">Remove</button> <button type="button" class="secondary" id="config-remove-cancel">Cancel</button></p>
+    </section>
+    <div class="table-wrap"><table id="config-table" class="data">
+      <thead><tr><th>Name</th><th>Source</th><th>Branch</th><th>Enabled</th><th>Nightly</th><th>Last run</th><th>Baseline</th><th>Actions</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <section id="config-baseline" hidden aria-labelledby="config-baseline-title">
+      <h2 id="config-baseline-title"></h2>
+      <p id="config-baseline-note" class="muted"></p>
+      <p class="muted small">To change it, run this on a machine you trust and review the result:</p>
+      <pre class="scan-log" id="config-baseline-command"></pre>
+      <div class="table-wrap"><table id="config-baseline-table" class="data">
+        <thead><tr><th>Location</th><th>Rule</th><th>Issue</th><th>Reason</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+    <h2>Changes</h2>
+    <div class="table-wrap"><table id="config-changes" class="data">
+      <thead><tr><th>When</th><th>Who</th><th>Repository</th><th>Change</th><th>What changed</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-about" hidden class="about">
+    <img class="about-icon" src="/static/shoalscan-icon.svg" alt="Shoalscan: a cartoon steamship sails toward a shoal where a little bug hides under the waves, while a lighthouse beam lights up the danger." width="200" height="200">
+    <h1>About Shoalscan</h1>
+    <blockquote>
+      <p><strong>Why &ldquo;Shoalscan&rdquo;?</strong> A shoal is a stretch of shallow water hiding sand banks or rocks just under the surface. Ships run aground on shoals because, from above, the water looks open and safe. Lighthouses exist mainly to warn ships away from hazards like these.</p>
+      <p>Security flaws behave the same way. Code can look fine at a glance while the danger sits just below. Shoalscan maps those hidden hazards. The baseline is a chart of the shoals you already know about, so a change is flagged only when it sails into new ones.</p>
+    </blockquote>
+    <h2>Who it's for</h2>
+    <p id="about-audience"></p>
+    <h2>Scanners</h2>
+    <p class="muted">Every scanner binary is pinned by version and SHA-256 in <code>tools.lock</code>.</p>
+    <div class="table-wrap"><table id="about-scanners" class="data">
+      <thead><tr><th>Scanner</th><th>Role</th><th>Pinned version</th><th>Licence</th><th>Last run</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <h2>Rule sources</h2>
+    <div class="table-wrap"><table id="about-rules" class="data">
+      <thead><tr><th>Source</th><th>Version</th><th>Licence</th><th>Notes</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <h2>The limits of static analysis</h2>
+    <p>No scanner finds every vulnerability. Pattern and taint analysis misses authorization and logic flaws, data flows across files, and concurrency bugs. A clean scan means only that these rules found nothing; it does not mean the code is safe. Shoalscan is one layer of defence alongside dependency audits, tests and code review.</p>
+    <p>Fingerprints follow code as lines move, but an edit to the matched code or to the enclosing function's name makes a finding look new. Ages and times to fix on this dashboard count from the first recorded run that contained a finding, so for findings older than the history they are lower bounds.</p>
+    <h2>Project</h2>
+    <p id="about-project"></p>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,13 @@
+# Starts shoalscan-scan.service every night. See that file for installation.
+
+[Unit]
+Description=Nightly Shoalscan scan
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15m
+# Run a scan missed while the machine was off as soon as it is back.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

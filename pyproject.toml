@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shoalscan"
+version = "0.1.0"
+description = "Run pinned, verified security scanners over a repository and check findings against a baseline."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Environment :: Console",
+]
+
+[project.scripts]
+shoalscan = "shoalscan.cli:main"
+
+# The lock file, Shoalscan's own rules and the icon live at the repository root and are
+# shipped inside the package as `shoalscan/_data/`.
+[tool.setuptools]
+package-dir = { "" = "src", "shoalscan._data" = "." }
+packages = ["shoalscan", "shoalscan.dashboard", "shoalscan._data"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+"shoalscan._data" = ["tools.lock", "rules/*.yaml", "assets/shoalscan-icon.svg"]
+"shoalscan.dashboard" = ["static/*.html", "static/*.css", "static/*.js"]

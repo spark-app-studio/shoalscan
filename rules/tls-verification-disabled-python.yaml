@@ -1,0 +1,25 @@
+rules:
+  - id: python-tls-verification-disabled
+    message: >-
+      TLS certificate verification is turned off, so any server can impersonate
+      the remote host. Keep verification on; to trust a private CA, pass its
+      bundle path as `verify="/path/ca.pem"` or build an SSLContext with
+      `cafile=`.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+      confidence: HIGH
+      category: security
+      fix: Remove verify=False / CERT_NONE and trust a specific CA bundle instead.
+    pattern-either:
+      - pattern: requests.$METHOD(..., verify=False, ...)
+      - pattern: $SESSION.request(..., verify=False, ...)
+      - pattern: $SESSION.$METHOD(..., verify=False, ...)
+      - pattern: $SESSION.verify = False
+      - pattern: httpx.$METHOD(..., verify=False, ...)
+      - pattern: aiohttp.TCPConnector(..., ssl=False, ...)
+      - pattern: aiohttp.TCPConnector(..., verify_ssl=False, ...)
+      - pattern: ssl._create_unverified_context(...)
+      - pattern: $CTX.verify_mode = ssl.CERT_NONE
+      - pattern: urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)

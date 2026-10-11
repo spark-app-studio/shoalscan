@@ -1,0 +1,12 @@
+# Starts shoalscan-nightly-targets.service every night. See that file for installation.
+
+[Unit]
+Description=Nightly Shoalscan scans of the registered repositories
+
+[Timer]
+OnCalendar=*-*-* 02:15:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

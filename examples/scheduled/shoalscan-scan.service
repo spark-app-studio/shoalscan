@@ -1,0 +1,27 @@
+# A nightly Shoalscan scan on Linux, as a systemd user service started by
+# shoalscan-scan.timer.
+#
+#   1. Edit the paths and SHOALSCAN_SPEC below.
+#   2. Copy both files to ~/.config/systemd/user/
+#   3. systemctl --user daemon-reload
+#      systemctl --user enable --now shoalscan-scan.timer
+#   4. To run it even when you are not logged in: loginctl enable-linger "$USER"
+#
+# Run it once by hand with: systemctl --user start shoalscan-scan.service
+# Read its output with:      journalctl --user -u shoalscan-scan.service
+
+[Unit]
+Description=Shoalscan scheduled scan of the default branch
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=SHOALSCAN_SPEC=shoalscan @ git+https://github.com/spark-app-studio/shoalscan@COMMIT_SHA
+Environment=SHOALSCAN_REPO_NAME=owner/project
+ExecStart=/bin/bash %h/shoalscan/examples/scheduled-scan.sh %h/scans/project
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+TimeoutStartSec=2h

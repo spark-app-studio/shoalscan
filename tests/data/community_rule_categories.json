@@ -1,0 +1,5808 @@
+{
+ "commit": "f1d2b562b414783763fd02a6ed2736eaed622efa",
+ "generated_with": "PyYAML safe_load",
+ "rules": {
+  "bash/curl/security/curl-eval.yaml": [
+   [
+    "curl-eval",
+    "security"
+   ]
+  ],
+  "bash/curl/security/curl-pipe-bash.yaml": [
+   [
+    "curl-pipe-bash",
+    "security"
+   ]
+  ],
+  "bash/lang/best-practice/iteration-over-ls-output.yaml": [
+   [
+    "iteration-over-ls-output",
+    "best-practice"
+   ]
+  ],
+  "bash/lang/best-practice/useless-cat.yaml": [
+   [
+    "useless-cat",
+    "best-practice"
+   ]
+  ],
+  "bash/lang/correctness/unquoted-expansion.yaml": [
+   [
+    "unquoted-variable-expansion-in-command",
+    "correctness"
+   ],
+   [
+    "unquoted-command-substitution-in-command",
+    "correctness"
+   ]
+  ],
+  "bash/lang/security/ifs-tampering.yaml": [
+   [
+    "ifs-tampering",
+    "security"
+   ]
+  ],
+  "dockerfile/audit/dockerfile-source-not-pinned.yaml": [
+   [
+    "dockerfile-source-not-pinned",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/avoid-apk-upgrade.yaml": [
+   [
+    "avoid-apk-upgrade",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/avoid-apt-get-upgrade.yaml": [
+   [
+    "avoid-apt-get-upgrade",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/avoid-dnf-update.yaml": [
+   [
+    "avoid-dnf-update",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/avoid-latest-version.yaml": [
+   [
+    "avoid-latest-version",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/avoid-platform-with-from.yaml": [
+   [
+    "avoid-platform-with-from",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/avoid-yum-update.yaml": [
+   [
+    "avoid-yum-update",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/avoid-zypper-update.yaml": [
+   [
+    "avoid-zypper-update",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/maintainer-is-deprecated.yaml": [
+   [
+    "maintainer-is-deprecated",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/missing-apk-no-cache.yaml": [
+   [
+    "missing-apk-no-cache",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/missing-dnf-assume-yes-switch.yaml": [
+   [
+    "missing-dnf-assume-yes-switch",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/missing-dnf-clean-all.yaml": [
+   [
+    "missing-dnf-clean-all",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/missing-image-version.yaml": [
+   [
+    "missing-image-version",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/missing-no-install-recommends.yaml": [
+   [
+    "missing-no-install-recommends",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/missing-pip-no-cache-dir.yaml": [
+   [
+    "missing-pip-no-cache-dir",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/missing-yum-assume-yes-switch.yaml": [
+   [
+    "missing-yum-assume-yes-switch",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/missing-zypper-clean.yaml": [
+   [
+    "missing-zypper-clean",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/nonsensical-command.yaml": [
+   [
+    "nonsensical-command",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/prefer-apt-get.yaml": [
+   [
+    "prefer-apt-get",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/prefer-copy-over-add.yaml": [
+   [
+    "prefer-copy-over-add",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/prefer-json-notation.yaml": [
+   [
+    "prefer-json-notation",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/remove-package-cache.yaml": [
+   [
+    "remove-package-cache",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/remove-package-lists.yaml": [
+   [
+    "remove-package-lists",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/set-pipefail.yaml": [
+   [
+    "set-pipefail",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/use-either-wget-or-curl.yaml": [
+   [
+    "use-either-wget-or-curl",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/use-shell-instruction.yaml": [
+   [
+    "use-shell-instruction",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/best-practice/use-workdir.yaml": [
+   [
+    "use-workdir",
+    "best-practice"
+   ]
+  ],
+  "dockerfile/correctness/invalid-port.yaml": [
+   [
+    "invalid-port",
+    "correctness"
+   ]
+  ],
+  "dockerfile/correctness/missing-assume-yes-switch.yaml": [
+   [
+    "missing-assume-yes-switch",
+    "correctness"
+   ]
+  ],
+  "dockerfile/correctness/multiple-entrypoint-instructions.yaml": [
+   [
+    "multiple-entrypoint-instructions",
+    "correctness"
+   ]
+  ],
+  "dockerfile/security/dockerd-socket-mount.yaml": [
+   [
+    "dockerfile-dockerd-socket-mount",
+    "security"
+   ]
+  ],
+  "dockerfile/security/last-user-is-root.yaml": [
+   [
+    "last-user-is-root",
+    "security"
+   ]
+  ],
+  "dockerfile/security/missing-user-entrypoint.yaml": [
+   [
+    "missing-user-entrypoint",
+    "security"
+   ]
+  ],
+  "dockerfile/security/missing-user.yaml": [
+   [
+    "missing-user",
+    "security"
+   ]
+  ],
+  "dockerfile/security/no-sudo-in-dockerfile.yaml": [
+   [
+    "no-sudo-in-dockerfile",
+    "security"
+   ]
+  ],
+  "dockerfile/security/secret-in-build-arg.yaml": [
+   [
+    "secret-in-build-arg",
+    "security"
+   ]
+  ],
+  "generic/bicep/security/secure-parameter-for-secrets.yaml": [
+   [
+    "secure-parameter-for-secrets",
+    "security"
+   ]
+  ],
+  "generic/ci/audit/changed-semgrepignore.yaml": [
+   [
+    "changed-semgrepignore",
+    "best-practice"
+   ]
+  ],
+  "generic/ci/security/bash-reverse-shell.yaml": [
+   [
+    "bash_reverse_shell",
+    "security"
+   ]
+  ],
+  "generic/dockerfile/best-practice/missing-yum-clean-all.yaml": [
+   [
+    "missing-yum-clean-all",
+    "best-practice"
+   ]
+  ],
+  "generic/dockerfile/best-practice/use-absolute-workdir.yaml": [
+   [
+    "use-absolute-workdir",
+    "best-practice"
+   ]
+  ],
+  "generic/dockerfile/correctness/alias-must-be-unique.yaml": [
+   [
+    "alias-must-be-unique",
+    "correctness"
+   ]
+  ],
+  "generic/dockerfile/correctness/copy-from-own-alias.yaml": [
+   [
+    "copy-from-own-alias",
+    "correctness"
+   ]
+  ],
+  "generic/dockerfile/correctness/multiple-cmd-instructions.yaml": [
+   [
+    "multiple-cmd-instructions",
+    "correctness"
+   ]
+  ],
+  "generic/dockerfile/missing-zypper-no-confirm-switch.yaml": [
+   [
+    "missing-zypper-no-confirm-switch",
+    "best-practice"
+   ]
+  ],
+  "generic/gradle/security/build-gradle-password-hardcoded.yaml": [
+   [
+    "build-gradle-password-hardcoded",
+    "security"
+   ]
+  ],
+  "generic/html-templates/security/unquoted-attribute-var.yaml": [
+   [
+    "unquoted-attribute-var",
+    "security"
+   ]
+  ],
+  "generic/html-templates/security/var-in-href.yaml": [
+   [
+    "var-in-href",
+    "security"
+   ]
+  ],
+  "generic/html-templates/security/var-in-script-src.yaml": [
+   [
+    "var-in-script-src",
+    "security"
+   ]
+  ],
+  "generic/html-templates/security/var-in-script-tag.yaml": [
+   [
+    "var-in-script-tag",
+    "security"
+   ]
+  ],
+  "generic/hugo/best-practice/invalid-base-url.yaml": [
+   [
+    "invalid-base-url",
+    "best-practice"
+   ]
+  ],
+  "generic/hugo/best-practice/localhost-base-url.yaml": [
+   [
+    "localhost-base-url",
+    "best-practice"
+   ]
+  ],
+  "generic/nginx/security/alias-path-traversal.yaml": [
+   [
+    "alias-path-traversal",
+    "security"
+   ]
+  ],
+  "generic/nginx/security/dynamic-proxy-host.yaml": [
+   [
+    "dynamic-proxy-host",
+    "security"
+   ]
+  ],
+  "generic/nginx/security/dynamic-proxy-scheme.yaml": [
+   [
+    "dynamic-proxy-scheme",
+    "security"
+   ]
+  ],
+  "generic/nginx/security/header-injection.yaml": [
+   [
+    "header-injection",
+    "security"
+   ]
+  ],
+  "generic/nginx/security/header-redefinition.yaml": [
+   [
+    "header-redefinition",
+    "security"
+   ]
+  ],
+  "generic/nginx/security/insecure-redirect.yaml": [
+   [
+    "insecure-redirect",
+    "security"
+   ]
+  ],
+  "generic/nginx/security/insecure-ssl-version.yaml": [
+   [
+    "insecure-ssl-version",
+    "security"
+   ]
+  ],
+  "generic/nginx/security/missing-internal.yaml": [
+   [
+    "missing-internal",
+    "security"
+   ]
+  ],
+  "generic/nginx/security/missing-ssl-version.yaml": [
+   [
+    "missing-ssl-version",
+    "security"
+   ]
+  ],
+  "generic/nginx/security/possible-h2c-smuggling.yaml": [
+   [
+    "possible-nginx-h2c-smuggling",
+    "security"
+   ]
+  ],
+  "generic/nginx/security/request-host-used.yaml": [
+   [
+    "request-host-used",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/adafruit-api-key.yaml": [
+   [
+    "adafruit-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/adobe-client-id.yaml": [
+   [
+    "adobe-client-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/adobe-client-secret.yaml": [
+   [
+    "adobe-client-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/age-secret-key.yaml": [
+   [
+    "age-secret-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/airtable-api-key.yaml": [
+   [
+    "airtable-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/algolia-api-key.yaml": [
+   [
+    "algolia-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/alibaba-access-key-id.yaml": [
+   [
+    "alibaba-access-key-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/alibaba-secret-key.yaml": [
+   [
+    "alibaba-secret-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/asana-client-id.yaml": [
+   [
+    "asana-client-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/asana-client-secret.yaml": [
+   [
+    "asana-client-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/atlassian-api-token.yaml": [
+   [
+    "atlassian-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/authress-service-client-access-key.yaml": [
+   [
+    "authress-service-client-access-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/aws-access-token.yaml": [
+   [
+    "aws-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/beamer-api-token.yaml": [
+   [
+    "beamer-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/bitbucket-client-id.yaml": [
+   [
+    "bitbucket-client-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/bitbucket-client-secret.yaml": [
+   [
+    "bitbucket-client-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/bittrex-access-key.yaml": [
+   [
+    "bittrex-access-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/bittrex-secret-key.yaml": [
+   [
+    "bittrex-secret-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/clojars-api-token.yaml": [
+   [
+    "clojars-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/cloudflare-api-key.yaml": [
+   [
+    "cloudflare-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/cloudflare-global-api-key.yaml": [
+   [
+    "cloudflare-global-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/cloudflare-origin-ca-key.yaml": [
+   [
+    "cloudflare-origin-ca-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/codecov-access-token.yaml": [
+   [
+    "codecov-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/coinbase-access-token.yaml": [
+   [
+    "coinbase-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/confluent-access-token.yaml": [
+   [
+    "confluent-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/confluent-secret-key.yaml": [
+   [
+    "confluent-secret-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/contentful-delivery-api-token.yaml": [
+   [
+    "contentful-delivery-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/databricks-api-token.yaml": [
+   [
+    "databricks-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/datadog-access-token.yaml": [
+   [
+    "datadog-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/defined-networking-api-token.yaml": [
+   [
+    "defined-networking-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/digitalocean-access-token.yaml": [
+   [
+    "digitalocean-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/digitalocean-pat.yaml": [
+   [
+    "digitalocean-pat",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/digitalocean-refresh-token.yaml": [
+   [
+    "digitalocean-refresh-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/discord-api-token.yaml": [
+   [
+    "discord-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/discord-client-id.yaml": [
+   [
+    "discord-client-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/discord-client-secret.yaml": [
+   [
+    "discord-client-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/doppler-api-token.yaml": [
+   [
+    "doppler-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/droneci-access-token.yaml": [
+   [
+    "droneci-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/dropbox-api-token.yaml": [
+   [
+    "dropbox-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/dropbox-long-lived-api-token.yaml": [
+   [
+    "dropbox-long-lived-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/dropbox-short-lived-api-token.yaml": [
+   [
+    "dropbox-short-lived-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/duffel-api-token.yaml": [
+   [
+    "duffel-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/dynatrace-api-token.yaml": [
+   [
+    "dynatrace-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/easypost-api-token.yaml": [
+   [
+    "easypost-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/easypost-test-api-token.yaml": [
+   [
+    "easypost-test-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/etsy-access-token.yaml": [
+   [
+    "etsy-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/facebook-access-token.yaml": [
+   [
+    "facebook-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/facebook-page-access-token.yaml": [
+   [
+    "facebook-page-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/facebook-secret.yaml": [
+   [
+    "facebook-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/facebook.yaml": [
+   [
+    "facebook",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/fastly-api-token.yaml": [
+   [
+    "fastly-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/finicity-api-token.yaml": [
+   [
+    "finicity-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/finicity-client-secret.yaml": [
+   [
+    "finicity-client-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/finnhub-access-token.yaml": [
+   [
+    "finnhub-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/flickr-access-token.yaml": [
+   [
+    "flickr-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/flutterwave-encryption-key.yaml": [
+   [
+    "flutterwave-encryption-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/flutterwave-public-key.yaml": [
+   [
+    "flutterwave-public-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/flutterwave-secret-key.yaml": [
+   [
+    "flutterwave-secret-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/frameio-api-token.yaml": [
+   [
+    "frameio-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/freshbooks-access-token.yaml": [
+   [
+    "freshbooks-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/gcp-api-key.yaml": [
+   [
+    "gcp-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/generic-api-key.yaml": [
+   [
+    "generic-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/github-app-token.yaml": [
+   [
+    "github-app-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/github-fine-grained-pat.yaml": [
+   [
+    "github-fine-grained-pat",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/github-oauth.yaml": [
+   [
+    "github-oauth",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/github-pat.yaml": [
+   [
+    "github-pat",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/github-refresh-token.yaml": [
+   [
+    "github-refresh-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/gitlab-pat.yaml": [
+   [
+    "gitlab-pat",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/gitlab-ptt.yaml": [
+   [
+    "gitlab-ptt",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/gitlab-rrt.yaml": [
+   [
+    "gitlab-rrt",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/gitter-access-token.yaml": [
+   [
+    "gitter-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/gocardless-api-token.yaml": [
+   [
+    "gocardless-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/grafana-api-key.yaml": [
+   [
+    "grafana-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/grafana-cloud-api-token.yaml": [
+   [
+    "grafana-cloud-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/grafana-service-account-token.yaml": [
+   [
+    "grafana-service-account-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/harness-api-key.yaml": [
+   [
+    "harness-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/hashicorp-tf-api-token.yaml": [
+   [
+    "hashicorp-tf-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/hashicorp-tf-password.yaml": [
+   [
+    "hashicorp-tf-password",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/heroku-api-key.yaml": [
+   [
+    "heroku-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/hubspot-api-key.yaml": [
+   [
+    "hubspot-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/huggingface-access-token.yaml": [
+   [
+    "huggingface-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/huggingface-organization-api-token.yaml": [
+   [
+    "huggingface-organization-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/infracost-api-token.yaml": [
+   [
+    "infracost-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/intercom-api-key.yaml": [
+   [
+    "intercom-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/intra42-client-secret.yaml": [
+   [
+    "intra42-client-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/jfrog-api-key.yaml": [
+   [
+    "jfrog-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/jfrog-identity-token.yaml": [
+   [
+    "jfrog-identity-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/jwt-base64.yaml": [
+   [
+    "jwt-base64",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/jwt.yaml": [
+   [
+    "jwt",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/kraken-access-token.yaml": [
+   [
+    "kraken-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/kucoin-access-token.yaml": [
+   [
+    "kucoin-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/kucoin-secret-key.yaml": [
+   [
+    "kucoin-secret-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/launchdarkly-access-token.yaml": [
+   [
+    "launchdarkly-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/linear-api-key.yaml": [
+   [
+    "linear-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/linear-client-secret.yaml": [
+   [
+    "linear-client-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/linkedin-client-id.yaml": [
+   [
+    "linkedin-client-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/linkedin-client-secret.yaml": [
+   [
+    "linkedin-client-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/lob-api-key.yaml": [
+   [
+    "lob-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/lob-pub-api-key.yaml": [
+   [
+    "lob-pub-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/mailchimp-api-key.yaml": [
+   [
+    "mailchimp-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/mailgun-private-api-token.yaml": [
+   [
+    "mailgun-private-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/mailgun-pub-key.yaml": [
+   [
+    "mailgun-pub-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/mailgun-signing-key.yaml": [
+   [
+    "mailgun-signing-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/mapbox-api-token.yaml": [
+   [
+    "mapbox-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/mattermost-access-token.yaml": [
+   [
+    "mattermost-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/messagebird-api-token.yaml": [
+   [
+    "messagebird-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/messagebird-client-id.yaml": [
+   [
+    "messagebird-client-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/microsoft-teams-webhook.yaml": [
+   [
+    "microsoft-teams-webhook",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/netlify-access-token.yaml": [
+   [
+    "netlify-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/new-relic-browser-api-token.yaml": [
+   [
+    "new-relic-browser-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/new-relic-insert-key.yaml": [
+   [
+    "new-relic-insert-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/new-relic-user-api-id.yaml": [
+   [
+    "new-relic-user-api-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/new-relic-user-api-key.yaml": [
+   [
+    "new-relic-user-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/npm-access-token.yaml": [
+   [
+    "npm-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/nytimes-access-token.yaml": [
+   [
+    "nytimes-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/okta-access-token.yaml": [
+   [
+    "okta-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/openai-api-key.yaml": [
+   [
+    "openai-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/plaid-api-token.yaml": [
+   [
+    "plaid-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/plaid-client-id.yaml": [
+   [
+    "plaid-client-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/plaid-secret-key.yaml": [
+   [
+    "plaid-secret-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/planetscale-api-token.yaml": [
+   [
+    "planetscale-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/planetscale-oauth-token.yaml": [
+   [
+    "planetscale-oauth-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/planetscale-password.yaml": [
+   [
+    "planetscale-password",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/postman-api-token.yaml": [
+   [
+    "postman-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/prefect-api-token.yaml": [
+   [
+    "prefect-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/private-key.yaml": [
+   [
+    "private-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/pulumi-api-token.yaml": [
+   [
+    "pulumi-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/pypi-upload-token.yaml": [
+   [
+    "pypi-upload-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/rapidapi-access-token.yaml": [
+   [
+    "rapidapi-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/readme-api-token.yaml": [
+   [
+    "readme-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/rubygems-api-token.yaml": [
+   [
+    "rubygems-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/scalingo-api-token.yaml": [
+   [
+    "scalingo-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/sendbird-access-id.yaml": [
+   [
+    "sendbird-access-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/sendbird-access-token.yaml": [
+   [
+    "sendbird-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/sendgrid-api-token.yaml": [
+   [
+    "sendgrid-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/sendinblue-api-token.yaml": [
+   [
+    "sendinblue-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/sentry-access-token.yaml": [
+   [
+    "sentry-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/shippo-api-token.yaml": [
+   [
+    "shippo-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/shopify-access-token.yaml": [
+   [
+    "shopify-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/shopify-custom-access-token.yaml": [
+   [
+    "shopify-custom-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/shopify-private-app-access-token.yaml": [
+   [
+    "shopify-private-app-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/shopify-shared-secret.yaml": [
+   [
+    "shopify-shared-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/sidekiq-secret.yaml": [
+   [
+    "sidekiq-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/sidekiq-sensitive-url.yaml": [
+   [
+    "sidekiq-sensitive-url",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/slack-app-token.yaml": [
+   [
+    "slack-app-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/slack-bot-token.yaml": [
+   [
+    "slack-bot-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/slack-config-access-token.yaml": [
+   [
+    "slack-config-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/slack-config-refresh-token.yaml": [
+   [
+    "slack-config-refresh-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/slack-legacy-bot-token.yaml": [
+   [
+    "slack-legacy-bot-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/slack-legacy-token.yaml": [
+   [
+    "slack-legacy-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/slack-legacy-workspace-token.yaml": [
+   [
+    "slack-legacy-workspace-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/slack-user-token.yaml": [
+   [
+    "slack-user-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/slack-webhook-url.yaml": [
+   [
+    "slack-webhook-url",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/snyk-api-token.yaml": [
+   [
+    "snyk-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/square-access-token.yaml": [
+   [
+    "square-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/squarespace-access-token.yaml": [
+   [
+    "squarespace-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/stripe-access-token.yaml": [
+   [
+    "stripe-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/sumologic-access-id.yaml": [
+   [
+    "sumologic-access-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/sumologic-access-token.yaml": [
+   [
+    "sumologic-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/telegram-bot-api-token.yaml": [
+   [
+    "telegram-bot-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/travisci-access-token.yaml": [
+   [
+    "travisci-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/twilio-api-key.yaml": [
+   [
+    "twilio-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/twitch-api-token.yaml": [
+   [
+    "twitch-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/twitter-access-secret.yaml": [
+   [
+    "twitter-access-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/twitter-access-token.yaml": [
+   [
+    "twitter-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/twitter-api-key.yaml": [
+   [
+    "twitter-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/twitter-api-secret.yaml": [
+   [
+    "twitter-api-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/twitter-bearer-token.yaml": [
+   [
+    "twitter-bearer-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/typeform-api-token.yaml": [
+   [
+    "typeform-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/vault-batch-token.yaml": [
+   [
+    "vault-batch-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/vault-service-token.yaml": [
+   [
+    "vault-service-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/yandex-access-token.yaml": [
+   [
+    "yandex-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/yandex-api-key.yaml": [
+   [
+    "yandex-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/yandex-aws-access-token.yaml": [
+   [
+    "yandex-aws-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/gitleaks/zendesk-secret-key.yaml": [
+   [
+    "zendesk-secret-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-amazon-mws-auth-token.yaml": [
+   [
+    "detected-amazon-mws-auth-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-artifactory-password.yaml": [
+   [
+    "detected-artifactory-password",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-artifactory-token.yaml": [
+   [
+    "detected-artifactory-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-aws-access-key-id-value.yaml": [
+   [
+    "detected-aws-access-key-id-value",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-aws-account-id.yaml": [
+   [
+    "detected-aws-account-id",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-aws-appsync-graphql-key.yaml": [
+   [
+    "detected-aws-appsync-graphql-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-aws-secret-access-key.yaml": [
+   [
+    "detected-aws-secret-access-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-aws-session-token.yaml": [
+   [
+    "detected-aws-session-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-bcrypt-hash.yaml": [
+   [
+    "detected-bcrypt-hash",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-codeclimate.yaml": [
+   [
+    "detected-codeclimate",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-etc-shadow.yaml": [
+   [
+    "detected-etc-shadow",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-facebook-access-token.yaml": [
+   [
+    "detected-facebook-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-facebook-oauth.yaml": [
+   [
+    "detected-facebook-oauth",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-generic-api-key.yaml": [
+   [
+    "detected-generic-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-generic-secret.yaml": [
+   [
+    "detected-generic-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-github-token.yaml": [
+   [
+    "detected-github-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-google-api-key.yaml": [
+   [
+    "detected-google-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-google-cloud-api-key.yaml": [
+   [
+    "detected-google-cloud-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-google-gcm-service-account.yaml": [
+   [
+    "detected-google-gcm-service-account",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-google-oauth-access-token.yaml": [
+   [
+    "detected-google-oauth-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-google-oauth.yaml": [
+   [
+    "detected-google-oauth-url",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-heroku-api-key.yaml": [
+   [
+    "detected-heroku-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-hockeyapp.yaml": [
+   [
+    "detected-hockeyapp",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-jwt-token.yaml": [
+   [
+    "detected-jwt-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-kolide-api-key.yaml": [
+   [
+    "detected-kolide-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-mailchimp-api-key.yaml": [
+   [
+    "detected-mailchimp-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-mailgun-api-key.yaml": [
+   [
+    "detected-mailgun-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-npm-registry-auth-token.yaml": [
+   [
+    "detected-npm-registry-auth-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-onfido-live-api-token.yaml": [
+   [
+    "detected-onfido-live-api-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-outlook-team.yaml": [
+   [
+    "detected-outlook-team",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-paypal-braintree-access-token.yaml": [
+   [
+    "detected-paypal-braintree-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-pgp-private-key-block.yaml": [
+   [
+    "detected-pgp-private-key-block",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-picatic-api-key.yaml": [
+   [
+    "detected-picatic-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-private-key.yaml": [
+   [
+    "detected-private-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-sauce-token.yaml": [
+   [
+    "detected-sauce-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-sendgrid-api-key.yaml": [
+   [
+    "detected-sendgrid-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-slack-token.yaml": [
+   [
+    "detected-slack-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-slack-webhook.yaml": [
+   [
+    "detected-slack-webhook",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-snyk-api-key.yaml": [
+   [
+    "detected-snyk-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-softlayer-api-key.yaml": [
+   [
+    "detected-softlayer-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-sonarqube-docs-api-key.yaml": [
+   [
+    "detected-sonarqube-docs-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-square-access-token.yaml": [
+   [
+    "detected-square-access-token",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-square-oauth-secret.yaml": [
+   [
+    "detected-square-oauth-secret",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-ssh-password.yaml": [
+   [
+    "detected-ssh-password",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-stripe-api-key.yaml": [
+   [
+    "detected-stripe-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-stripe-restricted-api-key.yaml": [
+   [
+    "detected-stripe-restricted-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-telegram-bot-api-key.yaml": [
+   [
+    "detected-telegram-bot-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-twilio-api-key.yaml": [
+   [
+    "detected-twilio-api-key",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/detected-username-and-password-in-uri.yaml": [
+   [
+    "detected-username-and-password-in-uri",
+    "security"
+   ]
+  ],
+  "generic/secrets/security/google-maps-apikeyleak.yaml": [
+   [
+    "google-maps-apikeyleak",
+    "security"
+   ]
+  ],
+  "generic/unicode/security/bidi.yml": [
+   [
+    "contains-bidirectional-characters",
+    "security"
+   ]
+  ],
+  "generic/visualforce/security/ncino/html/UseSRIForCDNs.yaml": [
+   [
+    "use-SRI-for-CDNs",
+    "security"
+   ]
+  ],
+  "generic/visualforce/security/ncino/vf/XSSFromUnescapedURLParam.yaml": [
+   [
+    "xss-from-unescaped-url-param",
+    "security"
+   ]
+  ],
+  "generic/visualforce/security/ncino/xml/CSPHeaderAttribute.yaml": [
+   [
+    "csp-header-attribute",
+    "security"
+   ]
+  ],
+  "generic/visualforce/security/ncino/xml/VisualForceAPIVersion.yaml": [
+   [
+    "visualforce-page-api-version",
+    "security"
+   ]
+  ],
+  "javascript/ajv/security/audit/ajv-allerrors-true.yaml": [
+   [
+    "ajv-allerrors-true",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-element-methods.yaml": [
+   [
+    "detect-angular-element-methods",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-element-taint.yaml": [
+   [
+    "detect-angular-element-taint",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-open-redirect.yaml": [
+   [
+    "detect-angular-open-redirect",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-resource-loading.yaml": [
+   [
+    "detect-angular-resource-loading",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-sce-disabled.yaml": [
+   [
+    "detect-angular-sce-disabled",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-trust-as-css.yaml": [
+   [
+    "detect-angular-trust-as-css-method",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-trust-as-html-method.yaml": [
+   [
+    "detect-angular-trust-as-html-method",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-trust-as-js-method.yaml": [
+   [
+    "detect-angular-trust-as-js-method",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-trust-as-method.yaml": [
+   [
+    "detect-angular-trust-as-method",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-trust-as-resourceurl-method.yaml": [
+   [
+    "detect-angular-trust-as-resourceurl-method",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-angular-trust-as-url-method.yaml": [
+   [
+    "detect-angular-trust-as-url-method",
+    "security"
+   ]
+  ],
+  "javascript/angular/security/detect-third-party-angular-translate.yaml": [
+   [
+    "detect-angular-translateprovider-translations-method",
+    "security"
+   ]
+  ],
+  "javascript/apollo/security/apollo-axios-ssrf.yaml": [
+   [
+    "apollo-axios-ssrf",
+    "security"
+   ]
+  ],
+  "javascript/argon2/security/unsafe-argon2-config.yaml": [
+   [
+    "unsafe-argon2-config",
+    "security"
+   ]
+  ],
+  "javascript/audit/detect-replaceall-sanitization.yaml": [
+   [
+    "detect-replaceall-sanitization",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/detect-child-process.yaml": [
+   [
+    "detect-child-process",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/dynamodb-request-object.yaml": [
+   [
+    "dynamodb-request-object",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/knex-sqli.yaml": [
+   [
+    "knex-sqli",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/mysql-sqli.yaml": [
+   [
+    "mysql-sqli",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/pg-sqli.yaml": [
+   [
+    "pg-sqli",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/sequelize-sqli.yaml": [
+   [
+    "sequelize-sqli",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/tainted-eval.yaml": [
+   [
+    "tainted-eval",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/tainted-html-response.yaml": [
+   [
+    "tainted-html-response",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/tainted-html-string.yaml": [
+   [
+    "tainted-html-string",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/tainted-sql-string.yaml": [
+   [
+    "tainted-sql-string",
+    "security"
+   ]
+  ],
+  "javascript/aws-lambda/security/vm-runincontext-injection.yaml": [
+   [
+    "vm-runincontext-injection",
+    "security"
+   ]
+  ],
+  "javascript/bluebird/security/audit/tofastproperties-code-execution.yaml": [
+   [
+    "tofastproperties-code-execution",
+    "security"
+   ]
+  ],
+  "javascript/browser/security/dom-based-xss.yaml": [
+   [
+    "dom-based-xss",
+    "security"
+   ]
+  ],
+  "javascript/browser/security/eval-detected.yaml": [
+   [
+    "eval-detected",
+    "security"
+   ]
+  ],
+  "javascript/browser/security/insecure-document-method.yaml": [
+   [
+    "insecure-document-method",
+    "security"
+   ]
+  ],
+  "javascript/browser/security/insecure-innerhtml.yaml": [
+   [
+    "insecure-innerhtml",
+    "security"
+   ]
+  ],
+  "javascript/browser/security/insufficient-postmessage-origin-validation.yaml": [
+   [
+    "insufficient-postmessage-origin-validation",
+    "security"
+   ]
+  ],
+  "javascript/browser/security/open-redirect-from-function.yaml": [
+   [
+    "js-open-redirect-from-function",
+    "security"
+   ]
+  ],
+  "javascript/browser/security/open-redirect.yaml": [
+   [
+    "js-open-redirect",
+    "security"
+   ]
+  ],
+  "javascript/browser/security/raw-html-concat.yaml": [
+   [
+    "raw-html-concat",
+    "security"
+   ]
+  ],
+  "javascript/browser/security/raw-html-join.yaml": [
+   [
+    "raw-html-join",
+    "security"
+   ]
+  ],
+  "javascript/browser/security/wildcard-postmessage-configuration.yaml": [
+   [
+    "wildcard-postmessage-configuration",
+    "security"
+   ]
+  ],
+  "javascript/chrome-remote-interface/security/audit/chrome-remote-interface-compilescript-injection.yaml": [
+   [
+    "chrome-remote-interface-compilescript-injection",
+    "security"
+   ]
+  ],
+  "javascript/deno/security/audit/deno-dangerous-run.yaml": [
+   [
+    "deno-dangerous-run",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-check-csurf-middleware-usage.yaml": [
+   [
+    "express-check-csurf-middleware-usage",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-check-directory-listing.yaml": [
+   [
+    "express-check-directory-listing",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-cookie-settings.yaml": [
+   [
+    "express-cookie-session-default-name",
+    "security"
+   ],
+   [
+    "express-cookie-session-no-secure",
+    "security"
+   ],
+   [
+    "express-cookie-session-no-httponly",
+    "security"
+   ],
+   [
+    "express-cookie-session-no-domain",
+    "security"
+   ],
+   [
+    "express-cookie-session-no-path",
+    "security"
+   ],
+   [
+    "express-cookie-session-no-expires",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-detect-notevil-usage.yaml": [
+   [
+    "express-detect-notevil-usage",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-jwt-not-revoked.yaml": [
+   [
+    "express-jwt-not-revoked",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-libxml-noent.yaml": [
+   [
+    "express-libxml-noent",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-libxml-vm-noent.yaml": [
+   [
+    "express-libxml-vm-noent",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-open-redirect.yaml": [
+   [
+    "express-open-redirect",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-path-join-resolve-traversal.yaml": [
+   [
+    "express-path-join-resolve-traversal",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-res-sendfile.yaml": [
+   [
+    "express-res-sendfile",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-session-hardcoded-secret.yaml": [
+   [
+    "express-session-hardcoded-secret",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-ssrf.yaml": [
+   [
+    "express-ssrf",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-third-party-object-deserialization.yaml": [
+   [
+    "express-third-party-object-deserialization",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/express-xml2json-xxe-event.yaml": [
+   [
+    "express-xml2json-xxe-event",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/possible-user-input-redirect.yaml": [
+   [
+    "unknown-value-in-redirect",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/remote-property-injection.yaml": [
+   [
+    "remote-property-injection",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/res-render-injection.yaml": [
+   [
+    "res-render-injection",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/direct-response-write.yaml": [
+   [
+    "direct-response-write",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/ejs/explicit-unescape.yaml": [
+   [
+    "template-explicit-unescape",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/ejs/var-in-href.yaml": [
+   [
+    "var-in-href",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/ejs/var-in-script-src.yaml": [
+   [
+    "var-in-script-src",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/ejs/var-in-script-tag.yaml": [
+   [
+    "var-in-script-tag",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/mustache/escape-function-overwrite.yaml": [
+   [
+    "escape-function-overwrite",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/mustache/explicit-unescape.yaml": [
+   [
+    "template-explicit-unescape",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/mustache/var-in-script-tag.yaml": [
+   [
+    "var-in-script-tag",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/pug/and-attributes.yaml": [
+   [
+    "template-and-attributes",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/pug/explicit-unescape.yaml": [
+   [
+    "template-explicit-unescape",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/pug/var-in-href.yaml": [
+   [
+    "var-in-href",
+    "security"
+   ]
+  ],
+  "javascript/express/security/audit/xss/pug/var-in-script-tag.yaml": [
+   [
+    "var-in-script-tag",
+    "security"
+   ]
+  ],
+  "javascript/express/security/cors-misconfiguration.yaml": [
+   [
+    "cors-misconfiguration",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-data-exfiltration.yaml": [
+   [
+    "express-data-exfiltration",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-expat-xxe.yaml": [
+   [
+    "express-expat-xxe",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-insecure-template-usage.yaml": [
+   [
+    "express-insecure-template-usage",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-jwt-hardcoded-secret.yaml": [
+   [
+    "express-jwt-hardcoded-secret",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-phantom-injection.yaml": [
+   [
+    "express-phantom-injection",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-puppeteer-injection.yaml": [
+   [
+    "express-puppeteer-injection",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-sandbox-injection.yaml": [
+   [
+    "express-sandbox-code-injection",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-vm-injection.yaml": [
+   [
+    "express-vm-injection",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-vm2-injection.yaml": [
+   [
+    "express-vm2-injection",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-wkhtml-injection.yaml": [
+   [
+    "express-wkhtmltoimage-injection",
+    "security"
+   ],
+   [
+    "express-wkhtmltopdf-injection",
+    "security"
+   ]
+  ],
+  "javascript/express/security/express-xml2json-xxe.yaml": [
+   [
+    "express-xml2json-xxe",
+    "security"
+   ]
+  ],
+  "javascript/express/security/injection/raw-html-format.yaml": [
+   [
+    "raw-html-format",
+    "security"
+   ]
+  ],
+  "javascript/express/security/injection/tainted-sql-string.yaml": [
+   [
+    "tainted-sql-string",
+    "security"
+   ]
+  ],
+  "javascript/express/security/require-request.yaml": [
+   [
+    "require-request",
+    "security"
+   ]
+  ],
+  "javascript/express/security/x-frame-options-misconfiguration.yaml": [
+   [
+    "x-frame-options-misconfiguration",
+    "security"
+   ]
+  ],
+  "javascript/fbjs/security/audit/insecure-createnodesfrommarkup.yaml": [
+   [
+    "insecure-createnodesfrommarkup",
+    "security"
+   ]
+  ],
+  "javascript/grpc/security/grpc-nodejs-insecure-connection.yaml": [
+   [
+    "grpc-nodejs-insecure-connection",
+    "security"
+   ]
+  ],
+  "javascript/intercom/security/audit/intercom-settings-user-identifier-without-user-hash.yaml": [
+   [
+    "intercom-settings-user-identifier-without-user-hash",
+    "security"
+   ]
+  ],
+  "javascript/jose/security/audit/jose-exposed-data.yaml": [
+   [
+    "jose-exposed-data",
+    "security"
+   ]
+  ],
+  "javascript/jose/security/jwt-hardcode.yaml": [
+   [
+    "hardcoded-jwt-secret",
+    "security"
+   ]
+  ],
+  "javascript/jose/security/jwt-none-alg.yaml": [
+   [
+    "jwt-none-alg",
+    "security"
+   ]
+  ],
+  "javascript/jquery/security/audit/jquery-insecure-method.yaml": [
+   [
+    "jquery-insecure-method",
+    "security"
+   ]
+  ],
+  "javascript/jquery/security/audit/jquery-insecure-selector.yaml": [
+   [
+    "jquery-insecure-selector",
+    "security"
+   ]
+  ],
+  "javascript/jquery/security/audit/prohibit-jquery-html.yaml": [
+   [
+    "prohibit-jquery-html",
+    "security"
+   ]
+  ],
+  "javascript/jsonwebtoken/security/audit/jwt-decode-without-verify.yaml": [
+   [
+    "jwt-decode-without-verify",
+    "security"
+   ]
+  ],
+  "javascript/jsonwebtoken/security/audit/jwt-exposed-data.yaml": [
+   [
+    "jwt-exposed-data",
+    "security"
+   ]
+  ],
+  "javascript/jsonwebtoken/security/jwt-hardcode.yaml": [
+   [
+    "hardcoded-jwt-secret",
+    "security"
+   ]
+  ],
+  "javascript/jsonwebtoken/security/jwt-none-alg.yaml": [
+   [
+    "jwt-none-alg",
+    "security"
+   ]
+  ],
+  "javascript/jwt-simple/security/jwt-simple-noverify.yaml": [
+   [
+    "jwt-simple-noverify",
+    "security"
+   ]
+  ],
+  "javascript/lang/best-practice/assigned-undefined.yaml": [
+   [
+    "assigned-undefined",
+    "best-practice"
+   ]
+  ],
+  "javascript/lang/best-practice/lazy-load-module.yaml": [
+   [
+    "lazy-load-module",
+    "best-practice"
+   ]
+  ],
+  "javascript/lang/best-practice/leftover_debugging.yaml": [
+   [
+    "javascript-alert",
+    "best-practice"
+   ],
+   [
+    "javascript-debugger",
+    "best-practice"
+   ],
+   [
+    "javascript-confirm",
+    "best-practice"
+   ],
+   [
+    "javascript-prompt",
+    "best-practice"
+   ]
+  ],
+  "javascript/lang/best-practice/zlib-async-loop.yaml": [
+   [
+    "zlib-async-loop",
+    "best-practice"
+   ]
+  ],
+  "javascript/lang/correctness/missing-template-string-indicator.yaml": [
+   [
+    "missing-template-string-indicator",
+    "correctness"
+   ]
+  ],
+  "javascript/lang/correctness/no-replaceall.yaml": [
+   [
+    "no-replaceall",
+    "correctness"
+   ]
+  ],
+  "javascript/lang/correctness/no-stringify-keys.yaml": [
+   [
+    "no-stringify-keys",
+    "correctness"
+   ]
+  ],
+  "javascript/lang/correctness/useless-assign.yaml": [
+   [
+    "useless-assignment",
+    "correctness"
+   ]
+  ],
+  "javascript/lang/correctness/useless-eqeq.yaml": [
+   [
+    "eqeq-is-bad",
+    "correctness"
+   ]
+  ],
+  "javascript/lang/security/audit/code-string-concat.yaml": [
+   [
+    "code-string-concat",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/dangerous-spawn-shell.yaml": [
+   [
+    "dangerous-spawn-shell",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/detect-non-literal-fs-filename.yaml": [
+   [
+    "detect-non-literal-fs-filename",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/detect-non-literal-regexp.yaml": [
+   [
+    "detect-non-literal-regexp",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/detect-non-literal-require.yaml": [
+   [
+    "detect-non-literal-require",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/detect-redos.yaml": [
+   [
+    "detect-redos",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/hardcoded-hmac-key.yaml": [
+   [
+    "hardcoded-hmac-key",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/incomplete-sanitization.yaml": [
+   [
+    "incomplete-sanitization",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/md5-used-as-password.yaml": [
+   [
+    "md5-used-as-password",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/path-traversal/path-join-resolve-traversal.yaml": [
+   [
+    "path-join-resolve-traversal",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/prototype-pollution/prototype-pollution-assignment.yaml": [
+   [
+    "prototype-pollution-assignment",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/prototype-pollution/prototype-pollution-loop.yaml": [
+   [
+    "prototype-pollution-loop",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/spawn-shell-true.yaml": [
+   [
+    "spawn-shell-true",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/sqli/node-knex-sqli.yaml": [
+   [
+    "node-knex-sqli",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/sqli/node-mssql-sqli.yaml": [
+   [
+    "node-mssql-sqli",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/sqli/node-mysql-sqli.yaml": [
+   [
+    "node-mysql-sqli",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/sqli/node-postgres-sqli.yaml": [
+   [
+    "node-postgres-sqli",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/unknown-value-with-script-tag.yaml": [
+   [
+    "unknown-value-with-script-tag",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/unsafe-dynamic-method.yaml": [
+   [
+    "unsafe-dynamic-method",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/audit/unsafe-formatstring.yaml": [
+   [
+    "unsafe-formatstring",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/detect-buffer-noassert.yaml": [
+   [
+    "detect-buffer-noassert",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/detect-child-process.yaml": [
+   [
+    "detect-child-process",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/detect-disable-mustache-escape.yaml": [
+   [
+    "detect-disable-mustache-escape",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/detect-eval-with-expression.yaml": [
+   [
+    "detect-eval-with-expression",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/detect-insecure-websocket.yaml": [
+   [
+    "detect-insecure-websocket",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/detect-no-csrf-before-method-override.yaml": [
+   [
+    "detect-no-csrf-before-method-override",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/detect-pseudoRandomBytes.yaml": [
+   [
+    "detect-pseudoRandomBytes",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/html-in-template-string.yaml": [
+   [
+    "html-in-template-string",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/insecure-object-assign.yaml": [
+   [
+    "insecure-object-assign",
+    "security"
+   ]
+  ],
+  "javascript/lang/security/spawn-git-clone.yaml": [
+   [
+    "spawn-git-clone",
+    "security"
+   ]
+  ],
+  "javascript/monaco-editor/security/audit/monaco-hover-htmlsupport.yaml": [
+   [
+    "monaco-hover-htmlsupport",
+    "security"
+   ]
+  ],
+  "javascript/node-crypto/security/aead-no-final.yaml": [
+   [
+    "aead-no-final",
+    "security"
+   ]
+  ],
+  "javascript/node-crypto/security/create-de-cipher-no-iv.yaml": [
+   [
+    "create-de-cipher-no-iv",
+    "security"
+   ]
+  ],
+  "javascript/node-crypto/security/gcm-no-tag-length.yaml": [
+   [
+    "gcm-no-tag-length",
+    "security"
+   ]
+  ],
+  "javascript/node-expat/security/audit/expat-xxe.yaml": [
+   [
+    "expat-xxe",
+    "security"
+   ]
+  ],
+  "javascript/passport-jwt/security/passport-hardcode.yaml": [
+   [
+    "hardcoded-passport-secret",
+    "security"
+   ]
+  ],
+  "javascript/phantom/security/audit/phantom-injection.yaml": [
+   [
+    "phantom-injection",
+    "security"
+   ]
+  ],
+  "javascript/playwright/security/audit/playwright-addinitscript-code-injection.yaml": [
+   [
+    "playwright-addinitscript-code-injection",
+    "security"
+   ]
+  ],
+  "javascript/playwright/security/audit/playwright-evaluate-arg-injection.yaml": [
+   [
+    "playwright-evaluate-arg-injection",
+    "security"
+   ]
+  ],
+  "javascript/playwright/security/audit/playwright-evaluate-code-injection.yaml": [
+   [
+    "playwright-evaluate-code-injection",
+    "security"
+   ]
+  ],
+  "javascript/playwright/security/audit/playwright-exposed-chrome-devtools.yaml": [
+   [
+    "playwright-exposed-chrome-devtools",
+    "security"
+   ]
+  ],
+  "javascript/playwright/security/audit/playwright-goto-injection.yaml": [
+   [
+    "playwright-goto-injection",
+    "security"
+   ]
+  ],
+  "javascript/playwright/security/audit/playwright-setcontent-injection.yaml": [
+   [
+    "playwright-setcontent-injection",
+    "security"
+   ]
+  ],
+  "javascript/puppeteer/security/audit/puppeteer-evaluate-arg-injection.yaml": [
+   [
+    "puppeteer-evaluate-arg-injection",
+    "security"
+   ]
+  ],
+  "javascript/puppeteer/security/audit/puppeteer-evaluate-code-injection.yaml": [
+   [
+    "puppeteer-evaluate-code-injection",
+    "security"
+   ]
+  ],
+  "javascript/puppeteer/security/audit/puppeteer-exposed-chrome-devtools.yaml": [
+   [
+    "puppeteer-exposed-chrome-devtools",
+    "security"
+   ]
+  ],
+  "javascript/puppeteer/security/audit/puppeteer-goto-injection.yaml": [
+   [
+    "puppeteer-goto-injection",
+    "security"
+   ]
+  ],
+  "javascript/puppeteer/security/audit/puppeteer-setcontent-injection.yaml": [
+   [
+    "puppeteer-setcontent-injection",
+    "security"
+   ]
+  ],
+  "javascript/react/correctness/hooks/set-state-no-op.yaml": [
+   [
+    "calling-set-state-on-current-state",
+    "correctness"
+   ]
+  ],
+  "javascript/sandbox/security/audit/sandbox-code-injection.yaml": [
+   [
+    "sandbox-code-injection",
+    "security"
+   ]
+  ],
+  "javascript/sax/security/audit/sax-xxe.yaml": [
+   [
+    "sax-xxe",
+    "security"
+   ]
+  ],
+  "javascript/sequelize/security/audit/sequelize-enforce-tls.yaml": [
+   [
+    "sequelize-enforce-tls",
+    "security"
+   ]
+  ],
+  "javascript/sequelize/security/audit/sequelize-injection-express.yaml": [
+   [
+    "express-sequelize-injection",
+    "security"
+   ]
+  ],
+  "javascript/sequelize/security/audit/sequelize-raw-query.yaml": [
+   [
+    "sequelize-raw-query",
+    "security"
+   ]
+  ],
+  "javascript/sequelize/security/audit/sequelize-tls-disabled-cert-validation.yaml": [
+   [
+    "sequelize-tls-disabled-cert-validation",
+    "security"
+   ]
+  ],
+  "javascript/sequelize/security/audit/sequelize-weak-tls-version.yaml": [
+   [
+    "sequelize-weak-tls-version",
+    "security"
+   ]
+  ],
+  "javascript/serialize-javascript/security/audit/unsafe-serialize-javascript.yaml": [
+   [
+    "unsafe-serialize-javascript",
+    "security"
+   ]
+  ],
+  "javascript/shelljs/security/shelljs-exec-injection.yaml": [
+   [
+    "shelljs-exec-injection",
+    "security"
+   ]
+  ],
+  "javascript/thenify/security/audit/multiargs-code-execution.yaml": [
+   [
+    "multiargs-code-execution",
+    "security"
+   ]
+  ],
+  "javascript/vm2/security/audit/vm2-code-injection.yaml": [
+   [
+    "vm2-code-injection",
+    "security"
+   ]
+  ],
+  "javascript/vm2/security/audit/vm2-context-injection.yaml": [
+   [
+    "vm2-context-injection",
+    "security"
+   ]
+  ],
+  "javascript/vue/security/audit/xss/templates/avoid-v-html.yaml": [
+   [
+    "avoid-v-html",
+    "security"
+   ]
+  ],
+  "javascript/wkhtmltoimage/security/audit/wkhtmltoimage-injection.yaml": [
+   [
+    "wkhtmltoimage-injection",
+    "security"
+   ]
+  ],
+  "javascript/wkhtmltopdf/security/audit/wkhtmltopdf-injection.yaml": [
+   [
+    "wkhtmltopdf-injection",
+    "security"
+   ]
+  ],
+  "javascript/xml2json/security/audit/xml2json-xxe.yaml": [
+   [
+    "xml2json-xxe",
+    "security"
+   ]
+  ],
+  "python/airflow/security/audit/formatted-string-bashoperator.yaml": [
+   [
+    "formatted-string-bashoperator",
+    "security"
+   ]
+  ],
+  "python/attr/correctness/mutable-initializer.yaml": [
+   [
+    "attr-mutable-initializer",
+    "correctness"
+   ]
+  ],
+  "python/aws-lambda/security/dangerous-asyncio-create-exec.yaml": [
+   [
+    "dangerous-asyncio-create-exec",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/dangerous-asyncio-exec.yaml": [
+   [
+    "dangerous-asyncio-exec",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/dangerous-asyncio-shell.yaml": [
+   [
+    "dangerous-asyncio-shell",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/dangerous-spawn-process.yaml": [
+   [
+    "dangerous-spawn-process",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/dangerous-subprocess-use.yaml": [
+   [
+    "dangerous-subprocess-use",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/dangerous-system-call.yaml": [
+   [
+    "dangerous-system-call",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/dynamodb-filter-injection.yaml": [
+   [
+    "dynamodb-filter-injection",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/mysql-sqli.yaml": [
+   [
+    "mysql-sqli",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/psycopg-sqli.yaml": [
+   [
+    "psycopg-sqli",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/pymssql-sqli.yaml": [
+   [
+    "pymssql-sqli",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/pymysql-sqli.yaml": [
+   [
+    "pymysql-sqli",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/sqlalchemy-sqli.yaml": [
+   [
+    "sqlalchemy-sqli",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/tainted-code-exec.yaml": [
+   [
+    "tainted-code-exec",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/tainted-html-response.yaml": [
+   [
+    "tainted-html-response",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/tainted-html-string.yaml": [
+   [
+    "tainted-html-string",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/tainted-pickle-deserialization.yaml": [
+   [
+    "tainted-pickle-deserialization",
+    "security"
+   ]
+  ],
+  "python/aws-lambda/security/tainted-sql-string.yaml": [
+   [
+    "tainted-sql-string",
+    "security"
+   ]
+  ],
+  "python/bokeh/maintainability/deprecated/deprecated_apis.yaml": [
+   [
+    "bokeh-deprecated-apis",
+    "maintainability"
+   ]
+  ],
+  "python/boto3/security/hardcoded-token.yaml": [
+   [
+    "hardcoded-token",
+    "security"
+   ]
+  ],
+  "python/click/best-practice/echo-style.yaml": [
+   [
+    "use-click-secho",
+    "best-practice"
+   ]
+  ],
+  "python/correctness/check-is-none-explicitly.yaml": [
+   [
+    "check-is-none-explicitly",
+    "correctness"
+   ]
+  ],
+  "python/correctness/socket-shutdown-close.yaml": [
+   [
+    "socket-shutdown-close",
+    "correctness"
+   ]
+  ],
+  "python/correctness/suppressed-exception-handling-finally-break.yaml": [
+   [
+    "suppressed-exception-handling-finally-break",
+    "correctness"
+   ]
+  ],
+  "python/cryptography/security/empty-aes-key.yaml": [
+   [
+    "empty-aes-key",
+    "security"
+   ]
+  ],
+  "python/cryptography/security/insecure-cipher-algorithms-arc4.yaml": [
+   [
+    "insecure-cipher-algorithm-arc4",
+    "security"
+   ]
+  ],
+  "python/cryptography/security/insecure-cipher-algorithms-blowfish.yaml": [
+   [
+    "insecure-cipher-algorithm-blowfish",
+    "security"
+   ]
+  ],
+  "python/cryptography/security/insecure-cipher-algorithms.yaml": [
+   [
+    "insecure-cipher-algorithm-idea",
+    "security"
+   ]
+  ],
+  "python/cryptography/security/insecure-cipher-mode-ecb.yaml": [
+   [
+    "insecure-cipher-mode-ecb",
+    "security"
+   ]
+  ],
+  "python/cryptography/security/insecure-hash-algorithms-md5.yaml": [
+   [
+    "insecure-hash-algorithm-md5",
+    "security"
+   ]
+  ],
+  "python/cryptography/security/insecure-hash-algorithms.yaml": [
+   [
+    "insecure-hash-algorithm-sha1",
+    "security"
+   ]
+  ],
+  "python/cryptography/security/insufficient-dsa-key-size.yaml": [
+   [
+    "insufficient-dsa-key-size",
+    "security"
+   ]
+  ],
+  "python/cryptography/security/insufficient-ec-key-size.yaml": [
+   [
+    "insufficient-ec-key-size",
+    "security"
+   ]
+  ],
+  "python/cryptography/security/insufficient-rsa-key-size.yaml": [
+   [
+    "insufficient-rsa-key-size",
+    "security"
+   ]
+  ],
+  "python/cryptography/security/mode-without-authentication.yaml": [
+   [
+    "crypto-mode-without-authentication",
+    "security"
+   ]
+  ],
+  "python/distributed/security.yaml": [
+   [
+    "require-encryption",
+    "security"
+   ]
+  ],
+  "python/django/best-practice/json_response.yaml": [
+   [
+    "use-json-response",
+    "best-practice"
+   ]
+  ],
+  "python/django/best-practice/upsell_django_environ.yaml": [
+   [
+    "use-django-environ",
+    "best-practice"
+   ]
+  ],
+  "python/django/best-practice/use-onetoonefield.yaml": [
+   [
+    "use-onetoonefield",
+    "best-practice"
+   ]
+  ],
+  "python/django/compatibility/django-2_0-compat.yaml": [
+   [
+    "django-compat-2_0-signals-weak",
+    "compatibility"
+   ],
+   [
+    "django-compat-2_0-check-aggregate-support",
+    "compatibility"
+   ],
+   [
+    "django-compat-2_0-extra-forms",
+    "compatibility"
+   ],
+   [
+    "django-compat-2_0-assignment-tag",
+    "compatibility"
+   ],
+   [
+    "django-compat-2_0-assert-redirects-helper",
+    "compatibility"
+   ]
+  ],
+  "python/django/correctness/model-save.yaml": [
+   [
+    "django-db-model-save-super",
+    "correctness"
+   ]
+  ],
+  "python/django/correctness/nontext-field-must-set-null-true.yaml": [
+   [
+    "nontext-field-must-set-null-true",
+    "correctness"
+   ]
+  ],
+  "python/django/correctness/string-field-null-checks.yaml": [
+   [
+    "no-null-string-field",
+    "correctness"
+   ],
+   [
+    "string-field-must-set-null-true",
+    "correctness"
+   ]
+  ],
+  "python/django/correctness/use-decimalfield-for-money.yaml": [
+   [
+    "use-decimalfield-for-money",
+    "correctness"
+   ]
+  ],
+  "python/django/maintainability/duplicate-path-assignment.yaml": [
+   [
+    "duplicate-path-assignment",
+    "maintainability"
+   ],
+   [
+    "conflicting-path-assignment",
+    "maintainability"
+   ],
+   [
+    "duplicate-path-assignment-different-names",
+    "maintainability"
+   ],
+   [
+    "duplicate-name-assignment",
+    "maintainability"
+   ]
+  ],
+  "python/django/performance/access-foreign-keys.yaml": [
+   [
+    "access-foreign-keys",
+    "performance"
+   ]
+  ],
+  "python/django/performance/upsell-count.yaml": [
+   [
+    "use-count-method",
+    "performance"
+   ]
+  ],
+  "python/django/performance/upsell_earliest_latest.yaml": [
+   [
+    "use-earliest-or-latest",
+    "performance"
+   ]
+  ],
+  "python/django/security/audit/avoid-insecure-deserialization.yaml": [
+   [
+    "avoid-insecure-deserialization",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/avoid-mark-safe.yaml": [
+   [
+    "avoid-mark-safe",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/csrf-exempt.yaml": [
+   [
+    "no-csrf-exempt",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/custom-expression-as-sql.yaml": [
+   [
+    "custom-expression-as-sql",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/django-rest-framework/missing-throttle-config.yaml": [
+   [
+    "missing-throttle-config",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/extends-custom-expression.yaml": [
+   [
+    "extends-custom-expression",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/query-set-extra.yaml": [
+   [
+    "avoid-query-set-extra",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/raw-query.yaml": [
+   [
+    "avoid-raw-sql",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/secure-cookies.yaml": [
+   [
+    "django-secure-set-cookie",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/templates/debug-template-tag.yaml": [
+   [
+    "debug-template-tag",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/unvalidated-password.yaml": [
+   [
+    "unvalidated-password",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/class-extends-safestring.yaml": [
+   [
+    "class-extends-safestring",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/context-autoescape-off.yaml": [
+   [
+    "context-autoescape-off",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/direct-use-of-httpresponse.yaml": [
+   [
+    "direct-use-of-httpresponse",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/filter-with-is-safe.yaml": [
+   [
+    "filter-with-is-safe",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/formathtml-fstring-parameter.yaml": [
+   [
+    "formathtml-fstring-parameter",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/global-autoescape-off.yaml": [
+   [
+    "global-autoescape-off",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/html-magic-method.yaml": [
+   [
+    "html-magic-method",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/html-safe.yaml": [
+   [
+    "html-safe",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/template-autoescape-off.yaml": [
+   [
+    "template-autoescape-off",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/template-blocktranslate-no-escape.yaml": [
+   [
+    "template-blocktranslate-no-escape",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/template-translate-as-no-escape.yaml": [
+   [
+    "template-translate-as-no-escape",
+    "security"
+   ]
+  ],
+  "python/django/security/audit/xss/template-var-unescaped-with-safeseq.yaml": [
+   [
+    "template-var-unescaped-with-safeseq",
+    "security"
+   ]
+  ],
+  "python/django/security/django-no-csrf-token.yaml": [
+   [
+    "django-no-csrf-token",
+    "security"
+   ]
+  ],
+  "python/django/security/django-using-request-post-after-is-valid.yaml": [
+   [
+    "django-using-request-post-after-is-valid",
+    "security"
+   ]
+  ],
+  "python/django/security/globals-as-template-context.yaml": [
+   [
+    "globals-as-template-context",
+    "security"
+   ]
+  ],
+  "python/django/security/hashids-with-django-secret.yaml": [
+   [
+    "hashids-with-django-secret",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/code/globals-misuse-code-execution.yaml": [
+   [
+    "globals-misuse-code-execution",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/code/user-eval-format-string.yaml": [
+   [
+    "user-eval-format-string",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/code/user-eval.yaml": [
+   [
+    "user-eval",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/code/user-exec-format-string.yaml": [
+   [
+    "user-exec-format-string",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/code/user-exec.yaml": [
+   [
+    "user-exec",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/command/command-injection-os-system.yaml": [
+   [
+    "command-injection-os-system",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/command/subprocess-injection.yaml": [
+   [
+    "subprocess-injection",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/csv-writer-injection.yaml": [
+   [
+    "csv-writer-injection",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/email/xss-html-email-body.yaml": [
+   [
+    "xss-html-email-body",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/email/xss-send-mail-html-message.yaml": [
+   [
+    "xss-send-mail-html-message",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/mass-assignment.yaml": [
+   [
+    "mass-assignment",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/open-redirect.yaml": [
+   [
+    "open-redirect",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/path-traversal/path-traversal-file-name.yaml": [
+   [
+    "path-traversal-file-name",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/path-traversal/path-traversal-join.yaml": [
+   [
+    "path-traversal-join",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/path-traversal/path-traversal-open.yaml": [
+   [
+    "path-traversal-open",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/raw-html-format.yaml": [
+   [
+    "raw-html-format",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/reflected-data-httpresponse.yaml": [
+   [
+    "reflected-data-httpresponse",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/reflected-data-httpresponsebadrequest.yaml": [
+   [
+    "reflected-data-httpresponsebadrequest",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/request-data-fileresponse.yaml": [
+   [
+    "request-data-fileresponse",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/request-data-write.yaml": [
+   [
+    "request-data-write",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/sql/sql-injection-extra.yaml": [
+   [
+    "sql-injection-using-extra-where",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/sql/sql-injection-rawsql.yaml": [
+   [
+    "sql-injection-using-rawsql",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/sql/sql-injection-using-db-cursor-execute.yaml": [
+   [
+    "sql-injection-db-cursor-execute",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/sql/sql-injection-using-raw.yaml": [
+   [
+    "sql-injection-using-raw",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/ssrf/ssrf-injection-requests.yaml": [
+   [
+    "ssrf-injection-requests",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/ssrf/ssrf-injection-urllib.yaml": [
+   [
+    "ssrf-injection-urllib",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/tainted-sql-string.yaml": [
+   [
+    "tainted-sql-string",
+    "security"
+   ]
+  ],
+  "python/django/security/injection/tainted-url-host.yaml": [
+   [
+    "tainted-url-host",
+    "security"
+   ]
+  ],
+  "python/django/security/locals-as-template-context.yaml": [
+   [
+    "locals-as-template-context",
+    "security"
+   ]
+  ],
+  "python/django/security/nan-injection.yaml": [
+   [
+    "nan-injection",
+    "security"
+   ]
+  ],
+  "python/django/security/passwords/password-empty-string.yaml": [
+   [
+    "password-empty-string",
+    "security"
+   ]
+  ],
+  "python/django/security/passwords/use-none-for-password-default.yaml": [
+   [
+    "use-none-for-password-default",
+    "security"
+   ]
+  ],
+  "python/docker/security/audit/docker-arbitrary-container-run.yaml": [
+   [
+    "docker-arbitrary-container-run",
+    "security"
+   ]
+  ],
+  "python/fastapi/security/wildcard-cors.yaml": [
+   [
+    "wildcard-cors",
+    "security"
+   ]
+  ],
+  "python/flask/best-practice/get-class-method-with-side-effects.yaml": [
+   [
+    "flask-class-method-get-side-effects",
+    "best-practice"
+   ]
+  ],
+  "python/flask/best-practice/use-jsonify.yaml": [
+   [
+    "use-jsonify",
+    "best-practice"
+   ]
+  ],
+  "python/flask/caching/query-string.yaml": [
+   [
+    "flask-cache-query-string",
+    "caching"
+   ]
+  ],
+  "python/flask/correctness/access-request-in-wrong-handler.yaml": [
+   [
+    "avoid-accessing-request-in-wrong-handler",
+    "correctness"
+   ]
+  ],
+  "python/flask/correctness/same-handler-name.yaml": [
+   [
+    "flask-duplicate-handler-name",
+    "correctness"
+   ]
+  ],
+  "python/flask/maintainability/deprecated/deprecated-apis.yaml": [
+   [
+    "flask-deprecated-apis",
+    "maintainability"
+   ]
+  ],
+  "python/flask/security/audit/app-run-param-config.yaml": [
+   [
+    "avoid_app_run_with_bad_host",
+    "security"
+   ]
+  ],
+  "python/flask/security/audit/app-run-security-config.yaml": [
+   [
+    "avoid_using_app_run_directly",
+    "security"
+   ]
+  ],
+  "python/flask/security/audit/debug-enabled.yaml": [
+   [
+    "debug-enabled",
+    "security"
+   ]
+  ],
+  "python/flask/security/audit/directly-returned-format-string.yaml": [
+   [
+    "directly-returned-format-string",
+    "security"
+   ]
+  ],
+  "python/flask/security/audit/flask-cors-misconfiguration.yaml": [
+   [
+    "flask-cors-misconfiguration",
+    "security"
+   ]
+  ],
+  "python/flask/security/audit/hardcoded-config.yaml": [
+   [
+    "avoid_hardcoded_config_TESTING",
+    "security"
+   ],
+   [
+    "avoid_hardcoded_config_SECRET_KEY",
+    "security"
+   ],
+   [
+    "avoid_hardcoded_config_ENV",
+    "security"
+   ],
+   [
+    "avoid_hardcoded_config_DEBUG",
+    "security"
+   ]
+  ],
+  "python/flask/security/audit/host-header-injection-python.yaml": [
+   [
+    "host-header-injection-python",
+    "security"
+   ]
+  ],
+  "python/flask/security/audit/render-template-string.yaml": [
+   [
+    "render-template-string",
+    "security"
+   ]
+  ],
+  "python/flask/security/audit/secure-set-cookie.yaml": [
+   [
+    "secure-set-cookie",
+    "security"
+   ]
+  ],
+  "python/flask/security/audit/wtf-csrf-disabled.yaml": [
+   [
+    "flask-wtf-csrf-disabled",
+    "security"
+   ]
+  ],
+  "python/flask/security/audit/xss/make-response-with-unknown-content.yaml": [
+   [
+    "make-response-with-unknown-content",
+    "security"
+   ]
+  ],
+  "python/flask/security/dangerous-template-string.yaml": [
+   [
+    "dangerous-template-string",
+    "security"
+   ]
+  ],
+  "python/flask/security/flask-api-method-string-format.yaml": [
+   [
+    "flask-api-method-string-format",
+    "security"
+   ]
+  ],
+  "python/flask/security/hashids-with-flask-secret.yaml": [
+   [
+    "hashids-with-flask-secret",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/csv-writer-injection.yaml": [
+   [
+    "csv-writer-injection",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/nan-injection.yaml": [
+   [
+    "nan-injection",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/os-system-injection.yaml": [
+   [
+    "os-system-injection",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/path-traversal-open.yaml": [
+   [
+    "path-traversal-open",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/raw-html-concat.yaml": [
+   [
+    "raw-html-format",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/ssrf-requests.yaml": [
+   [
+    "ssrf-requests",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/subprocess-injection.yaml": [
+   [
+    "subprocess-injection",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/tainted-sql-string.yaml": [
+   [
+    "tainted-sql-string",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/tainted-url-host.yaml": [
+   [
+    "tainted-url-host",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/user-eval.yaml": [
+   [
+    "eval-injection",
+    "security"
+   ]
+  ],
+  "python/flask/security/injection/user-exec.yaml": [
+   [
+    "exec-injection",
+    "security"
+   ]
+  ],
+  "python/flask/security/insecure-deserialization.yaml": [
+   [
+    "insecure-deserialization",
+    "security"
+   ]
+  ],
+  "python/flask/security/open-redirect.yaml": [
+   [
+    "open-redirect",
+    "security"
+   ]
+  ],
+  "python/flask/security/secure-static-file-serve.yaml": [
+   [
+    "avoid_send_file_without_path_sanitization",
+    "security"
+   ]
+  ],
+  "python/flask/security/unescaped-template-extension.yaml": [
+   [
+    "unescaped-template-extension",
+    "security"
+   ]
+  ],
+  "python/flask/security/unsanitized-input.yaml": [
+   [
+    "response-contains-unsanitized-input",
+    "security"
+   ]
+  ],
+  "python/flask/security/xss/audit/direct-use-of-jinja2.yaml": [
+   [
+    "direct-use-of-jinja2",
+    "security"
+   ]
+  ],
+  "python/flask/security/xss/audit/explicit-unescape-with-markup.yaml": [
+   [
+    "explicit-unescape-with-markup",
+    "security"
+   ]
+  ],
+  "python/flask/security/xss/audit/template-autoescape-off.yaml": [
+   [
+    "template-autoescape-off",
+    "security"
+   ]
+  ],
+  "python/flask/security/xss/audit/template-unescaped-with-safe.yaml": [
+   [
+    "template-unescaped-with-safe",
+    "security"
+   ]
+  ],
+  "python/flask/security/xss/audit/template-unquoted-attribute-var.yaml": [
+   [
+    "template-unquoted-attribute-var",
+    "security"
+   ]
+  ],
+  "python/jinja2/security/audit/autoescape-disabled-false.yaml": [
+   [
+    "incorrect-autoescape-disabled",
+    "security"
+   ]
+  ],
+  "python/jinja2/security/audit/missing-autoescape-disabled.yaml": [
+   [
+    "missing-autoescape-disabled",
+    "security"
+   ]
+  ],
+  "python/jwt/security/audit/jwt-exposed-data.yaml": [
+   [
+    "jwt-python-exposed-data",
+    "security"
+   ]
+  ],
+  "python/jwt/security/jwt-exposed-credentials.yaml": [
+   [
+    "jwt-python-exposed-credentials",
+    "security"
+   ]
+  ],
+  "python/jwt/security/jwt-hardcode.yaml": [
+   [
+    "jwt-python-hardcoded-secret",
+    "security"
+   ]
+  ],
+  "python/jwt/security/jwt-none-alg.yaml": [
+   [
+    "jwt-python-none-alg",
+    "security"
+   ]
+  ],
+  "python/jwt/security/unverified-jwt-decode.yaml": [
+   [
+    "unverified-jwt-decode",
+    "security"
+   ]
+  ],
+  "python/lang/best-practice/hardcoded-tmp-path.yaml": [
+   [
+    "hardcoded-tmp-path",
+    "best-practice"
+   ]
+  ],
+  "python/lang/best-practice/logging-error-without-handling.yaml": [
+   [
+    "logging-error-without-handling",
+    "best-practice"
+   ]
+  ],
+  "python/lang/best-practice/manual-collections-create.yaml": [
+   [
+    "manual-defaultdict-dict-create",
+    "best-practice"
+   ],
+   [
+    "manual-defaultdict-set-create",
+    "best-practice"
+   ],
+   [
+    "manual-defaultdict-list-create",
+    "best-practice"
+   ],
+   [
+    "manual-counter-create",
+    "best-practice"
+   ]
+  ],
+  "python/lang/best-practice/missing-hash-with-eq.yaml": [
+   [
+    "missing-hash-with-eq",
+    "best-practice"
+   ]
+  ],
+  "python/lang/best-practice/open-never-closed.yaml": [
+   [
+    "open-never-closed",
+    "best-practice"
+   ]
+  ],
+  "python/lang/best-practice/pass-body.yaml": [
+   [
+    "pass-body-fn",
+    "best-practice"
+   ],
+   [
+    "pass-body-range",
+    "best-practice"
+   ]
+  ],
+  "python/lang/best-practice/pdb.yaml": [
+   [
+    "python-debugger-found",
+    "best-practice"
+   ]
+  ],
+  "python/lang/best-practice/sleep.yaml": [
+   [
+    "arbitrary-sleep",
+    "best-practice"
+   ]
+  ],
+  "python/lang/best-practice/unspecified-open-encoding.yaml": [
+   [
+    "unspecified-open-encoding",
+    "best-practice"
+   ]
+  ],
+  "python/lang/compatibility/python36.yaml": [
+   [
+    "python36-compatibility-ssl",
+    "compatibility"
+   ],
+   [
+    "python36-compatibility-Popen1",
+    "compatibility"
+   ],
+   [
+    "python36-compatibility-Popen2",
+    "compatibility"
+   ]
+  ],
+  "python/lang/compatibility/python37.yaml": [
+   [
+    "python37-compatibility-importlib",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-importlib2",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-httpconn",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-httpsconn",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-importlib3",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-textiowrapper",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-ipv6network1",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-ipv6network2",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-ipv4network1",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-ipv4network2",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-locale1",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-math1",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-multiprocess1",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-multiprocess2",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-os1",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-os2-ok2",
+    "compatibility"
+   ],
+   [
+    "python37-compatibility-pdb",
+    "compatibility"
+   ]
+  ],
+  "python/lang/correctness/baseclass-attribute-override.yaml": [
+   [
+    "baseclass-attribute-override",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/cannot-cache-generators.yaml": [
+   [
+    "cannot-cache-generators",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/common-mistakes/default-mutable-dict.yaml": [
+   [
+    "default-mutable-dict",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/common-mistakes/default-mutable-list.yaml": [
+   [
+    "default-mutable-list",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/common-mistakes/is-comparison-string.yaml": [
+   [
+    "identical-is-comparison",
+    "correctness"
+   ],
+   [
+    "string-is-comparison",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/common-mistakes/is-not-is-not.yaml": [
+   [
+    "is-not-is-not",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/common-mistakes/string-concat-in-list.yaml": [
+   [
+    "string-concat-in-list",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/concurrent.yaml": [
+   [
+    "uncaught-executor-exceptions",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/dict-modify-iterating.yaml": [
+   [
+    "dict-del-while-iterate",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/exceptions/exceptions.yaml": [
+   [
+    "raise-not-base-exception",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/exit.yaml": [
+   [
+    "use-sys-exit",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/file-object-redefined-before-close.yaml": [
+   [
+    "file-object-redefined-before-close",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/list-modify-iterating.yaml": [
+   [
+    "list-modify-while-iterate",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/pdb.yaml": [
+   [
+    "pdb-remove",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/pytest-assert_match-after-path-patch.yaml": [
+   [
+    "pytest-assert_match-after-path-patch",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/return-in-init.yaml": [
+   [
+    "return-in-init",
+    "correctness"
+   ],
+   [
+    "yield-in-init",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/sync-sleep-in-async-code.yaml": [
+   [
+    "sync-sleep-in-async-code",
+    "best-practice"
+   ]
+  ],
+  "python/lang/correctness/tempfile/flush.yaml": [
+   [
+    "tempfile-without-flush",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/tempfile/mktemp.yaml": [
+   [
+    "tempfile-insecure",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/test-is-missing-assert.yaml": [
+   [
+    "test-is-missing-assert",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/unchecked-returns.yaml": [
+   [
+    "unchecked-subprocess-call",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/useless-comparison.yaml": [
+   [
+    "no-strings-as-booleans",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/useless-eqeq.yaml": [
+   [
+    "useless-eqeq",
+    "correctness"
+   ]
+  ],
+  "python/lang/correctness/writing-to-file-in-read-mode.yaml": [
+   [
+    "writing-to-file-in-read-mode",
+    "correctness"
+   ]
+  ],
+  "python/lang/maintainability/improper-list-concat.yaml": [
+   [
+    "improper-list-concat",
+    "maintainability"
+   ]
+  ],
+  "python/lang/maintainability/is-function-without-parentheses.yaml": [
+   [
+    "is-function-without-parentheses",
+    "maintainability"
+   ]
+  ],
+  "python/lang/maintainability/return.yaml": [
+   [
+    "code-after-unconditional-return",
+    "maintainability"
+   ],
+   [
+    "return-not-in-function",
+    "maintainability"
+   ]
+  ],
+  "python/lang/maintainability/useless-assign-keyed.yaml": [
+   [
+    "useless-assignment-keyed",
+    "maintainability"
+   ]
+  ],
+  "python/lang/maintainability/useless-ifelse.yaml": [
+   [
+    "useless-if-conditional",
+    "maintainability"
+   ],
+   [
+    "useless-if-body",
+    "maintainability"
+   ]
+  ],
+  "python/lang/maintainability/useless-innerfunction.yaml": [
+   [
+    "useless-inner-function",
+    "maintainability"
+   ]
+  ],
+  "python/lang/maintainability/useless-literal-set.yaml": [
+   [
+    "useless-literal-set",
+    "maintainability"
+   ]
+  ],
+  "python/lang/maintainability/useless-literal.yaml": [
+   [
+    "useless-literal",
+    "maintainability"
+   ]
+  ],
+  "python/lang/security/audit/conn_recv.yaml": [
+   [
+    "multiprocessing-recv",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-annotations-usage.yaml": [
+   [
+    "dangerous-annotations-usage",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-asyncio-create-exec-audit.yaml": [
+   [
+    "dangerous-asyncio-create-exec-audit",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-asyncio-create-exec-tainted-env-args.yaml": [
+   [
+    "dangerous-asyncio-create-exec-tainted-env-args",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-asyncio-exec-audit.yaml": [
+   [
+    "dangerous-asyncio-exec-audit",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-asyncio-exec-tainted-env-args.yaml": [
+   [
+    "dangerous-asyncio-exec-tainted-env-args",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-asyncio-shell-audit.yaml": [
+   [
+    "dangerous-asyncio-shell-audit",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-asyncio-shell-tainted-env-args.yaml": [
+   [
+    "dangerous-asyncio-shell-tainted-env-args",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-code-run-audit.yaml": [
+   [
+    "dangerous-interactive-code-run-audit",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-code-run-tainted-env-args.yaml": [
+   [
+    "dangerous-interactive-code-run-tainted-env-args",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-os-exec-audit.yaml": [
+   [
+    "dangerous-os-exec-audit",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-os-exec-tainted-env-args.yaml": [
+   [
+    "dangerous-os-exec-tainted-env-args",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-spawn-process-audit.yaml": [
+   [
+    "dangerous-spawn-process-audit",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-spawn-process-tainted-env-args.yaml": [
+   [
+    "dangerous-spawn-process-tainted-env-args",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-subinterpreters-run-string-audit.yaml": [
+   [
+    "dangerous-subinterpreters-run-string-audit",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-subinterpreters-run-string-tainted-env-args.yaml": [
+   [
+    "dangerous-subinterpreters-run-string-tainted-env-args",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-subprocess-use-audit.yaml": [
+   [
+    "dangerous-subprocess-use-audit",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-subprocess-use-tainted-env-args.yaml": [
+   [
+    "dangerous-subprocess-use-tainted-env-args",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-system-call-audit.yaml": [
+   [
+    "dangerous-system-call-audit",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-system-call-tainted-env-args.yaml": [
+   [
+    "dangerous-system-call-tainted-env-args",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-testcapi-run-in-subinterp-audit.yaml": [
+   [
+    "dangerous-testcapi-run-in-subinterp-audit",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dangerous-testcapi-run-in-subinterp-tainted-env-args.yaml": [
+   [
+    "dangerous-testcapi-run-in-subinterp-tainted-env-args",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/dynamic-urllib-use-detected.yaml": [
+   [
+    "dynamic-urllib-use-detected",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/eval-detected.yaml": [
+   [
+    "eval-detected",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/exec-detected.yaml": [
+   [
+    "exec-detected",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/formatted-sql-query.yaml": [
+   [
+    "formatted-sql-query",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/hardcoded-password-default-argument.yaml": [
+   [
+    "hardcoded-password-default-argument",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/httpsconnection-detected.yaml": [
+   [
+    "httpsconnection-detected",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-file-permissions.yaml": [
+   [
+    "insecure-file-permissions",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/ftplib/use-ftp-tls.yaml": [
+   [
+    "use-ftp-tls",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/requests/request-session-http-in-with-context.yaml": [
+   [
+    "request-session-http-in-with-context",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/requests/request-session-with-http.yaml": [
+   [
+    "request-session-with-http",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/requests/request-with-http.yaml": [
+   [
+    "request-with-http",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/ssl/no-set-ciphers.yaml": [
+   [
+    "no-set-ciphers",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-openerdirector-open-ftp.yaml": [
+   [
+    "insecure-openerdirector-open-ftp",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-openerdirector-open.yaml": [
+   [
+    "insecure-openerdirector-open",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-request-object-ftp.yaml": [
+   [
+    "insecure-request-object-ftp",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-request-object.yaml": [
+   [
+    "insecure-request-object",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-urlopen-ftp.yaml": [
+   [
+    "insecure-urlopen-ftp",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-urlopen.yaml": [
+   [
+    "insecure-urlopen",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-urlopener-open-ftp.yaml": [
+   [
+    "insecure-urlopener-open-ftp",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-urlopener-open.yaml": [
+   [
+    "insecure-urlopener-open",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-urlopener-retrieve-ftp.yaml": [
+   [
+    "insecure-urlopener-retrieve-ftp",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-urlopener-retrieve.yaml": [
+   [
+    "insecure-urlopener-retrieve",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-urlretrieve-ftp.yaml": [
+   [
+    "insecure-urlretrieve-ftp",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/insecure-transport/urllib/insecure-urlretrieve.yaml": [
+   [
+    "insecure-urlretrieve",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/logging/listeneval.yaml": [
+   [
+    "listen-eval",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/logging/logger-credential-leak.yaml": [
+   [
+    "python-logger-credential-disclosure",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/mako-templates-detected.yaml": [
+   [
+    "mako-templates-detected",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/marshal.yaml": [
+   [
+    "marshal-usage",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/md5-used-as-password.yaml": [
+   [
+    "md5-used-as-password",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/network/bind.yaml": [
+   [
+    "avoid-bind-to-all-interfaces",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/network/disabled-cert-validation.yaml": [
+   [
+    "disabled-cert-validation",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/network/http-not-https-connection.yaml": [
+   [
+    "http-not-https-connection",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/non-literal-import.yaml": [
+   [
+    "non-literal-import",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/paramiko-implicit-trust-host-key.yaml": [
+   [
+    "paramiko-implicit-trust-host-key",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/paramiko/paramiko-exec-command.yaml": [
+   [
+    "paramiko-exec-command",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/python-reverse-shell.yaml": [
+   [
+    "python-reverse-shell",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/regex-dos.yaml": [
+   [
+    "regex_dos",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/sqli/aiopg-sqli.yaml": [
+   [
+    "aiopg-sqli",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/sqli/asyncpg-sqli.yaml": [
+   [
+    "asyncpg-sqli",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/sqli/pg8000-sqli.yaml": [
+   [
+    "pg8000-sqli",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/sqli/psycopg-sqli.yaml": [
+   [
+    "psycopg-sqli",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/ssl-wrap-socket-is-deprecated.yaml": [
+   [
+    "ssl-wrap-socket-is-deprecated",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/subprocess-shell-true.yaml": [
+   [
+    "subprocess-shell-true",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/system-wildcard-detected.yaml": [
+   [
+    "system-wildcard-detected",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/telnetlib.yaml": [
+   [
+    "telnetlib",
+    "security"
+   ]
+  ],
+  "python/lang/security/audit/weak-ssl-version.yaml": [
+   [
+    "weak-ssl-version",
+    "security"
+   ]
+  ],
+  "python/lang/security/dangerous-code-run.yaml": [
+   [
+    "dangerous-interactive-code-run",
+    "security"
+   ]
+  ],
+  "python/lang/security/dangerous-globals-use.yaml": [
+   [
+    "dangerous-globals-use",
+    "security"
+   ]
+  ],
+  "python/lang/security/dangerous-os-exec.yaml": [
+   [
+    "dangerous-os-exec",
+    "security"
+   ]
+  ],
+  "python/lang/security/dangerous-spawn-process.yaml": [
+   [
+    "dangerous-spawn-process",
+    "security"
+   ]
+  ],
+  "python/lang/security/dangerous-subinterpreters-run-string.yaml": [
+   [
+    "dangerous-subinterpreters-run-string",
+    "security"
+   ]
+  ],
+  "python/lang/security/dangerous-subprocess-use.yaml": [
+   [
+    "dangerous-subprocess-use",
+    "security"
+   ]
+  ],
+  "python/lang/security/dangerous-system-call.yaml": [
+   [
+    "dangerous-system-call",
+    "security"
+   ]
+  ],
+  "python/lang/security/dangerous-testcapi-run-in-subinterp.yaml": [
+   [
+    "dangerous-testcapi-run-in-subinterp",
+    "security"
+   ]
+  ],
+  "python/lang/security/deserialization/avoid-jsonpickle.yaml": [
+   [
+    "avoid-jsonpickle",
+    "security"
+   ]
+  ],
+  "python/lang/security/deserialization/avoid-pyyaml-load.yaml": [
+   [
+    "avoid-pyyaml-load",
+    "security"
+   ]
+  ],
+  "python/lang/security/deserialization/avoid-unsafe-ruamel.yaml": [
+   [
+    "avoid-unsafe-ruamel",
+    "security"
+   ]
+  ],
+  "python/lang/security/deserialization/pickle.yaml": [
+   [
+    "avoid-pickle",
+    "security"
+   ],
+   [
+    "avoid-cPickle",
+    "security"
+   ],
+   [
+    "avoid-dill",
+    "security"
+   ],
+   [
+    "avoid-shelve",
+    "security"
+   ]
+  ],
+  "python/lang/security/insecure-hash-algorithms-md5.yaml": [
+   [
+    "insecure-hash-algorithm-md5",
+    "security"
+   ]
+  ],
+  "python/lang/security/insecure-hash-algorithms.yaml": [
+   [
+    "insecure-hash-algorithm-sha1",
+    "security"
+   ]
+  ],
+  "python/lang/security/insecure-hash-function.yaml": [
+   [
+    "insecure-hash-function",
+    "security"
+   ]
+  ],
+  "python/lang/security/insecure-uuid-version.yaml": [
+   [
+    "insecure-uuid-version",
+    "security"
+   ]
+  ],
+  "python/lang/security/unverified-ssl-context.yaml": [
+   [
+    "unverified-ssl-context",
+    "security"
+   ]
+  ],
+  "python/lang/security/use-defused-xml-parse.yaml": [
+   [
+    "use-defused-xml-parse",
+    "security"
+   ]
+  ],
+  "python/lang/security/use-defused-xml.yaml": [
+   [
+    "use-defused-xml",
+    "security"
+   ]
+  ],
+  "python/lang/security/use-defused-xmlrpc.yaml": [
+   [
+    "use-defused-xmlrpc",
+    "security"
+   ]
+  ],
+  "python/lang/security/use-defusedcsv.yaml": [
+   [
+    "use-defusedcsv",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insecure-cipher-algorithm-blowfish.yaml": [
+   [
+    "insecure-cipher-algorithm-blowfish",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insecure-cipher-algorithm-des.yaml": [
+   [
+    "insecure-cipher-algorithm-des",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insecure-cipher-algorithm-rc2.yaml": [
+   [
+    "insecure-cipher-algorithm-rc2",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insecure-cipher-algorithm-rc4.yaml": [
+   [
+    "insecure-cipher-algorithm-rc4",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insecure-cipher-algorithm.yaml": [
+   [
+    "insecure-cipher-algorithm-xor",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insecure-hash-algorithm-md2.yaml": [
+   [
+    "insecure-hash-algorithm-md2",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insecure-hash-algorithm-md4.yaml": [
+   [
+    "insecure-hash-algorithm-md4",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insecure-hash-algorithm-md5.yaml": [
+   [
+    "insecure-hash-algorithm-md5",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insecure-hash-algorithm.yaml": [
+   [
+    "insecure-hash-algorithm-sha1",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insufficient-dsa-key-size.yaml": [
+   [
+    "insufficient-dsa-key-size",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/insufficient-rsa-key-size.yaml": [
+   [
+    "insufficient-rsa-key-size",
+    "security"
+   ]
+  ],
+  "python/pycryptodome/security/mode-without-authentication.yaml": [
+   [
+    "crypto-mode-without-authentication",
+    "security"
+   ]
+  ],
+  "python/pymongo/security/mongodb.yaml": [
+   [
+    "mongo-client-bad-auth",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/authtkt-cookie-httponly-unsafe-default.yaml": [
+   [
+    "pyramid-authtkt-cookie-httponly-unsafe-default",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/authtkt-cookie-httponly-unsafe-value.yaml": [
+   [
+    "pyramid-authtkt-cookie-httponly-unsafe-value",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/authtkt-cookie-samesite.yaml": [
+   [
+    "pyramid-authtkt-cookie-samesite",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/authtkt-cookie-secure-unsafe-default.yaml": [
+   [
+    "pyramid-authtkt-cookie-secure-unsafe-default",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/authtkt-cookie-secure-unsafe-value.yaml": [
+   [
+    "pyramid-authtkt-cookie-secure-unsafe-value",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/csrf-check-disabled.yaml": [
+   [
+    "pyramid-csrf-check-disabled",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/csrf-origin-check-disabled-globally.yaml": [
+   [
+    "pyramid-csrf-origin-check-disabled-globally",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/csrf-origin-check-disabled.yaml": [
+   [
+    "pyramid-csrf-origin-check-disabled",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/set-cookie-httponly-unsafe-default.yaml": [
+   [
+    "pyramid-set-cookie-httponly-unsafe-default",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/set-cookie-httponly-unsafe-value.yaml": [
+   [
+    "pyramid-set-cookie-httponly-unsafe-value",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/set-cookie-samesite-unsafe-default.yaml": [
+   [
+    "pyramid-set-cookie-samesite-unsafe-default",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/set-cookie-samesite-unsafe-value.yaml": [
+   [
+    "pyramid-set-cookie-samesite-unsafe-value",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/set-cookie-secure-unsafe-default.yaml": [
+   [
+    "pyramid-set-cookie-secure-unsafe-default",
+    "security"
+   ]
+  ],
+  "python/pyramid/audit/set-cookie-secure-unsafe-value.yaml": [
+   [
+    "pyramid-set-cookie-secure-unsafe-value",
+    "security"
+   ]
+  ],
+  "python/pyramid/security/csrf-check-disabled-globally.yaml": [
+   [
+    "pyramid-csrf-check-disabled-globally",
+    "security"
+   ]
+  ],
+  "python/pyramid/security/direct-use-of-response.yaml": [
+   [
+    "pyramid-direct-use-of-response",
+    "security"
+   ]
+  ],
+  "python/pyramid/security/sqlalchemy-sql-injection.yaml": [
+   [
+    "pyramid-sqlalchemy-sql-injection",
+    "security"
+   ]
+  ],
+  "python/requests/best-practice/use-raise-for-status.yaml": [
+   [
+    "use-raise-for-status",
+    "best-practice"
+   ]
+  ],
+  "python/requests/best-practice/use-request-json-shortcut.yaml": [
+   [
+    "python.requests.best-practice.use-request-json-shortcut",
+    "best-practice"
+   ]
+  ],
+  "python/requests/best-practice/use-response-json-shortcut.yaml": [
+   [
+    "python.requests.best-practice.use-response-json-shortcut",
+    "best-practice"
+   ]
+  ],
+  "python/requests/best-practice/use-timeout.yaml": [
+   [
+    "use-timeout",
+    "best-practice"
+   ]
+  ],
+  "python/requests/security/disabled-cert-validation.yaml": [
+   [
+    "disabled-cert-validation",
+    "security"
+   ]
+  ],
+  "python/requests/security/no-auth-over-http.yaml": [
+   [
+    "no-auth-over-http",
+    "security"
+   ]
+  ],
+  "python/sh/security/string-concat.yaml": [
+   [
+    "string-concat",
+    "security"
+   ]
+  ],
+  "python/sqlalchemy/correctness/bad-operator-in-filter.yaml": [
+   [
+    "bad-operator-in-filter",
+    "correctness"
+   ]
+  ],
+  "python/sqlalchemy/correctness/delete-where.yaml": [
+   [
+    "delete-where-no-execute",
+    "correctness"
+   ]
+  ],
+  "python/sqlalchemy/performance/performance-improvements.yaml": [
+   [
+    "len-all-count",
+    "performance"
+   ],
+   [
+    "batch-import",
+    "performance"
+   ]
+  ],
+  "python/sqlalchemy/security/audit/avoid-sqlalchemy-text.yaml": [
+   [
+    "avoid-sqlalchemy-text",
+    "security"
+   ]
+  ],
+  "python/sqlalchemy/security/sqlalchemy-execute-raw-query.yaml": [
+   [
+    "sqlalchemy-execute-raw-query",
+    "security"
+   ]
+  ],
+  "python/sqlalchemy/security/sqlalchemy-sql-injection.yaml": [
+   [
+    "sqlalchemy-sql-injection",
+    "security"
+   ]
+  ],
+  "python/twilio/security/twiml-injection.yaml": [
+   [
+    "twiml-injection",
+    "security"
+   ]
+  ],
+  "rust/lang/security/args-os.yml": [
+   [
+    "args-os",
+    "security"
+   ]
+  ],
+  "rust/lang/security/args.yml": [
+   [
+    "args",
+    "security"
+   ]
+  ],
+  "rust/lang/security/current-exe.yml": [
+   [
+    "current-exe",
+    "security"
+   ]
+  ],
+  "rust/lang/security/insecure-hashes.yml": [
+   [
+    "insecure-hashes",
+    "security"
+   ]
+  ],
+  "rust/lang/security/reqwest-accept-invalid.yml": [
+   [
+    "reqwest-accept-invalid",
+    "security"
+   ]
+  ],
+  "rust/lang/security/reqwest-set-sensitive.yml": [
+   [
+    "reqwest-set-sensitive",
+    "security"
+   ]
+  ],
+  "rust/lang/security/rustls-dangerous.yml": [
+   [
+    "rustls-dangerous",
+    "security"
+   ]
+  ],
+  "rust/lang/security/ssl-verify-none.yml": [
+   [
+    "ssl-verify-none",
+    "security"
+   ]
+  ],
+  "rust/lang/security/temp-dir.yml": [
+   [
+    "temp-dir",
+    "security"
+   ]
+  ],
+  "rust/lang/security/unsafe-usage.yml": [
+   [
+    "unsafe-usage",
+    "security"
+   ]
+  ],
+  "typescript/angular/security/audit/angular-domsanitizer.yaml": [
+   [
+    "angular-bypasssecuritytrust",
+    "security"
+   ]
+  ],
+  "typescript/aws-cdk/security/audit/awscdk-bucket-encryption.yml": [
+   [
+    "awscdk-bucket-encryption",
+    "security"
+   ]
+  ],
+  "typescript/aws-cdk/security/audit/awscdk-bucket-enforcessl.yml": [
+   [
+    "aws-cdk-bucket-enforcessl",
+    "security"
+   ]
+  ],
+  "typescript/aws-cdk/security/audit/awscdk-sqs-unencryptedqueue.yml": [
+   [
+    "awscdk-sqs-unencryptedqueue",
+    "security"
+   ]
+  ],
+  "typescript/aws-cdk/security/awscdk-bucket-grantpublicaccessmethod.yml": [
+   [
+    "awscdk-bucket-grantpublicaccessmethod",
+    "security"
+   ]
+  ],
+  "typescript/aws-cdk/security/awscdk-codebuild-project-public.yml": [
+   [
+    "awscdk-codebuild-project-public",
+    "security"
+   ]
+  ],
+  "typescript/lang/best-practice/moment-deprecated.yaml": [
+   [
+    "moment-deprecated",
+    "best-practice"
+   ]
+  ],
+  "typescript/lang/correctness/useless-ternary.yaml": [
+   [
+    "useless-ternary",
+    "correctness"
+   ]
+  ],
+  "typescript/lang/security/audit/cors-regex-wildcard.yaml": [
+   [
+    "cors-regex-wildcard",
+    "security"
+   ]
+  ],
+  "typescript/nestjs/security/audit/nestjs-header-cors-any.yaml": [
+   [
+    "nestjs-header-cors-any",
+    "security"
+   ]
+  ],
+  "typescript/nestjs/security/audit/nestjs-header-xss-disabled.yaml": [
+   [
+    "nestjs-header-xss-disabled",
+    "security"
+   ]
+  ],
+  "typescript/nestjs/security/audit/nestjs-open-redirect.yaml": [
+   [
+    "nestjs-open-redirect",
+    "security"
+   ]
+  ],
+  "typescript/react/best-practice/define-styled-components-on-module-level.yaml": [
+   [
+    "define-styled-components-on-module-level",
+    "best-practice"
+   ]
+  ],
+  "typescript/react/best-practice/react-find-dom.yaml": [
+   [
+    "react-find-dom",
+    "best-practice"
+   ]
+  ],
+  "typescript/react/best-practice/react-legacy-component.yaml": [
+   [
+    "react-legacy-component",
+    "best-practice"
+   ]
+  ],
+  "typescript/react/best-practice/react-props-in-state.yaml": [
+   [
+    "react-props-in-state",
+    "best-practice"
+   ]
+  ],
+  "typescript/react/best-practice/react-props-spreading.yaml": [
+   [
+    "react-props-spreading",
+    "best-practice"
+   ]
+  ],
+  "typescript/react/portability/i18next/i18next-key-format.yaml": [
+   [
+    "i18next-key-format",
+    "portability"
+   ]
+  ],
+  "typescript/react/portability/i18next/jsx-label-not-i18n.yaml": [
+   [
+    "jsx-label-not-i18n",
+    "portability"
+   ]
+  ],
+  "typescript/react/portability/i18next/jsx-not-internationalized.yaml": [
+   [
+    "jsx-not-internationalized",
+    "portability"
+   ]
+  ],
+  "typescript/react/portability/i18next/mui-snackbar-message.yaml": [
+   [
+    "mui-snackbar-message",
+    "portability"
+   ]
+  ],
+  "typescript/react/portability/i18next/useselect-label-not-i18n.yaml": [
+   [
+    "useselect-label-not-i18n",
+    "portability"
+   ]
+  ],
+  "typescript/react/security/audit/react-dangerouslysetinnerhtml.yaml": [
+   [
+    "react-dangerouslysetinnerhtml",
+    "security"
+   ]
+  ],
+  "typescript/react/security/audit/react-href-var.yaml": [
+   [
+    "react-href-var",
+    "security"
+   ]
+  ],
+  "typescript/react/security/audit/react-jwt-decoded-property.yaml": [
+   [
+    "react-jwt-decoded-property",
+    "security"
+   ]
+  ],
+  "typescript/react/security/audit/react-jwt-in-localstorage.yaml": [
+   [
+    "react-jwt-in-localstorage",
+    "security"
+   ]
+  ],
+  "typescript/react/security/audit/react-unsanitized-method.yaml": [
+   [
+    "react-unsanitized-method",
+    "security"
+   ]
+  ],
+  "typescript/react/security/audit/react-unsanitized-property.yaml": [
+   [
+    "react-unsanitized-property",
+    "security"
+   ]
+  ],
+  "typescript/react/security/react-insecure-request.yaml": [
+   [
+    "react-insecure-request",
+    "security"
+   ]
+  ],
+  "typescript/react/security/react-markdown-insecure-html.yaml": [
+   [
+    "react-markdown-insecure-html",
+    "security"
+   ]
+  ],
+  "yaml/argo/correctness/event-binding-payload-with-hyphen.yaml": [
+   [
+    "event-binding-payload-with-hyphen",
+    "correctness"
+   ]
+  ],
+  "yaml/argo/security/argo-workflow-parameter-command-injection.yaml": [
+   [
+    "argo-workflow-parameter-command-injection",
+    "security"
+   ]
+  ],
+  "yaml/docker-compose/security/exposing-docker-socket-volume.yaml": [
+   [
+    "exposing-docker-socket-volume",
+    "security"
+   ]
+  ],
+  "yaml/docker-compose/security/no-new-privileges.yaml": [
+   [
+    "no-new-privileges",
+    "security"
+   ]
+  ],
+  "yaml/docker-compose/security/privileged-service.yaml": [
+   [
+    "privileged-service",
+    "security"
+   ]
+  ],
+  "yaml/docker-compose/security/seccomp-confinement-disabled.yaml": [
+   [
+    "seccomp-confinement-disabled",
+    "security"
+   ]
+  ],
+  "yaml/docker-compose/security/selinux-separation-disabled.yaml": [
+   [
+    "selinux-separation-disabled",
+    "security"
+   ]
+  ],
+  "yaml/docker-compose/security/writable-filesystem-service.yaml": [
+   [
+    "writable-filesystem-service",
+    "security"
+   ]
+  ],
+  "yaml/github-actions/security/allowed-unsecure-commands.yaml": [
+   [
+    "allowed-unsecure-commands",
+    "security"
+   ]
+  ],
+  "yaml/github-actions/security/audit/unsafe-add-mask-workflow-command.yaml": [
+   [
+    "unsafe-add-mask-workflow-command",
+    "security"
+   ]
+  ],
+  "yaml/github-actions/security/curl-eval.yaml": [
+   [
+    "curl-eval",
+    "security"
+   ]
+  ],
+  "yaml/github-actions/security/github-script-injection.yaml": [
+   [
+    "github-script-injection",
+    "security"
+   ]
+  ],
+  "yaml/github-actions/security/pull-request-target-code-checkout.yaml": [
+   [
+    "pull-request-target-code-checkout",
+    "security"
+   ]
+  ],
+  "yaml/github-actions/security/run-shell-injection.yaml": [
+   [
+    "run-shell-injection",
+    "security"
+   ]
+  ],
+  "yaml/github-actions/security/third-party-action-not-pinned-to-commit-sha.yml": [
+   [
+    "third-party-action-not-pinned-to-commit-sha",
+    "security"
+   ]
+  ],
+  "yaml/github-actions/security/workflow-run-target-code-checkout.yaml": [
+   [
+    "workflow-run-target-code-checkout",
+    "security"
+   ]
+  ],
+  "yaml/github-actions/semgrep-configuration/semgrep-github-action-push-without-branches.yml": [
+   [
+    "semgrep-github-action-push-without-branches",
+    "correctness"
+   ]
+  ],
+  "yaml/gitlab/correctness/changes-with-when-never.yaml": [
+   [
+    "changes-with-when-never",
+    "correctness"
+   ]
+  ],
+  "yaml/kubernetes/best-practice/no-fractional-cpu-limits.yaml": [
+   [
+    "no-fractional-cpu-limits",
+    "best-practice"
+   ]
+  ],
+  "yaml/kubernetes/security/allow-privilege-escalation-no-securitycontext.yaml": [
+   [
+    "allow-privilege-escalation-no-securitycontext",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/allow-privilege-escalation-true.yaml": [
+   [
+    "allow-privilege-escalation-true",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/allow-privilege-escalation.yaml": [
+   [
+    "allow-privilege-escalation",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/env/flask-debugging-enabled.yaml": [
+   [
+    "flask-debugging-enabled",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/exposing-docker-socket-hostpath.yaml": [
+   [
+    "exposing-docker-socket-hostpath",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/hostipc-pod.yaml": [
+   [
+    "hostipc-pod",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/hostnetwork-pod.yaml": [
+   [
+    "hostnetwork-pod",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/hostpid-pod.yaml": [
+   [
+    "hostpid-pod",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/legacy-api-clusterrole-excessive-permissions.yaml": [
+   [
+    "legacy-api-clusterrole-excessive-permissions",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/privileged-container.yaml": [
+   [
+    "privileged-container",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/run-as-non-root-container-level-missing-security-context.yaml": [
+   [
+    "run-as-non-root-container-level-missing-security-context",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/run-as-non-root-container-level.yaml": [
+   [
+    "run-as-non-root-container-level",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/run-as-non-root-security-context-pod-level.yaml": [
+   [
+    "run-as-non-root-security-context-pod-level",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/run-as-non-root-unsafe-value.yaml": [
+   [
+    "run-as-non-root-unsafe-value",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/run-as-non-root.yaml": [
+   [
+    "run-as-non-root",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/seccomp-confinement-disabled.yaml": [
+   [
+    "seccomp-confinement-disabled",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/secrets-in-config-file.yaml": [
+   [
+    "secrets-in-config-file",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/skip-tls-verify-cluster.yaml": [
+   [
+    "skip-tls-verify-cluster",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/skip-tls-verify-service.yaml": [
+   [
+    "skip-tls-verify-service",
+    "security"
+   ]
+  ],
+  "yaml/kubernetes/security/writable-filesystem-container.yaml": [
+   [
+    "writable-filesystem-container",
+    "security"
+   ]
+  ],
+  "yaml/openapi/security/api-key-in-query-parameter.yaml": [
+   [
+    "api-key-in-query-parameter",
+    "security"
+   ]
+  ],
+  "yaml/openapi/security/openai-consequential-action-false.yaml": [
+   [
+    "openai-consequential-action-false",
+    "security"
+   ]
+  ],
+  "yaml/openapi/security/use-of-basic-authentication.yaml": [
+   [
+    "use-of-basic-authentication",
+    "security"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-bash.yaml": [
+   [
+    "lang-consistency-bash",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-cpp.yaml": [
+   [
+    "lang-consistency-cpp",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-csharp.yaml": [
+   [
+    "lang-consistency-csharp",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-dockerfile.yaml": [
+   [
+    "lang-consistency-dockerfile",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-elixir.yaml": [
+   [
+    "lang-consistency-elixir",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-go.yaml": [
+   [
+    "lang-consistency-go",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-hcl.yaml": [
+   [
+    "lang-consistency-hcl",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-js.yaml": [
+   [
+    "lang-consistency-js",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-kotlin.yaml": [
+   [
+    "lang-consistency-kotlin",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-python.yaml": [
+   [
+    "lang-consistency-python",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-regex.yaml": [
+   [
+    "lang-consistency-regex",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-solidity.yaml": [
+   [
+    "lang-consistency-solidity",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/consistency/lang-consistency-ts.yaml": [
+   [
+    "lang-consistency-ts",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/duplicate-id.yaml": [
+   [
+    "duplicate-id",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/duplicate-pattern.yaml": [
+   [
+    "duplicate-pattern",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/empty-message.yaml": [
+   [
+    "empty-message",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/interfile-true-under-metadata-and-no-options.yaml": [
+   [
+    "interfile-true-under-metadata-and-no-options",
+    "uncategorised"
+   ]
+  ],
+  "yaml/semgrep/interfile-true-under-metadata-and-options-already-present.yaml": [
+   [
+    "interfile-true-under-metadata-and-options-already-present",
+    "uncategorised"
+   ]
+  ],
+  "yaml/semgrep/key-indentation.yaml": [
+   [
+    "yaml-key-indentation-check",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/message-whitespace.yaml": [
+   [
+    "message-whitespace-check",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-category.yaml": [
+   [
+    "metadata-category",
+    "best-practice"
+   ]
+  ],
+  "yaml/semgrep/metadata-confidence-incorrect-value.yaml": [
+   [
+    "metadata-confidence-incorrect-value",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-confidence.yaml": [
+   [
+    "metadata-confidence",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-cwe.yaml": [
+   [
+    "metadata-cwe",
+    "best-practice"
+   ]
+  ],
+  "yaml/semgrep/metadata-deepsemgrep.yaml": [
+   [
+    "metadata-deepsemgrep",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-impact-incorrect-value.yaml": [
+   [
+    "metadata-impact-incorrect-value",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-impact.yaml": [
+   [
+    "metadata-impact",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-incorrect-option.yaml": [
+   [
+    "metadata-incorrect-option",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-likelihood-incorrect-value.yaml": [
+   [
+    "metadata-likelihood-incorrect-value",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-likelihood.yaml": [
+   [
+    "metadata-likelihood",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-owasp.yaml": [
+   [
+    "metadata-owasp",
+    "best-practice"
+   ]
+  ],
+  "yaml/semgrep/metadata-references.yaml": [
+   [
+    "metadata-references",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-subcategory-incorrect-value.yaml": [
+   [
+    "metadata-subcategory-incorrect-value",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-subcategory.yaml": [
+   [
+    "metadata-subcategory",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/metadata-technology.yaml": [
+   [
+    "metadata-technology",
+    "best-practice"
+   ]
+  ],
+  "yaml/semgrep/missing-language-field.yaml": [
+   [
+    "missing-language-field",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/missing-message-field.yaml": [
+   [
+    "missing-message-field",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/multi-line-message.yaml": [
+   [
+    "multi-line-message",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/rule-missing-deconstructed-value.yaml": [
+   [
+    "missing-deconstructed-value",
+    "correctness"
+   ]
+  ],
+  "yaml/semgrep/slow-pattern-general-function.yaml": [
+   [
+    "slow-pattern-general-func",
+    "performance"
+   ]
+  ],
+  "yaml/semgrep/slow-pattern-general-property.yaml": [
+   [
+    "slow-pattern-general-property",
+    "performance"
+   ]
+  ],
+  "yaml/semgrep/slow-pattern-single-metavariable.yaml": [
+   [
+    "slow-pattern-single-metavariable",
+    "performance"
+   ]
+  ],
+  "yaml/semgrep/slow-pattern-top-ellipsis.yaml": [
+   [
+    "slow-pattern-top-ellipsis",
+    "performance"
+   ]
+  ],
+  "yaml/semgrep/unnecessary-parent.yaml": [
+   [
+    "unnecessary-parent-operator",
+    "best-practice"
+   ]
+  ],
+  "yaml/semgrep/unsatisfiable.yaml": [
+   [
+    "unsatisfiable-rule",
+    "correctness"
+   ]
+  ]
+ }
+}

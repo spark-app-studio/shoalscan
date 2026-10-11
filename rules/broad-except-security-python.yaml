@@ -1,0 +1,208 @@
+rules:
+  - id: python-broad-except-swallows-security-check
+    message: >-
+      A broad `except` around a security check swallows the error and carries
+      on. If verification, authentication or authorization raises, the code
+      continues as if it had passed: it fails open. Catch the specific
+      exception and deny, re-raise, or return a failure.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      cwe: "CWE-636: Not Failing Securely ('Failing Open')"
+      confidence: MEDIUM
+      category: security
+      fix: Catch the specific exception and deny or re-raise; never pass or continue after a failed security check.
+    # Conservative on purpose. It reports only a bare `except`, `except
+    # Exception` or `except BaseException` whose whole body is `pass`,
+    # `continue`, or one log call (optionally followed by pass or continue),
+    # when the `try` body calls a function whose name says it is a security
+    # check.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except:
+                      pass
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except:
+                      continue
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except:
+                      $LOG.$METHOD(...)
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: (?i)^(self\.)?_{0,2}(logging|logger|log)$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(debug|info|warning|warn|error|exception|critical)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except:
+                      $LOG.$METHOD(...)
+                      pass
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: (?i)^(self\.)?_{0,2}(logging|logger|log)$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(debug|info|warning|warn|error|exception|critical)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except:
+                      $LOG.$METHOD(...)
+                      continue
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: (?i)^(self\.)?_{0,2}(logging|logger|log)$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(debug|info|warning|warn|error|exception|critical)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except $EXC:
+                      pass
+              - metavariable-regex:
+                  metavariable: $EXC
+                  regex: ^(Exception|BaseException)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except $EXC:
+                      continue
+              - metavariable-regex:
+                  metavariable: $EXC
+                  regex: ^(Exception|BaseException)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except $EXC:
+                      $LOG.$METHOD(...)
+              - metavariable-regex:
+                  metavariable: $EXC
+                  regex: ^(Exception|BaseException)$
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: (?i)^(self\.)?_{0,2}(logging|logger|log)$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(debug|info|warning|warn|error|exception|critical)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except $EXC:
+                      $LOG.$METHOD(...)
+                      pass
+              - metavariable-regex:
+                  metavariable: $EXC
+                  regex: ^(Exception|BaseException)$
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: (?i)^(self\.)?_{0,2}(logging|logger|log)$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(debug|info|warning|warn|error|exception|critical)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except $EXC:
+                      $LOG.$METHOD(...)
+                      continue
+              - metavariable-regex:
+                  metavariable: $EXC
+                  regex: ^(Exception|BaseException)$
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: (?i)^(self\.)?_{0,2}(logging|logger|log)$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(debug|info|warning|warn|error|exception|critical)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except $EXC as $ERR:
+                      pass
+              - metavariable-regex:
+                  metavariable: $EXC
+                  regex: ^(Exception|BaseException)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except $EXC as $ERR:
+                      continue
+              - metavariable-regex:
+                  metavariable: $EXC
+                  regex: ^(Exception|BaseException)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except $EXC as $ERR:
+                      $LOG.$METHOD(...)
+              - metavariable-regex:
+                  metavariable: $EXC
+                  regex: ^(Exception|BaseException)$
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: (?i)^(self\.)?_{0,2}(logging|logger|log)$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(debug|info|warning|warn|error|exception|critical)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except $EXC as $ERR:
+                      $LOG.$METHOD(...)
+                      pass
+              - metavariable-regex:
+                  metavariable: $EXC
+                  regex: ^(Exception|BaseException)$
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: (?i)^(self\.)?_{0,2}(logging|logger|log)$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(debug|info|warning|warn|error|exception|critical)$
+          - patterns:
+              - pattern: |
+                  try:
+                      $...BODY
+                  except $EXC as $ERR:
+                      $LOG.$METHOD(...)
+                      continue
+              - metavariable-regex:
+                  metavariable: $EXC
+                  regex: ^(Exception|BaseException)$
+              - metavariable-regex:
+                  metavariable: $LOG
+                  regex: (?i)^(self\.)?_{0,2}(logging|logger|log)$
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: ^(debug|info|warning|warn|error|exception|critical)$
+      - metavariable-pattern:
+          metavariable: $...BODY
+          patterns:
+            - pattern: $CALL(...)
+            - metavariable-regex:
+                metavariable: $CALL
+                regex: (?i)^(([\w.]*\.)?(verify\w*|\w*_verify|authenticate\w*|\w*_authenticate\w*|is_authenticated|authori[sz]e\w*|\w*_authori[sz]e\w*|is_authori[sz]ed|check_authori[sz]ation|check_?perm\w*|has_perm\w*|check_access|is_allowed|enforce|validate_token)|jwt\.decode)$

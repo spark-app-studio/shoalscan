@@ -1,0 +1,35 @@
+rules:
+  - id: rust-tls-verification-disabled
+    message: >-
+      TLS certificate or hostname verification is turned off, so any server can
+      impersonate the remote host. Keep verification on; to trust a private CA,
+      add it with `add_root_certificate` or a rustls `RootCertStore`.
+    severity: ERROR
+    languages: [rust]
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+      confidence: HIGH
+      category: security
+      fix: Remove danger_accept_invalid_certs(true) and danger_accept_invalid_hostnames(true); trust a specific root instead.
+    pattern-either:
+      - pattern: $BUILDER.danger_accept_invalid_certs(true)
+      - pattern: $BUILDER.danger_accept_invalid_hostnames(true)
+      - pattern: $BUILDER.set_verify(openssl::ssl::SslVerifyMode::NONE)
+      - pattern: $BUILDER.set_verify(SslVerifyMode::NONE)
+
+  - id: rust-tls-custom-certificate-verifier
+    message: >-
+      This code replaces rustls certificate verification with its own verifier
+      through the `dangerous()` API. A custom verifier can be correct (for
+      example certificate pinning), but a mistake in it turns verification off.
+      Review it, and test that it rejects a wrong certificate and a wrong name.
+    severity: WARNING
+    languages: [rust]
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+      confidence: LOW
+      category: security
+      fix: Prefer the default WebPkiServerVerifier with a RootCertStore; if a custom verifier is needed, test that it rejects bad certificates.
+    pattern-either:
+      - pattern: $CONFIG.dangerous()
+      - pattern: $BUILDER.with_custom_certificate_verifier(...)
