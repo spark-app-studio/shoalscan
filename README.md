@@ -2,6 +2,8 @@
 
 # Shoalscan
 
+[![test](https://github.com/spark-app-studio/shoalscan/actions/workflows/test.yml/badge.svg)](https://github.com/spark-app-studio/shoalscan/actions/workflows/test.yml)
+
 Shoalscan runs several security scanners over a repository as one CI step. It compares their findings against a baseline and records each run, so a small dashboard can show how the codebase's security changes over time.
 
 A shoal is a hidden hazard under the water. A lighthouse warns ships about it; Shoalscan warns a codebase about the vulnerabilities under its surface.
@@ -80,6 +82,10 @@ shoalscan scan && shoalscan check
 ## Status
 
 Early development. Phase 1 (Opengrep install, scan, baseline and check) and phase 2 (the run history and the dashboard) are done. Triage work lists (`shoalscan triage`) and dated security reports (`shoalscan report`), and more scanners (gitleaks, zizmor, hadolint, trivy config and clippy's security lints), come in later phases. See [CHANGELOG.md](CHANGELOG.md) for changes.
+
+## Contributing and security
+
+Contributions are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up, test and sign off a change, and everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Please report security vulnerabilities privately as described in [SECURITY.md](SECURITY.md), never in a public issue.
 
 ## Licence
 
