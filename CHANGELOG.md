@@ -2,6 +2,13 @@
 
 All notable changes to Shoalscan are recorded here.
 
+## Unreleased
+
+### Project
+
+- Contributor guide (`CONTRIBUTING.md`) with the Developer Certificate of Origin sign-off, the Contributor Covenant 2.1 code of conduct, and a security policy (`SECURITY.md`) for private vulnerability reports.
+- Issue forms, a pull request template, `CODEOWNERS`, Dependabot updates for GitHub Actions, and CodeQL and OpenSSF Scorecard workflows with actions pinned by commit SHA.
+
 ## 0.1.0 (2026-10-11)
 
 The first release: Opengrep install, scan, baseline and check, plus the run history and the dashboard.
