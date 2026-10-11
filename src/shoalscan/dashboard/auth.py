@@ -1,9 +1,11 @@
-"""Login token, sessions, CSRF tokens, same-origin checks and the login rate limit.
+"""Login tokens, sessions, CSRF tokens, same-origin checks and the login rate limit.
 
-The login token is 256 bits from `secrets`. Only its SHA-256 is stored, in
-a 0600 file; the token itself is printed once when it is made. Sessions live
-in memory only, keyed by the SHA-256 of the cookie value, and end when the
-token is rotated.
+Named users (see `shoalscan.dashboard.users`) each have a 256-bit token. The
+shared token of earlier versions, made by `shoalscan serve token`, still
+signs in until the first named user joins. Only SHA-256 hashes of tokens are
+stored. Sessions live in memory only, keyed by the SHA-256 of the cookie
+value; every request checks a session again, so it ends when its user is
+disabled or invited again, or when the shared token is rotated.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import os
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -89,17 +92,29 @@ class Session:
     created: float
     last_used: float
     csrf: str
-    token_hash: str
+    token_hash: str  # the shared token's hash, for a session made with it
     tag: str = ""  # short and not secret: tells sessions apart in the audit
+    user: str | None = None  # None for a session made with the shared token
+    role: str = "admin"
+    credential_version: int = 0
+
+    @property
+    def who(self) -> str:
+        """The name the audit records."""
+        return self.user if self.user else f"dashboard user (session {self.tag})"
 
 
 class Sessions:
-    def __init__(self, tokens: TokenCheck):
-        self.tokens = tokens
+    """`validate(session)` decides on every request whether a session still holds, and may update its role."""
+
+    def __init__(self, validate: Callable[[Session], bool]):
+        self.validate = validate
         self._lock = threading.Lock()
         self._items: dict[str, Session] = {}
 
-    def create(self) -> str:
+    def create(
+        self, user: str | None = None, role: str = "admin", credential_version: int = 0, token_hash: str = ""
+    ) -> str:
         sid = secrets.token_urlsafe(32)
         now = time.time()
         with self._lock:
@@ -107,7 +122,7 @@ class Sessions:
                 oldest = min(self._items, key=lambda k: self._items[k].last_used)
                 del self._items[oldest]
             self._items[sha256_hex(sid)] = Session(
-                now, now, secrets.token_urlsafe(32), self.tokens.stored(), secrets.token_hex(4)
+                now, now, secrets.token_urlsafe(32), token_hash, secrets.token_hex(4), user, role, credential_version
             )
         return sid
 
@@ -116,14 +131,12 @@ class Sessions:
             return None
         key = sha256_hex(sid)
         now = time.time()
-        stored = self.tokens.stored()
         with self._lock:
             session = self._items.get(key)
             if session is None:
                 return None
             expired = now - session.last_used > SESSION_IDLE_SECONDS or now - session.created > SESSION_MAX_SECONDS
-            rotated = not stored or not hmac.compare_digest(session.token_hash, stored)
-            if expired or rotated:
+            if expired or not self.validate(session):
                 del self._items[key]
                 return None
             session.last_used = now

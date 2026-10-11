@@ -14,7 +14,7 @@
   var M = window.ShoalscanModel;
   var SVG = "http://www.w3.org/2000/svg";
   var SEVERITIES = M.SEVERITIES;
-  var VIEWS = ["overview", "findings", "finding", "rule", "runs", "stale", "files", "suppressions", "changes", "config", "about"];
+  var VIEWS = ["overview", "findings", "finding", "rule", "runs", "stale", "files", "suppressions", "changes", "config", "users", "about"];
   var FILE_KIND_LABELS = {
     skipped: "Skipped", error: "Scanner error", changed_unscanned: "Changed, not fully scanned",
     partial_warning: "Changed, small parse gap", partial_warn_only: "Changed, partially parsed (warn-only)",
@@ -978,6 +978,66 @@
     });
   }
 
+  // ------------------------------------------------------------ users
+
+  var USER_ACTIONS = { disable: "Disable", enable: "Enable", reinvite: "Invite again" };
+
+  function showInvite(r) {
+    $("users-invite").hidden = false;
+    $("users-invite-title").textContent = "Invite for " + r.name;
+    $("users-invite-expires").textContent = fmtTime(r.expires_at);
+    $("users-invite-link").textContent = window.location.origin + r.invite_path;
+  }
+
+  function changeUser(name, action, role) {
+    var body = { name: name, action: action };
+    if (role) body.role = role;
+    postJson("/api/users/change", body).then(function (r) {
+      if (r.status !== 200) { $("users-message").textContent = r.body.error || "error " + r.status; return; }
+      if (r.body.invite_path) showInvite(r.body);
+      $("users-message").textContent = "";
+      renderUsers();
+    });
+  }
+
+  function renderUsers() {
+    return api("/api/users").then(function (res) {
+      $("users-shared").hidden = !res.shared_token;
+      var body = clear($("users-table").tBodies[0]);
+      res.users.forEach(function (u) {
+        var actions = el("td", { "class": "actions" });
+        if (u.name !== state.user) {
+          var flip = u.role === "admin" ? "member" : "admin";
+          actions.appendChild(configAction("Make " + flip, "Make " + u.name + " " + flip, function () { changeUser(u.name, "role", flip); }));
+          actions.appendChild(configAction(u.status === "disabled" ? USER_ACTIONS.enable : USER_ACTIONS.disable,
+            (u.status === "disabled" ? "Enable " : "Disable ") + u.name, function () { changeUser(u.name, u.status === "disabled" ? "enable" : "disable"); }));
+          actions.appendChild(configAction(USER_ACTIONS.reinvite, "Invite " + u.name + " again", function () { changeUser(u.name, "reinvite"); }));
+        }
+        body.appendChild(el("tr", null, el("td", { "class": "mono" }, u.name), el("td", null, u.role),
+          el("td", null, u.status + (u.invite_expires_at ? " until " + fmtTime(u.invite_expires_at) : "")),
+          el("td", null, fmtDate(u.created_at) + " by " + u.created_by), actions));
+      });
+      if (!res.users.length) body.appendChild(el("tr", null, el("td", { colspan: "5", "class": "empty" }, "No users yet.")));
+      var events = clear($("users-events").tBodies[0]);
+      res.events.forEach(function (e) {
+        events.appendChild(el("tr", null, el("td", null, fmtTime(e.at)), el("td", null, e.who), el("td", { "class": "mono" }, e.user),
+          el("td", null, e.action + (e.detail ? ": " + e.detail : ""))));
+      });
+    });
+  }
+
+  function submitUser(ev) {
+    ev.preventDefault();
+    var e = ev.target.elements;
+    postJson("/api/users/invite", { name: e.name.value.trim(), role: e.role.value }).then(function (r) {
+      if (r.status !== 200) { $("users-message").textContent = r.body.error || "error " + r.status; return; }
+      e.name.value = "";
+      $("users-message").textContent = "";
+      showInvite(r.body);
+      renderUsers();
+    });
+  }
+
   // ------------------------------------------------------------ configuration
 
   var config = { page: null, editing: null, removing: null };
@@ -1172,7 +1232,8 @@
 
   var RENDER = {
     overview: renderOverview, findings: renderFindings, finding: renderFinding, rule: renderRule, runs: renderRuns, stale: renderStale,
-    files: renderFiles, suppressions: renderSuppressions, changes: renderChanges, config: renderConfig, about: renderAbout
+    files: renderFiles, suppressions: renderSuppressions, changes: renderChanges, config: renderConfig, users: renderUsers,
+    about: renderAbout
   };
 
   function selectRepo(name) {
@@ -1254,8 +1315,12 @@
     });
     window.addEventListener("hashchange", route);
     api("/api/config").then(function () { $("nav-config").hidden = false; }, function () { $("nav-config").hidden = true; });
+    $("users-form").addEventListener("submit", submitUser);
     Promise.all([api("/api/session"), api("/api/repos")]).then(function (res) {
       state.csrf = res[0].csrf;
+      state.user = res[0].user;
+      $("nav-users").hidden = res[0].role !== "admin";
+      $("whoami").textContent = res[0].user ? res[0].user + " (" + res[0].role + ")" : "shared token";
       state.repos = res[1].repos;
       var names = state.repos.map(function (r) { return r.name; });
       var select = clear($("repo"));

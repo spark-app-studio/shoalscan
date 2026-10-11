@@ -5,8 +5,13 @@
   stops DNS-rebinding pages from talking to the dashboard.
 - Only the login page, its script, the stylesheet and the icon answer without
   a session. Everything else needs the `__Host-` session cookie.
-- Login is a form POST of the token (never in a URL), same-origin only, rate
-  limited, compared in constant time. Logout needs the session's CSRF token.
+- Login is a form POST of a user name and token (never in a URL), same-origin
+  only, rate limited, compared in constant time; the shared token of earlier
+  versions works until the first named user joins. Logout needs the
+  session's CSRF token.
+- Admins manage users, the Configuration page and scans; members read
+  everything and review findings. Roles are checked on the server for every
+  request.
 - Static files come from a fixed table loaded at start-up; no request path
   is ever joined to a filesystem path.
 - The database is opened read-only for every request.
@@ -15,6 +20,7 @@
 
 from __future__ import annotations
 
+import hmac
 import ipaddress
 import json
 import re
@@ -32,7 +38,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from shoalscan import PROJECT_URL, __version__, embeddings, history
-from shoalscan.dashboard import auth, scanning
+from shoalscan.dashboard import auth, scanning, users
 from shoalscan.dashboard.configedit import ConfigEditor
 from shoalscan.dashboard.data import AGE_BUCKETS, FILE_KINDS, REVIEW_FILTERS, SEVERITIES, SORTS, Data
 from shoalscan.dashboard.scancontrol import ScanControl
@@ -48,9 +54,11 @@ HTML = "text/html; charset=utf-8"
 ROUTES: dict[str, tuple[str, str, bool]] = {
     "/": ("index.html", HTML, False),
     "/login": ("login.html", HTML, True),
+    "/invite": ("invite.html", HTML, True),
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8", False),
     "/static/model.js": ("model.js", "text/javascript; charset=utf-8", False),
     "/static/login.js": ("login.js", "text/javascript; charset=utf-8", True),
+    "/static/invite.js": ("invite.js", "text/javascript; charset=utf-8", True),
     "/static/app.css": ("app.css", "text/css; charset=utf-8", True),
     "/static/shoalscan-icon.svg": ("icon", "image/svg+xml", True),
     "/favicon.ico": ("icon", "image/svg+xml", True),
@@ -60,6 +68,9 @@ MAX_URL = 4096
 MAX_BODY = 2048
 MAX_CONFIG_BODY = 64 * 1024  # a target with its policy text
 CONFIG_POSTS = ("/api/config/target", "/api/config/enable", "/api/config/remove")
+USER_POSTS = ("/api/users/invite", "/api/users/change")
+# GET endpoints only an admin may read.
+ADMIN_GETS = frozenset({"/api/config", "/api/config/baseline", "/api/users", "/api/scan/status"})
 MAX_REVIEW_BODY = 512 * 1024  # up to 500 finding keys and a description
 MAX_CONNECTIONS = 64
 MAX_CONNECTIONS_PER_ADDRESS = 16
@@ -88,6 +99,7 @@ API_PATHS = frozenset(
         "/api/finding",
         "/api/review/history",
         "/api/similar",
+        "/api/users",
     }
 )
 _WEEK = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -272,7 +284,9 @@ class App:
         self.config = config
         self.allowed_hosts = allowed_host_headers(config.hosts, config.port)
         self.tokens = auth.TokenCheck(config.token_hash)
-        self.sessions = auth.Sessions(self.tokens)
+        # Users live next to the shared token's hash, in the state directory.
+        self.auth_dir = config.token_hash.parent
+        self.sessions = auth.Sessions(self.session_valid)
         self.limiter = auth.LoginLimiter()
         icon = data_path("assets/shoalscan-icon.svg").read_bytes()
         self.static = {
@@ -286,6 +300,29 @@ class App:
         history.open_read_only(config.db).close()
         self.scans = ScanControl(config.state_dir, config.db) if config.state_dir else None
         self.config_editor = ConfigEditor(config.state_dir, config.db) if config.state_dir else None
+
+    def users(self):
+        return users.open_users(self.auth_dir)
+
+    def session_valid(self, session: auth.Session) -> bool:
+        """Does a session still hold? Its user must still be active with the same credentials;
+        a shared-token session holds while that token is unchanged and nobody has joined."""
+        conn = self.users()
+        try:
+            if session.user is None:
+                stored = self.tokens.stored()
+                return (
+                    bool(stored)
+                    and hmac.compare_digest(session.token_hash, stored)
+                    and not users.has_active_users(conn)
+                )
+            user = users.current(conn, session.user, session.credential_version)
+        finally:
+            conn.close()
+        if user is None:
+            return False
+        session.role = user.role
+        return True
 
     def config_enabled(self) -> bool:
         """The Configuration page exists once scan_targets.toml does, or with serve --allow-config."""
@@ -634,6 +671,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/login":
             return self.login(body)
+        if path == "/invite":
+            return self.join(body)
         sid, session = self._session()
         if session is None:
             return self.send_error_json(401, "log in first")
@@ -642,10 +681,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/logout":
             self.app.sessions.end(sid)
             return self.send(204, b"", "text/plain", {"Set-Cookie": auth.clear_cookie()})
+        if path in ("/api/scan", *CONFIG_POSTS, *USER_POSTS) and session.role != "admin":
+            return self.send_error_json(403, "this needs an admin")
         if path == "/api/scan":
             return self.start_scan(body)
         if path in CONFIG_POSTS:
             return self.change_config(path, body, session)
+        if path in USER_POSTS:
+            return self.change_users(path, body, session)
         if path == "/api/review":
             return self.review(body, session)
         return self.send_error_json(404, "not found")
@@ -683,7 +726,7 @@ class Handler(BaseHTTPRequestHandler):
                 keys,
                 request["status"],
                 request["description"],
-                f"dashboard user (session {session.tag})",
+                session.who,
                 run_id,
             )
         except LookupError:
@@ -699,7 +742,7 @@ class Handler(BaseHTTPRequestHandler):
         if request is None:
             return None
         editor = self.app.config_editor
-        who = f"dashboard user (session {session.tag})"
+        who = session.who
         try:
             if path == "/api/config/target":
                 status, result = editor.save_target(request, who)
@@ -710,6 +753,66 @@ class Handler(BaseHTTPRequestHandler):
         except SetupError as exc:
             status, result = 400, {"error": str(exc)[:300]}
         return self.send_json(status, result)
+
+    def change_users(self, path: str, body: bytes, session: auth.Session) -> None:
+        """POST /api/users/invite {name, role}, or /api/users/change {name, action[, role]}.
+        An invite's code is in the link the response carries, once; only its hash is kept."""
+        request = self._json_body(body)
+        if request is None:
+            return None
+        conn = self.app.users()
+        try:
+            if path == "/api/users/invite":
+                if set(request) != {"name", "role"}:
+                    return self.send_error_json(400, "send exactly {name, role}")
+                code, expires = users.add_user(conn, request["name"], request["role"], session.who)
+                return self.send_json(
+                    200, {"name": request["name"], "invite_path": f"/invite#{code}", "expires_at": expires}
+                )
+            action = request.get("action")
+            if not set(request) <= {"name", "action", "role"} or action not in (
+                "disable",
+                "enable",
+                "reinvite",
+                "role",
+            ):
+                return self.send_error_json(400, "send {name, action}: disable, enable, reinvite, or role with a role")
+            if request.get("name") == session.user and action in ("disable", "reinvite", "role"):
+                return self.send_error_json(400, "ask another admin to change your own account")
+            if action == "reinvite":
+                code, expires = users.reinvite(conn, request.get("name"), session.who)
+                return self.send_json(
+                    200, {"name": request["name"], "invite_path": f"/invite#{code}", "expires_at": expires}
+                )
+            if action == "role":
+                users.set_role(conn, request.get("name"), request.get("role"), session.who)
+            else:
+                users.set_disabled(conn, request.get("name"), action == "disable", session.who)
+            return self.send_json(200, {"name": request["name"], "done": action})
+        except SetupError as exc:
+            return self.send_error_json(400, str(exc)[:300])
+        finally:
+            conn.close()
+
+    def join(self, body: bytes) -> None:
+        """POST /invite {invite}: use an invite and answer with the new user's token, once."""
+        address = self.client_address[0]
+        if not self.app.limiter.allowed(address):
+            return self.send_error_json(429, "too many failed attempts; wait 15 minutes")
+        request = self._json_body(body)
+        if request is None:
+            return None
+        conn = self.app.users()
+        try:
+            joined = users.redeem(conn, request.get("invite")) if set(request) == {"invite"} else None
+        finally:
+            conn.close()
+        if joined is None:
+            self.app.limiter.failed(address)
+            return self.send_error_json(404, "this invite is not valid: it was used, it expired, or it was replaced")
+        self.app.limiter.succeeded(address)
+        # Every response is already Cache-Control: no-store, so the token is never cached.
+        return self.send_json(200, {"name": joined[0], "token": joined[1]})
 
     def _json_body(self, body: bytes) -> dict | None:
         """Actions take a JSON object, from a page of this dashboard (an exact Origin header)."""
@@ -784,19 +887,44 @@ class Handler(BaseHTTPRequestHandler):
             form = parse_qs(body.decode("ascii"), max_num_fields=4, strict_parsing=False)
         except (UnicodeDecodeError, ValueError):
             return self.send_error_json(400, "bad form")
+        name = (form.get("name") or [""])[0].strip()
         token = (form.get("token") or [""])[0].strip()
-        if not self.app.tokens.matches(token):
+        conn = self.app.users()
+        try:
+            named = users.has_active_users(conn)
+            user = users.check(conn, name, token) if named else None
+        finally:
+            conn.close()
+        if named and user is None or not named and not self.app.tokens.matches(token):
             self.app.limiter.failed(address)
             return self.send(303, b"", "text/plain", {"Location": "/login?error=token"})
         self.app.limiter.succeeded(address)
-        sid = self.app.sessions.create()
+        if user is not None:
+            sid = self.app.sessions.create(user.name, user.role, user.credential_version)
+        else:
+            sid = self.app.sessions.create(token_hash=self.app.tokens.stored())
         self.send(303, b"", "text/plain", {"Location": "/", "Set-Cookie": auth.session_cookie(sid)})
 
     def api(self, path: str, query: dict, session: auth.Session) -> None:
         if path not in API_PATHS:
             return self.send_error_json(404, "not found")
         if path == "/api/session":
-            return self.send_json(200, {"csrf": session.csrf})
+            return self.send_json(200, {"csrf": session.csrf, "user": session.user, "role": session.role})
+        if path in ADMIN_GETS and session.role != "admin":
+            return self.send_error_json(403, "this needs an admin")
+        if path == "/api/users":
+            conn = self.app.users()
+            try:
+                return self.send_json(
+                    200,
+                    {
+                        "users": users.list_users(conn),
+                        "events": users.events(conn),
+                        "shared_token": not users.has_active_users(conn),
+                    },
+                )
+            finally:
+                conn.close()
         if path in ("/api/config", "/api/config/baseline"):
             if not self.app.config_enabled():
                 return self.send_error_json(404, "not found")
@@ -926,8 +1054,10 @@ class Handler(BaseHTTPRequestHandler):
 def build_server(config: ServeConfig) -> DashboardServer:
     if not config.hosts:
         raise SetupError("name at least one host name or address the dashboard is reached at (--host)")
-    if not config.token_hash.is_file():
-        raise SetupError(f"no login token yet: run `shoalscan serve token` first (it writes {config.token_hash})")
+    if not config.token_hash.is_file() and not (config.token_hash.parent / users.USERS_FILE).is_file():
+        raise SetupError(
+            "nobody can sign in yet: run `shoalscan serve user add NAME --admin` first, and open the invite it prints"
+        )
     app = App(config)
     ctx = tls_context(config.cert, config.key)
     server = DashboardServer((config.bind, config.port), app, ctx)

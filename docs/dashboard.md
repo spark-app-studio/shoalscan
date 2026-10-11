@@ -43,13 +43,13 @@ Without `--yes` it only says what it would delete. It deletes the run with its f
 
 ## Serving the dashboard
 
-The dashboard serves HTTPS only and needs three things: a login token, a TLS certificate and its key, and the history database. Make the token first:
+The dashboard serves HTTPS only and needs three things: a first user, a TLS certificate and its key, and the history database. Add yourself as the first admin:
 
 ```sh
-shoalscan serve token
+shoalscan serve user add alice --admin --url https://127.0.0.1:8443
 ```
 
-It prints a new 256-bit token once. Only its SHA-256 is stored, in `$XDG_CONFIG_HOME/shoalscan/dashboard/token.sha256` (or `~/.config/shoalscan/dashboard/`). Running it again replaces the token and ends every session made with the old one.
+It prints an invite link, once. Open it after starting the dashboard (below) and choose **Get my token**: the page shows your user name and your own 256-bit token, once, and **Save and sign in** lets your password manager store them. See [Users](#users) for the rest.
 
 Then make a certificate. `init-tls` needs the `openssl` command:
 
@@ -65,14 +65,31 @@ Start the dashboard:
 shoalscan serve
 ```
 
-It listens on `127.0.0.1:8443` by default. Open `https://127.0.0.1:8443`, paste the token, and you are in. To serve other machines, bind to an address they can reach and name the host names and addresses they use:
+It listens on `127.0.0.1:8443` by default. Open the invite link, or `https://127.0.0.1:8443` to sign in with your user name and token. To serve other machines, bind to an address they can reach and name the host names and addresses they use:
 
 ```sh
 shoalscan serve init-tls --dns scans.example.internal --ip 192.0.2.10
 shoalscan serve --bind 0.0.0.0 --host scans.example.internal --host 192.0.2.10
 ```
 
-The dashboard answers only to requests whose `Host` header is one of those names with the port. With a wildcard `--bind`, `--host` is required. Put `--state-dir` after `token` or `init-tls` when you use those subcommands.
+The dashboard answers only to requests whose `Host` header is one of those names with the port. With a wildcard `--bind`, `--host` is required. Put `--state-dir` after `user`, `token` or `init-tls` when you use those subcommands.
+
+### Users
+
+Everyone signs in with a user name and their own 256-bit token. There are two roles:
+
+- **admin:** everything a member can do, and manages users, the Configuration page and scans;
+- **member:** reads every page and reviews findings.
+
+An admin adds a user, on the **Users** page or with `shoalscan serve user add NAME [--admin]`, and sends them the invite link it shows. The link works once and expires after 24 hours. Opening it gives the user their token, shown only to them, once; nobody else ever sees it, and only its SHA-256 is stored. A user who loses their token gets a new invite (**Invite again**, or `shoalscan serve user reset NAME`), which also ends the old token and its sessions at once. **Disable** stops a user from signing in and ends their sessions; **Enable** lets them back. Role changes take effect on the user's next request. The last active admin cannot be disabled, made a member or invited again, and nobody can change their own account on the page.
+
+`shoalscan serve user list` lists the users; `serve user role NAME admin|member`, `disable` and `enable` do from the command line what the page does. Whoever can run commands as the dashboard's account can always add an admin, so losing every token never locks you out.
+
+Reviews, configuration changes and scans are recorded under the user's name. Every change to a user is recorded too, with who made it and when, and the **Users** page shows it.
+
+Users are kept in `users.sqlite3` in the dashboard's state directory (mode 0600), not in the history database: `shoalscan record` writes the history, often from CI, and nothing that can write it should be able to make someone an admin.
+
+**From the shared token.** Dashboards set up before users existed signed in with one shared token from `shoalscan serve token`. It keeps working, as an admin, until the first user joins; from then on it no longer signs in, and its sessions end. To move over, add yourself with `shoalscan serve user add NAME --admin`, open the invite, and invite everyone else.
 
 [Security model](security-model.md#the-dashboard) describes how the dashboard protects itself: TLS settings, login, sessions, headers and limits.
 

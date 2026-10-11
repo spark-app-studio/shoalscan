@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin">
+<title>Shoalscan: join</title>
+<link rel="icon" href="/static/shoalscan-icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/invite.js" defer></script>
+</head>
+<body class="login-page">
+<main class="login-card">
+  <img src="/static/shoalscan-icon.svg" alt="" width="96" height="96">
+  <h1>Join Shoalscan</h1>
+  <p id="invite-error" class="error" role="alert" hidden></p>
+  <section id="invite-start">
+    <p class="muted">This invite gives you your own sign-in token. It works once, and the token is shown only now.</p>
+    <button type="button" id="invite-accept">Get my token</button>
+  </section>
+  <section id="invite-done" hidden>
+    <p>Save your user name and token in your password manager now: the token is not shown again, and nobody else has it. If you lose it, ask an admin for a new invite.</p>
+    <form method="post" action="/login">
+      <label for="name">User name</label>
+      <input id="name" name="name" type="text" readonly autocomplete="username">
+      <label for="token">Token</label>
+      <input id="token" name="token" type="password" readonly autocomplete="new-password" spellcheck="false">
+      <p><button type="button" id="invite-show" class="secondary">Show the token</button></p>
+      <button type="submit">Save and sign in</button>
+    </form>
+  </section>
+</main>
+</body>
+</html>
