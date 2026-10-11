@@ -134,8 +134,8 @@ Keep the key readable only by the user that runs the dashboard.
 
 The dashboard has four pages:
 
-- **Overview:** the latest run's result, tiles with the key numbers, open findings by severity over time, the baseline burning down, new and fixed findings per week, the mean time to fix, how old the open findings are, a heatmap of findings by component, inline suppressions over time, and files that were not fully scanned.
-- **Findings:** a table you can filter by run, severity, rule, component, path, age, and whether a finding is new or new and blocking. Each rule links to its message and every place it was found.
+- **Overview:** the latest run's result, the blocking findings, how far the [similar-finding embeddings](triage.md#the-similar-findings-panel) cover the latest run, tiles with the key numbers, open findings by severity over time, the baseline burning down, new and fixed findings per week, the mean time to fix, how old the open findings are, a heatmap of findings by component, inline suppressions over time, and files that were not fully scanned.
+- **Findings:** a table you can filter by run, severity, rule, component, path, age, and whether a finding is new or new and blocking. Each rule links to its message and every place it was found. The [Groups](triage.md#groups-of-similar-findings) page gathers similar untriaged findings so one review can cover them.
 - **Runs:** every recorded run with its status and counts. Select a run to see its detail and links to everything behind its numbers: its findings, the new and new blocking ones, stale baseline entries, inline suppressions and files that were not fully scanned.
 - **About:** what Shoalscan is, who it is for, the scanners and rule sources with their pinned versions and licences, and the limits of static analysis.
 

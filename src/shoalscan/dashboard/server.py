@@ -112,6 +112,7 @@ API_PATHS = frozenset(
         "/api/finding",
         "/api/review/history",
         "/api/similar",
+        "/api/groups",
         "/api/users",
     }
 )
@@ -496,15 +497,15 @@ def _age(query: dict) -> int | None:
     return int(value)
 
 
-def _finding_key(query: dict) -> list[str]:
+def _finding_key(query: dict, name: str = "finding_key") -> list[str]:
     """finding_key=["tool","rule","path","fingerprint"], as JSON in the query string."""
-    value = _one(query, "finding_key", 5000)
+    value = _one(query, name, 5000)
     try:
         key = json.loads(value) if value else None
     except ValueError:
         key = None
     if not (isinstance(key, list) and len(key) == 4 and all(isinstance(p, str) and 0 < len(p) <= 1024 for p in key)):
-        raise ValueError("finding_key")
+        raise ValueError(name)
     return key
 
 
@@ -1080,6 +1081,8 @@ class Handler(BaseHTTPRequestHandler):
                 if kind and kind not in FILE_KINDS:
                     raise ValueError("kind")
                 return self.send_json(200, {"repo": repo, **data.files(run_id, kind or None, limit, offset)})
+            if path == "/api/groups":
+                return self.send_json(200, {"repo": repo, **data.groups(repo_id, run_id, _threshold(query))})
             if path in ("/api/findings", "/api/rule"):
                 if path == "/api/rule":
                     rule = _one(query, "rule")
@@ -1108,6 +1111,9 @@ class Handler(BaseHTTPRequestHandler):
                     baselined=_flag(query, "baselined"),
                     sort=_sort(query),
                     review=_review_filter(query),
+                    keys=data.group_keys(repo_id, run_id, _finding_key(query, "group"), _threshold(query))
+                    if _one(query, "group", 5000)
+                    else None,
                     limit=limit,
                     offset=offset,
                 )

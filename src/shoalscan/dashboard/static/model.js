@@ -29,6 +29,15 @@
   }
   function age(v) { return /^[0-9]$/.test(v) && Number(v) < AGE_BUCKETS; }
   function week(v) { return /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v); }
+  // A similarity from 0.5 to 1, as the server takes it.
+  function threshold(v) { return /^(0\.[0-9]{1,4}|1(\.0{1,4})?)$/.test(v) && Number(v) >= 0.5; }
+  // A finding key, ["tool","rule","path","fingerprint"], as JSON.
+  function findingKey(v) {
+    if (v.length > 5000) return false;
+    var k;
+    try { k = JSON.parse(v); } catch (e) { return false; }
+    return Array.isArray(k) && k.length === 4 && k.every(function (p) { return typeof p === "string" && p.length > 0 && p.length <= 1024; });
+  }
 
   // view -> {parameter: validator}, in the order links write them.
   var VIEWS = {
@@ -36,8 +45,9 @@
     findings: {
       run: id, severity: oneOf(SEVERITIES), rule: text(1024), component: text(200), path: text(200),
       "new": flag, new_blocking: flag, age: age, blocking: flag, baselined: flag, sort: oneOf(["priority"]),
-      review: oneOf(REVIEW_FILTERS), offset: id
+      review: oneOf(REVIEW_FILTERS), group: findingKey, threshold: threshold, offset: id
     },
+    groups: { run: id, threshold: threshold },
     finding: { run: id, tool: text(64), rule: text(1024), path: text(1024), fingerprint: text(128) },
     rule: { run: id, rule: text(1024) },
     runs: { run: id, offset: id },
@@ -324,6 +334,66 @@
     };
   }
 
+  // ------------------------------------------------------------ similar findings
+
+  var THRESHOLDS = ["0.8", "0.85", "0.9", "0.95"];
+
+  // The Findings view of one group: its leader's key, at the similarity it was grouped at.
+  function groupHref(run, key, similarity) {
+    return safeHref("findings", { run: run, group: JSON.stringify(key), threshold: similarity, review: "untriaged" });
+  }
+
+  // The Overview's Similarity panel: what the stored embeddings cover, and what to run next.
+  function similarityView(e, repo) {
+    // One command embeds what is new or changed, then works out the suggestions again.
+    var embed = "shoalscan triage embed --repo-name " + (repo || "<owner/project>") + " --db <the history database>";
+    if (!e || e.embedded === 0) {
+      return {
+        state: "none",
+        headline: "Not set up",
+        lines: ["No finding of the latest trend run has an embedding yet, so there are no suggestions or groups.",
+                "With Ollama and the " + (e ? e.model : "embeddinggemma") + " model on this machine, run:"],
+        commands: [embed],
+        links: []
+      };
+    }
+    var lines = [plural(e.embedded, "finding", "findings") + " of " + e.findings + " in run " + e.run +
+                 " have an embedding (" + e.model + ", last made " + day(e.embedded_at) + ")."];
+    var todo = e.missing + e.stale;
+    if (todo > 0) {
+      lines.push(plural(todo, "finding needs", "findings need") + " a new embedding (" + e.missing + " without one, " +
+                 e.stale + " whose text changed). Suggestions and groups leave them out until then.");
+    }
+    lines.push(plural(e.suggested, "untriaged finding has", "untriaged findings have") + " a suggestion, of " + e.untriaged +
+               " untriaged" + (e.suggestions_at ? " (worked out " + day(e.suggestions_at) + ")." : "."));
+    var links = [];
+    if (e.suggested > 0) {
+      links.push({ href: href("findings", { run: e.run, review: "suggested" }), text: "Show the findings with a suggestion" });
+    }
+    if (e.untriaged > 1) links.push({ href: href("groups", { run: e.run }), text: "Group the untriaged findings by similarity" });
+    return {
+      state: todo > 0 ? "partial" : "ok",
+      headline: todo > 0 ? "Partly up to date" : "Up to date",
+      lines: lines,
+      commands: todo > 0 ? [embed] : [],
+      links: links
+    };
+  }
+
+  // One group on the Groups view.
+  function groupView(g, run, similarity) {
+    var top = g.rules[0];
+    return {
+      title: plural(g.size, "similar finding", "similar findings"),
+      rules: g.rules.map(function (r) { return shortRule(r.rule) + (g.rules.length > 1 ? " (" + r.count + ")" : ""); }),
+      severities: SEVERITIES.filter(function (s) { return g.severities[s]; }).map(function (s) { return g.severities[s] + " " + s; }),
+      suggested: g.suggested.map(function (s) { return plural(s.count, "suggests", "suggest") + " " + REVIEW_LABELS[s.status]; }),
+      more: g.size - g.members.length,
+      href: groupHref(run, g.key, similarity),
+      aria: "Review the " + g.size + " findings like " + (top ? top.rule : "") + " in " + g.key[2] + " together"
+    };
+  }
+
   var Model = {
     SEVERITIES: SEVERITIES,
     FILE_KINDS: FILE_KINDS,
@@ -348,7 +418,11 @@
     USER_STATUSES: USER_STATUSES,
     blockingPoint: blockingPoint,
     shortRule: shortRule,
-    heatmap: heatmap
+    heatmap: heatmap,
+    THRESHOLDS: THRESHOLDS,
+    groupHref: groupHref,
+    similarityView: similarityView,
+    groupView: groupView
   };
   if (typeof module !== "undefined" && module.exports) module.exports = Model;
   else root.ShoalscanModel = Model;

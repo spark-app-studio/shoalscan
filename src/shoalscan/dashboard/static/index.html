@@ -47,6 +47,11 @@
       <ol id="blocking-top" class="blocking-top" aria-label="Fix these first"></ol>
       <p id="blocking-all"></p>
     </section>
+    <section class="similarity-panel" id="similarity-panel" aria-labelledby="similarity-title">
+      <h2 id="similarity-title">Similar findings <span id="similarity-state" class="similarity-state"></span></h2>
+      <div id="similarity-body"></div>
+      <p class="muted small">Embeddings are made on this machine by a local model through Ollama, from each finding's rule, path and message, never its code. They only suggest; a person decides, and nothing here changes what blocks the check.</p>
+    </section>
     <figure class="card heat-panel" aria-labelledby="heat-title"><figcaption id="heat-title">Where the findings are: components by heat (latest trend run)</figcaption>
       <p class="muted small">Heat score = ERROR &times; 10 + WARNING &times; 3 + INFO. Components with new blocking findings come first.</p>
       <div id="chart-components" class="chart"></div>
@@ -65,6 +70,7 @@
   <section id="view-findings" hidden>
     <h1>Findings</h1>
     <p class="muted" id="findings-note"></p>
+    <p id="findings-group-note" class="group-note" hidden></p>
     <ul class="chips" id="findings-chips" aria-label="Active filters"></ul>
     <form id="filters" class="filters">
       <label>Severity <select name="severity"></select></label>
@@ -96,6 +102,16 @@
       <tbody></tbody>
     </table></div>
     <div class="pager" id="findings-pager"></div>
+  </section>
+
+  <section id="view-groups" hidden>
+    <h1>Groups of similar untriaged findings</h1>
+    <p class="muted" id="groups-note"></p>
+    <form id="groups-form" class="filters">
+      <label>Similar at least <select name="threshold" id="groups-threshold"></select></label>
+      <button type="submit">Regroup</button>
+    </form>
+    <ol id="groups-list" class="groups"></ol>
   </section>
 
   <section id="view-finding" hidden>

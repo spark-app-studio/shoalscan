@@ -324,3 +324,19 @@ a.button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .setup-card { max-width: 620px; text-align: left; }
 .setup-card h1, .setup-card > img { display: block; margin-left: auto; margin-right: auto; text-align: center; }
 .setup-checks { list-style: none; padding: 0; color: var(--good, var(--text)); }
+
+/* ---- similar findings: the Overview panel and the Groups view */
+.similarity-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem 1rem; margin-bottom: 1rem; }
+.similarity-panel h2 { margin-top: 0; }
+.similarity-state { font-size: 0.8rem; font-weight: 600; border-radius: 999px; padding: 0.1rem 0.6rem; margin-left: 0.4rem; vertical-align: middle; border: 1px solid var(--border); color: var(--text-2); }
+.similarity-state.state-ok { border-color: var(--accent); color: var(--accent); }
+.similarity-state.state-partial { border-style: dashed; }
+.similarity-panel pre { margin: 0.4rem 0; }
+.groups { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.8rem; }
+.group { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 1rem; }
+.group h2 { margin: 0 0 0.3rem; font-size: 1.05rem; }
+.group .facts-line { color: var(--text-2); font-size: 0.85rem; margin: 0.2rem 0; overflow-wrap: anywhere; }
+.group ul { margin: 0.4rem 0; padding-left: 1.1rem; }
+.group li { margin: 0.15rem 0; overflow-wrap: anywhere; }
+.group .message { color: var(--text-2); }
+.group-note { background: var(--surface-2); border: 1px dashed var(--border); border-radius: 8px; padding: 0.5rem 0.8rem; }

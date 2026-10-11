@@ -14,7 +14,7 @@
   var M = window.ShoalscanModel;
   var SVG = "http://www.w3.org/2000/svg";
   var SEVERITIES = M.SEVERITIES;
-  var VIEWS = ["overview", "findings", "finding", "rule", "runs", "stale", "files", "suppressions", "changes", "config", "users", "about"];
+  var VIEWS = ["overview", "findings", "groups", "finding", "rule", "runs", "stale", "files", "suppressions", "changes", "config", "users", "about"];
   var FILE_KIND_LABELS = {
     skipped: "Skipped", error: "Scanner error", changed_unscanned: "Changed, not fully scanned",
     partial_warning: "Changed, small parse gap", partial_warn_only: "Changed, partially parsed (warn-only)",
@@ -429,7 +429,7 @@
 
   function showView(name) {
     VIEWS.forEach(function (v) { $("view-" + v).hidden = v !== name; });
-    var parent = { rule: "findings", finding: "findings", stale: "runs", files: "runs", suppressions: "runs", changes: "overview" }[name] || name;
+    var parent = { rule: "findings", finding: "findings", groups: "findings", stale: "runs", files: "runs", suppressions: "runs", changes: "overview" }[name] || name;
     document.querySelectorAll("nav a[data-view]").forEach(function (a) {
       if (a.getAttribute("data-view") === parent) a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
@@ -451,6 +451,7 @@
         withScanStatus().then(function () { panel.appendChild(rescanControls(r, false)); });
       }
       blockingPanel(o);
+      similarityPanel(o.embeddings);
       var tiles = clear($("tiles"));
       M.overviewTiles(o).forEach(function (t) { tiles.appendChild(tileNode(t)); });
       var trendRun = o.latest_trend_run ? o.latest_trend_run.id : null;
@@ -477,6 +478,66 @@
         { name: "errors", cls: "s-2", values: o.series.map(function (p) { return p.unscanned_errored; }) }
       ], "Files skipped or with scanner errors",
       { point: function (i) { var p = o.series[i]; return M.listPoint(p, "files", p.unscanned_skipped + p.unscanned_errored, "Files not fully scanned"); } });
+    });
+  }
+
+  function similarityPanel(e) {
+    var v = M.similarityView(e, state.repo);
+    var badge = $("similarity-state");
+    badge.textContent = v.headline;
+    badge.className = "similarity-state state-" + v.state;
+    var body = clear($("similarity-body"));
+    v.lines.forEach(function (line) { body.appendChild(el("p", null, line)); });
+    if (v.commands.length) body.appendChild(el("pre", { "class": "scan-log" }, v.commands.join("\n")));
+    if (v.links.length) {
+      body.appendChild(el("p", null, v.links.map(function (l, i) {
+        return [i ? " · " : null, internalLink(l.href, l.text)];
+      })));
+    }
+  }
+
+  function renderGroups(params) {
+    var similarity = params.threshold || "0.85";
+    status("Loading...");
+    return api("/api/groups", { repo: state.repo, run: params.run, threshold: similarity }).then(function (res) {
+      status("");
+      var select = $("groups-threshold");
+      clear(select);
+      M.THRESHOLDS.concat(M.THRESHOLDS.indexOf(similarity) < 0 ? [similarity] : []).forEach(function (t) {
+        var opt = el("option", { value: t }, Math.round(Number(t) * 100) + "%");
+        if (t === similarity) opt.selected = true;
+        select.appendChild(opt);
+      });
+      $("groups-form").setAttribute("data-run", String(res.run));
+      var note = plural(res.untriaged, "untriaged finding", "untriaged findings") + " in run " + res.run + ", " +
+        res.embedded + " with an embedding. " + plural(res.grouped, "falls", "fall") + " into " +
+        plural(res.groups.length + res.more_groups, "group", "groups") + " of two or more at " +
+        Math.round(Number(similarity) * 100) + "% similarity.";
+      if (res.embedded > res.considered) note += " Only the first " + res.max_grouped + ", by severity, are grouped.";
+      if (res.untriaged > res.embedded) note += " Findings without an embedding are left out; see the Overview.";
+      if (res.more_groups) note += " The " + res.more_groups + " smallest groups are not listed.";
+      $("groups-note").textContent = note;
+      var list = clear($("groups-list"));
+      res.groups.forEach(function (g) {
+        var v = M.groupView(g, res.run, similarity);
+        var members = el("ul", null, g.members.map(function (m) {
+          return el("li", null, el("span", { "class": "sev " + m.severity }, m.severity), " ",
+            el("span", { "class": "mono" }, m.path + ":" + m.line), " ", el("span", { "class": "message" }, m.message));
+        }));
+        if (v.more > 0) members.appendChild(el("li", { "class": "muted" }, "and " + v.more + " more"));
+        list.appendChild(el("li", { "class": "group" },
+          el("h2", null, v.title),
+          el("p", { "class": "facts-line mono" }, v.rules.join(", ")),
+          el("p", { "class": "facts-line" }, v.severities.join(", ") + (g.components.length ? " · " + g.components.join(", ") : "")),
+          v.suggested.length ? el("p", { "class": "facts-line" }, "Suggestions: " + v.suggested.join(", ")) : null,
+          members,
+          v.href ? el("p", null, internalLink(v.href, "Review these " + g.size + " together", v.aria)) : null));
+      });
+      if (!res.groups.length) {
+        list.appendChild(el("li", { "class": "muted" }, res.embedded
+          ? "No two untriaged findings are this alike. Try a lower similarity."
+          : "No untriaged finding has an embedding yet. The Overview says how to make them."));
+      }
     });
   }
 
@@ -513,6 +574,8 @@
       form.elements.blocking.checked = params.blocking === "1";
       form.elements.sort.value = res.sort || "";
       form.setAttribute("data-baselined", params.baselined || "");
+      form.setAttribute("data-group", params.group || "");
+      form.setAttribute("data-threshold", params.threshold || "");
       fillSelect(form.elements.review, M.REVIEW_FILTERS.map(function (r) { return { value: r, label: M.REVIEW_LABELS[r] }; }), params.review, "Any");
       state.findingsRun = res.run;
       state.selected = {};
@@ -527,6 +590,16 @@
       if (params.age) chips.appendChild(chip("Age " + ageLabels[Number(params.age)], params, "findings", "age"));
       if (params.blocking) chips.appendChild(chip("Blocking", params, "findings", "blocking"));
       if (params.baselined) chips.appendChild(chip("Baselined", params, "findings", "baselined"));
+      var groupNote = $("findings-group-note");
+      groupNote.hidden = !params.group;
+      if (params.group) {
+        var leader = JSON.parse(params.group);
+        chips.appendChild(chip("Similar to " + M.shortRule(leader[1]) + " in " + leader[2], params, "findings", "group"));
+        clear(groupNote).appendChild(document.createTextNode(
+          "A group of similar untriaged findings, worked out again from the reviews as they are now. Select them all, " +
+          "check that one decision fits every one, and apply it with the bulk review. "));
+        groupNote.appendChild(internalLink(M.href("groups", { run: res.run, threshold: params.threshold }), "Back to the groups"));
+      }
       if (res.sort === "priority") chips.appendChild(el("li", { "class": "muted small" }, "Sorted by fix priority: new blocking first, ERROR before WARNING, hottest component, oldest first."));
       var body = clear($("findings-table").tBodies[0]);
       res.findings.forEach(function (f) {
@@ -1254,7 +1327,7 @@
   }
 
   var RENDER = {
-    overview: renderOverview, findings: renderFindings, finding: renderFinding, rule: renderRule, runs: renderRuns, stale: renderStale,
+    overview: renderOverview, findings: renderFindings, groups: renderGroups, finding: renderFinding, rule: renderRule, runs: renderRuns, stale: renderStale,
     files: renderFiles, suppressions: renderSuppressions, changes: renderChanges, config: renderConfig, users: renderUsers,
     about: renderAbout
   };
@@ -1289,6 +1362,10 @@
     $("review-form").addEventListener("submit", submitReview);
     fillSelect($("bulk-review").elements.status, M.USER_STATUSES.map(function (s) { return { value: s, label: M.REVIEW_LABELS[s] }; }), "", "Choose a status");
     $("bulk-suggest").addEventListener("click", useSuggestion);
+    $("groups-form").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      window.location.hash = M.href("groups", { run: ev.target.getAttribute("data-run") || null, threshold: $("groups-threshold").value });
+    });
     $("findings-all").addEventListener("change", function (ev) {
       document.querySelectorAll("#findings-table tbody input[type=checkbox]").forEach(function (b) {
         if (b.checked !== ev.target.checked) { b.checked = ev.target.checked; b.dispatchEvent(new Event("change")); }
@@ -1328,6 +1405,10 @@
       if (f.blocking.checked) params.blocking = "1";
       if (f.sort.value) params.sort = f.sort.value;
       if (ev.target.getAttribute("data-baselined")) params.baselined = "1";
+      if (ev.target.getAttribute("data-group")) {
+        params.group = ev.target.getAttribute("data-group");
+        params.threshold = ev.target.getAttribute("data-threshold") || null;
+      }
       try {
         window.location.hash = M.href("findings", params);
       } catch (e) {

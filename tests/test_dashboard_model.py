@@ -4,7 +4,7 @@ import json
 import shutil
 import subprocess
 import unittest
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import helpers  # noqa: F401
 
@@ -414,6 +414,77 @@ class ReviewViewTests(unittest.TestCase):
 
 
 @unittest.skipIf(NODE is None, "node is not installed, so the dashboard's JavaScript model cannot be run")
+@unittest.skipIf(NODE is None, "node is not installed, so the dashboard's JavaScript model cannot be run")
+class SimilarityViewTests(unittest.TestCase):
+    KEY = ["opengrep", "shoalscan.tls-off", "src/z.py", "z0:0"]
+    STATUS = {
+        "model": "embeddinggemma",
+        "run": 9,
+        "findings": 5,
+        "embedded": 4,
+        "missing": 1,
+        "stale": 0,
+        "embedded_at": "2026-10-01T00:00:00Z",
+        "untriaged": 3,
+        "suggested": 2,
+        "suggestions_at": "2026-10-01T00:00:00Z",
+    }
+
+    def test_group_and_threshold_routes(self):
+        group = json.dumps(self.KEY)
+        got = call(
+            "return H.map(h => M.parseRoute(h).params);",
+            H=[
+                "#/findings?" + urlencode({"group": group, "threshold": "0.9"}),
+                "#/findings?" + urlencode({"group": "[1,2,3,4]", "threshold": "0.4"}),
+                "#/findings?" + urlencode({"group": '["a","b"]', "threshold": "1.5"}),
+                "#/groups?run=9&threshold=0.85",
+                "#/groups?threshold=0.85x",
+            ],
+        )
+        self.assertEqual(got, [{"group": group, "threshold": "0.9"}, {}, {}, {"run": "9", "threshold": "0.85"}, {}])
+        link = call("return M.groupHref(9, K, '0.85');", K=self.KEY)
+        got = query(link)
+        self.assertEqual(json.loads(got.pop("group")), self.KEY)
+        self.assertEqual(got, {"run": "9", "review": "untriaged", "threshold": "0.85"})
+
+    def test_the_panel_says_what_to_run(self):
+        none = call("return M.similarityView(null, 'acme/app');")
+        self.assertEqual((none["state"], none["links"]), ("none", []))
+        self.assertEqual(none["commands"], ["shoalscan triage embed --repo-name acme/app --db <the history database>"])
+        partial = call("return M.similarityView(E, 'acme/app');", E=self.STATUS)
+        self.assertEqual(partial["state"], "partial")
+        self.assertIn(
+            "1 finding needs a new embedding (1 without one, 0 whose text changed).", " ".join(partial["lines"])
+        )
+        self.assertIn("2 untriaged findings have a suggestion, of 3 untriaged", " ".join(partial["lines"]))
+        self.assertEqual(
+            [query(link["href"]) for link in partial["links"]],
+            [{"run": "9", "review": "suggested"}, {"run": "9"}],
+        )
+        done = call("return M.similarityView(E, 'acme/app');", E=dict(self.STATUS, embedded=5, missing=0))
+        self.assertEqual((done["state"], done["commands"]), ("ok", []))
+
+    def test_a_group_card(self):
+        group = {
+            "key": self.KEY,
+            "size": 12,
+            "severities": {"WARNING": 9, "ERROR": 3},
+            "rules": [{"rule": "shoalscan.tls-off", "count": 12}],
+            "components": ["api"],
+            "suggested": [{"status": "false_positive", "count": 4}],
+            "members": [{}] * 10,
+        }
+        v = call("return M.groupView(G, 9, '0.85');", G=group)
+        self.assertEqual(v["title"], "12 similar findings")
+        self.assertEqual(v["severities"], ["3 ERROR", "9 WARNING"])
+        self.assertEqual(v["suggested"], ["4 suggest False positive"])
+        self.assertEqual(v["more"], 2)
+        self.assertEqual(json.loads(query(v["href"])["group"]), self.KEY)
+        hostile = call("return M.groupView(G, 9, '0.85').href;", G=dict(group, key=["t", HOSTILE, "p", "f"]))
+        self.assertNotIn("<", hostile)
+
+
 class BadValueTests(unittest.TestCase):
     def test_a_control_character_gives_text_not_an_error(self):
         by_component = {

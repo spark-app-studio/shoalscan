@@ -100,6 +100,16 @@ To act on suggestions, select findings that share one and choose **Use the sugge
 
 The dashboard always shows the similar finding's decision as it is now, so a later change to it shows at once; which finding is the most similar is worked out again at the next `triage embed`.
 
+### Groups of similar findings
+
+Many untriaged findings are the same problem in different places. The **Groups** page (from the Overview's **Similar findings** panel) puts the latest trend run's untriaged findings into groups that are at least 85% alike, or 80%, 90% or 95% if you choose. The most important finding not yet in a group leads the next one and takes every finding that alike to it, so a group never drifts through a chain of findings that are each only a little like the next. Groups of two or more are listed, largest first, each with its rules, severities, components, any suggestions its findings have, and its first ten findings.
+
+**Review these together** opens the Findings page filtered to that group. Select them all, check that one decision fits every one, and apply it with the bulk review (or **Use the suggestion**). Groups are worked out again each time from the stored vectors and the reviews as they are now, so reviewed findings leave their group. The dashboard never calls Ollama: findings without an embedding are left out until the next `triage embed`, and at most the first 500 untriaged findings, by severity, are grouped.
+
+### The Similar findings panel
+
+The Overview's **Similar findings** panel says how much of the latest trend run the embeddings cover: how many findings have one, when they were last made, how many need a new one (no embedding yet, or their message changed since), and how many untriaged findings have a suggestion. When some are missing or out of date, it shows the `triage embed` command to run, and it links to the findings with a suggestion and to the groups.
+
 What is embedded and where it goes:
 
 - **The finding's text, never its code:** the tool, the rule id, the component, the path and the message.
