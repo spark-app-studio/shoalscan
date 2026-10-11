@@ -90,6 +90,16 @@ Findings like community.python.lang.security.audit.dangerous-subprocess-use-audi
 
 The dashboard shows the same list under **Similar findings** on each finding's review page, from the stored vectors; the dashboard itself never calls Ollama.
 
+### Suggestions on the Findings page
+
+After embedding, `triage embed` (and `record --embed`) also works out a suggestion for each untriaged finding of the latest run: the most similar finding that has a decision, if it is at least as alike as `--threshold` (0.85 by default). Untriaged means no dashboard review and no baseline entry. Only decisions that hold for a pattern make suggestions: false positive, accepted risk and won't fix, from a dashboard review or from a baseline reason that starts with "False positive:" or "Accepted:". "Fixed" never does, because a fix is about one place in the code.
+
+The Findings page shows it in the **Suggestion** column, such as *False positive? 0.97*; it links to the similar finding, and its tooltip gives that finding's decision and description. The status filter **Untriaged, with a suggestion** lists them all.
+
+To act on suggestions, select findings that share one and choose **Use the suggestion**. It fills in the bulk review form, with the status and a description that names the similar finding and its decision; check and edit them, then **Apply**. Nothing changes until you do, and the review is recorded under your name like any other.
+
+The dashboard always shows the similar finding's decision as it is now, so a later change to it shows at once; which finding is the most similar is worked out again at the next `triage embed`.
+
 What is embedded and where it goes:
 
 - **The finding's text, never its code:** the tool, the rule id, the component, the path and the message.

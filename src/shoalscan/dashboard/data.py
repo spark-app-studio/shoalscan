@@ -56,6 +56,34 @@ REVIEW_FILTERS = (
     "verified_fixed",
     "regression",
     "baselined",
+    "suggested",
+)
+# The neighbour's decision, now: its dashboard review, else its newest baseline reason.
+_NEIGHBOUR_REVIEW = (
+    "LEFT JOIN finding_reviews nr ON nr.repo_name = (SELECT name FROM repos WHERE id = nk.repo_id) "
+    "AND nr.tool = nk.tool "
+    "AND nr.rule = nk.rule AND nr.path = nk.path AND nr.fingerprint = nk.fingerprint"
+)
+_NEIGHBOUR_BASELINE = (
+    "(SELECT nrf.baseline_{} FROM run_findings nrf JOIN runs nrun ON nrun.id = nrf.run_id WHERE nrf.key_id = nk.id "
+    "ORDER BY nrun.scanned_at DESC, nrun.id DESC LIMIT 1)"
+)
+# The stored suggestions of some findings, with their neighbours' decisions now.
+_SUGGESTIONS = (
+    "SELECT s.key_id, s.score, s.computed_at, nk.tool, nk.rule, nk.path, nk.fingerprint, nr.status, "
+    f"nr.description, nr.updated_by, {_NEIGHBOUR_BASELINE.format('issue')}, "
+    f"{_NEIGHBOUR_BASELINE.format('reason')} "
+    f"FROM finding_suggestions s JOIN finding_keys nk ON nk.id = s.neighbour_id {_NEIGHBOUR_REVIEW} "
+    "WHERE s.model = ? AND s.key_id IN (SELECT value FROM json_each(?))"
+)
+# Untriaged, with a suggestion whose neighbour still has a decision that suggests a status.
+_SUGGESTED = (
+    "fr.status IS NULL AND rf.baseline_reason IS NULL AND EXISTS (SELECT 1 FROM finding_suggestions s "
+    f"JOIN finding_keys nk ON nk.id = s.neighbour_id {_NEIGHBOUR_REVIEW} "
+    "WHERE s.key_id = rf.key_id AND s.model = ? AND "
+    f"(nr.status IN ('false_positive', 'accepted_risk', 'wont_fix') OR (nr.status IS NULL AND "
+    f"(substr({_NEIGHBOUR_BASELINE.format('reason')}, 1, 15) = 'False positive:' OR "
+    f"substr({_NEIGHBOUR_BASELINE.format('reason')}, 1, 9) = 'Accepted:'))))"
 )
 # A finding's review status: a review made on the dashboard, else what its
 # baseline entry's reason says, else open.
@@ -514,6 +542,9 @@ class Data:
             params.append(json.dumps(keys or []))
         if review == "untriaged":
             where.append("fr.status IS NULL AND rf.baseline_reason IS NULL")
+        elif review == "suggested":
+            where.append(_SUGGESTED)
+            params.append(embeddings.DEFAULT_MODEL)
         elif review:
             where.append(f"({_REVIEW_STATUS}) = ?")
             params.append(review)
@@ -568,6 +599,8 @@ class Data:
             ],
         }
         facets["severities"].sort(key=SEVERITIES.index)
+        untriaged = [r["key_id"] for r in rows if r["review_status_raw"] is None and r["baseline_reason"] is None]
+        suggestions = self.suggestions(untriaged)
         return {
             "run": run_id,
             "total": total,
@@ -591,10 +624,36 @@ class Data:
                     "blocking_class": None if r["blocking_class"] is None else bool(r["blocking_class"]),
                     "key": [r["tool"], r["rule"], r["path"], r["fingerprint"]],
                     "review": _review(r),
+                    "suggestion": suggestions.get(r["key_id"]),
                 }
                 for r in rows
             ],
         }
+
+    def suggestions(self, key_ids: list[int], model: str = embeddings.DEFAULT_MODEL) -> dict[int, dict]:
+        """The stored suggestion for each of these (untriaged) findings, with its neighbour's decision now.
+        A suggestion whose neighbour no longer has a decision that suggests a status is left out."""
+        if not key_ids:
+            return {}
+        rows = self.conn.execute(
+            _SUGGESTIONS,
+            (model, json.dumps(key_ids)),
+        ).fetchall()
+        out = {}
+        for key_id, score, computed, tool, rule, path, fp, status, description, by, issue, reason in rows:
+            suggested = embeddings.decision_status(status, reason)
+            if suggested is None:
+                continue
+            out[key_id] = {
+                "status": suggested,
+                "score": score,
+                "computed_at": computed,
+                "like": [tool, rule, path, fp],
+                "source": "review" if status is not None else "baseline",
+                "description": description if status is not None else reason,
+                "by": by if status is not None else issue,
+            }
+        return out
 
     def finding(self, repo_id: int, run_id: int, key: list[str]) -> dict | None:
         """One finding of a run, with its review."""

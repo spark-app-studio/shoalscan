@@ -116,10 +116,11 @@ def cmd_record(args: argparse.Namespace) -> int:
 def _embed(db: Path, repo: str, args: argparse.Namespace, warn_only: bool) -> int:
     """Embed a repository's findings. When Ollama cannot, warn (record) or fail (triage embed); never a traceback."""
     conn = history.open_for_write(db)
+    now = history.parse_timestamp(None)
     try:
-        result = embeddings.embed_repository(
-            conn, repo, args.model, args.ollama_host, now=history.parse_timestamp(None)
-        )
+        result = embeddings.embed_repository(conn, repo, args.model, args.ollama_host, now=now)
+        threshold = getattr(args, "threshold", embeddings.DEFAULT_THRESHOLD)
+        suggested = embeddings.suggest_repository(conn, repo, args.model, threshold, now)
     except embeddings.OllamaError as exc:
         print(f"shoalscan: warning: no embeddings were made: {exc}", file=sys.stderr)
         return 0 if warn_only else 2
@@ -127,7 +128,7 @@ def _embed(db: Path, repo: str, args: argparse.Namespace, warn_only: bool) -> in
         conn.close()
     print(
         f"shoalscan: embedded {result.embedded} findings of {repo} with {args.model}; "
-        f"{result.up_to_date} were up to date",
+        f"{result.up_to_date} were up to date; {suggested} untriaged findings have a suggestion",
         file=sys.stderr,
     )
     return 0
@@ -136,6 +137,8 @@ def _embed(db: Path, repo: str, args: argparse.Namespace, warn_only: bool) -> in
 def cmd_triage_embed(args: argparse.Namespace) -> int:
     embeddings.validate_host(args.ollama_host)
     embeddings.validate_model(args.model)
+    if not 0 < args.threshold <= 1:
+        raise SetupError("--threshold must be above 0 and at most 1")
     db = _db(args)
     if not db.is_file():
         raise SetupError(f"history database not found: {db}")
@@ -541,6 +544,12 @@ def add_commands(sub: argparse._SubParsersAction) -> None:
     )
     t.add_argument("--repo-name", required=True, help="the repository's name in the history, such as owner/project")
     t.add_argument("--db", help="history database (default: the same default as `record`)")
+    t.add_argument(
+        "--threshold",
+        type=float,
+        default=embeddings.DEFAULT_THRESHOLD,
+        help=f"lowest similarity for a suggestion (default: {embeddings.DEFAULT_THRESHOLD})",
+    )
     _embedding_options(t)
     t.set_defaults(func=cmd_triage_embed)
     t = tsub.add_parser(
