@@ -1017,44 +1017,31 @@
 
   // ------------------------------------------------------------ users
 
-  var USER_ACTIONS = { disable: "Disable", enable: "Enable", reinvite: "Invite again" };
-
-  function showInvite(r) {
-    $("users-invite").hidden = false;
-    $("users-invite-title").textContent = "Invite for " + r.name;
-    $("users-invite-expires").textContent = fmtTime(r.expires_at);
-    $("users-invite-link").textContent = window.location.origin + r.invite_path;
-  }
-
-  function changeUser(name, action, role) {
-    var body = { name: name, action: action };
-    if (role) body.role = role;
-    postJson("/api/users/change", body).then(function (r) {
-      if (r.status !== 200) { $("users-message").textContent = r.body.error || "error " + r.status; return; }
-      if (r.body.invite_path) showInvite(r.body);
-      $("users-message").textContent = "";
+  function changeUser(email, action) {
+    postJson("/api/users/change", { email: email, action: action }).then(function (r) {
+      $("users-message").textContent = r.status === 200 ? "" : (r.body.error || "error " + r.status);
       renderUsers();
     });
   }
 
   function renderUsers() {
     return api("/api/users").then(function (res) {
-      $("users-shared").hidden = !res.shared_token;
+      var p = res.provider;
+      $("users-provider").textContent = "People sign in through " + p.name + " (" + p.issuer + "). Admins are those whose ID token's " +
+        p.admin_claim + " claim holds " + p.admin_value + "; that is set at the provider, not here.";
       var body = clear($("users-table").tBodies[0]);
       res.users.forEach(function (u) {
         var actions = el("td", { "class": "actions" });
-        if (u.name !== state.user) {
-          var flip = u.role === "admin" ? "member" : "admin";
-          actions.appendChild(configAction("Make " + flip, "Make " + u.name + " " + flip, function () { changeUser(u.name, "role", flip); }));
-          actions.appendChild(configAction(u.status === "disabled" ? USER_ACTIONS.enable : USER_ACTIONS.disable,
-            (u.status === "disabled" ? "Enable " : "Disable ") + u.name, function () { changeUser(u.name, u.status === "disabled" ? "enable" : "disable"); }));
-          actions.appendChild(configAction(USER_ACTIONS.reinvite, "Invite " + u.name + " again", function () { changeUser(u.name, "reinvite"); }));
+        if (u.email !== state.user) {
+          if (u.allowed) actions.appendChild(configAction("Take back access", "Take back the access of " + u.email, function () { changeUser(u.email, "disallow"); }));
+          actions.appendChild(configAction(u.disabled ? "Enable" : "Disable", (u.disabled ? "Enable " : "Disable ") + u.email,
+            function () { changeUser(u.email, u.disabled ? "enable" : "disable"); }));
         }
-        body.appendChild(el("tr", null, el("td", { "class": "mono" }, u.name), el("td", null, u.role),
-          el("td", null, u.status + (u.invite_expires_at ? " until " + fmtTime(u.invite_expires_at) : "")),
-          el("td", null, fmtDate(u.created_at) + " by " + u.created_by), actions));
+        body.appendChild(el("tr", null, el("td", { "class": "mono" }, u.email), el("td", null, u.status),
+          el("td", null, u.last_login_at ? fmtTime(u.last_login_at) : "never"),
+          el("td", null, fmtDate(u.added_at) + " by " + u.added_by), actions));
       });
-      if (!res.users.length) body.appendChild(el("tr", null, el("td", { colspan: "5", "class": "empty" }, "No users yet.")));
+      if (!res.users.length) body.appendChild(el("tr", null, el("td", { colspan: "5", "class": "empty" }, "Nobody yet.")));
       var events = clear($("users-events").tBodies[0]);
       res.events.forEach(function (e) {
         events.appendChild(el("tr", null, el("td", null, fmtTime(e.at)), el("td", null, e.who), el("td", { "class": "mono" }, e.user),
@@ -1066,11 +1053,10 @@
   function submitUser(ev) {
     ev.preventDefault();
     var e = ev.target.elements;
-    postJson("/api/users/invite", { name: e.name.value.trim(), role: e.role.value }).then(function (r) {
+    postJson("/api/users/allow", { email: e.email.value.trim() }).then(function (r) {
       if (r.status !== 200) { $("users-message").textContent = r.body.error || "error " + r.status; return; }
-      e.name.value = "";
-      $("users-message").textContent = "";
-      showInvite(r.body);
+      e.email.value = "";
+      $("users-message").textContent = r.body.email + " may now sign in, as a member.";
       renderUsers();
     });
   }
@@ -1358,7 +1344,7 @@
       state.csrf = res[0].csrf;
       state.user = res[0].user;
       $("nav-users").hidden = res[0].role !== "admin";
-      $("whoami").textContent = res[0].user ? res[0].user + " (" + res[0].role + ")" : "shared token";
+      $("whoami").textContent = res[0].user + " (" + res[0].role + ")";
       state.repos = res[1].repos;
       var names = state.repos.map(function (r) { return r.name; });
       var select = clear($("repo"));

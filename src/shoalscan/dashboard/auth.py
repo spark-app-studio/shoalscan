@@ -1,11 +1,9 @@
-"""Login tokens, sessions, CSRF tokens, same-origin checks and the login rate limit.
+"""Sessions, CSRF tokens, same-origin checks and the sign-in rate limit.
 
-Named users (see `shoalscan.dashboard.users`) each have a 256-bit token. The
-shared token of earlier versions, made by `shoalscan serve token`, still
-signs in until the first named user joins. Only SHA-256 hashes of tokens are
-stored. Sessions live in memory only, keyed by the SHA-256 of the cookie
-value; every request checks a session again, so it ends when its user is
-disabled or invited again, or when the shared token is rotated.
+People sign in through an OpenID Connect provider (see `oidc` and `users`).
+Sessions live in memory only, keyed by the SHA-256 of the cookie value;
+every request checks a session against the users database, so it ends at
+once when its person is disabled or loses access.
 """
 
 from __future__ import annotations
@@ -46,56 +44,14 @@ def write_private_file(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def create_token(hash_path: Path) -> str:
-    """Make a new 256-bit login token, store its SHA-256, and return the token."""
-    token = secrets.token_urlsafe(32)
-    write_private_file(hash_path, sha256_hex(token) + "\n")
-    return token
-
-
-class TokenCheck:
-    """Compares login attempts with the stored hash, re-reading the file when it changes."""
-
-    def __init__(self, hash_path: Path):
-        self.hash_path = hash_path
-        self._lock = threading.Lock()
-        self._stamp: tuple | None = None
-        self._hash = ""
-
-    def stored(self) -> str:
-        with self._lock:
-            try:
-                st = os.stat(self.hash_path)
-            except OSError:
-                self._stamp, self._hash = None, ""
-                return ""
-            stamp = (st.st_ino, st.st_mtime_ns, st.st_size)
-            if stamp != self._stamp:
-                try:
-                    value = self.hash_path.read_text(encoding="ascii").strip()
-                except (OSError, UnicodeDecodeError):
-                    value = ""
-                self._hash = value if len(value) == 64 and all(c in "0123456789abcdef" for c in value) else ""
-                self._stamp = stamp
-            return self._hash
-
-    def matches(self, candidate: str) -> bool:
-        stored = self.stored()
-        if not stored or not candidate or len(candidate) > MAX_SECRET_CHARS:
-            return False
-        # Comparing fixed-length digests in constant time leaks nothing about the token.
-        return hmac.compare_digest(sha256_hex(candidate), stored)
-
-
 @dataclass
 class Session:
     created: float
     last_used: float
     csrf: str
-    token_hash: str  # the shared token's hash, for a session made with it
-    tag: str = ""  # short and not secret: tells sessions apart in the audit
-    user: str | None = None  # None for a session made with the shared token
-    role: str = "admin"
+    tag: str = ""  # short and not secret: tells sessions apart in logs
+    user: str | None = None  # the person's verified email address
+    role: str = "member"
     credential_version: int = 0
 
     @property
@@ -112,9 +68,7 @@ class Sessions:
         self._lock = threading.Lock()
         self._items: dict[str, Session] = {}
 
-    def create(
-        self, user: str | None = None, role: str = "admin", credential_version: int = 0, token_hash: str = ""
-    ) -> str:
+    def create(self, user: str, role: str, credential_version: int) -> str:
         sid = secrets.token_urlsafe(32)
         now = time.time()
         with self._lock:
@@ -122,7 +76,7 @@ class Sessions:
                 oldest = min(self._items, key=lambda k: self._items[k].last_used)
                 del self._items[oldest]
             self._items[sha256_hex(sid)] = Session(
-                now, now, secrets.token_urlsafe(32), token_hash, secrets.token_hex(4), user, role, credential_version
+                now, now, secrets.token_urlsafe(32), secrets.token_hex(4), user, role, credential_version
             )
         return sid
 

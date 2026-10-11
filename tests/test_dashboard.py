@@ -16,10 +16,11 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 import helpers  # noqa: F401
+from fake_idp import FakeIdP, sign_in
 from history_fixtures import MALICIOUS, sample_history
 
 from shoalscan import embeddings, history
-from shoalscan.dashboard import auth, server, tlsgen
+from shoalscan.dashboard import auth, oidc, server, tlsgen
 
 OPENSSL = tlsgen.find_openssl()
 STATIC = Path(server.STATIC_DIR)
@@ -50,13 +51,15 @@ class DashboardServerTests(unittest.TestCase):
             )
         conn.commit()
         conn.close()
-        cls.token_path = base / "state" / "token.sha256"
-        cls.token = auth.create_token(cls.token_path)
+        cls.idp = FakeIdP()
+        cls.state = base / "state"
+        cls.state.mkdir()
+        oidc.save(cls.state, cls.idp.config())
         config = server.ServeConfig(
             db=base / "history.sqlite3",
             cert=cls.tls["cert"],
             key=cls.tls["key"],
-            token_hash=cls.token_path,
+            auth_dir=cls.state,
             bind="127.0.0.1",
             port=0,
             hosts=("127.0.0.1",),
@@ -73,6 +76,7 @@ class DashboardServerTests(unittest.TestCase):
         cls.httpd.shutdown()
         cls.httpd.server_close()
         cls.thread.join(timeout=10)
+        cls.idp.close()
         cls._tmp.cleanup()
         server.Handler._log = cls._log
 
@@ -90,17 +94,12 @@ class DashboardServerTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def login(self, token=None, origin=None):
-        body = urlencode({"token": self.token if token is None else token})
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        if origin is not False:
-            headers["Origin"] = origin or self.origin
-        return self.request("POST", "/login", body, headers)
+    ADMIN = "admin@example.com"
 
     def session(self):
-        status, headers, _ = self.login()
-        self.assertEqual(status, 303)
-        return re.match(rf"{auth.COOKIE_NAME}=([^;]+)", headers["Set-Cookie"]).group(1)
+        cookie, where = sign_in(self.port, self.ctx, self.idp, self.ADMIN, groups=["shoal-admin"])
+        self.assertIsNotNone(cookie, where)
+        return cookie
 
     def get_json(self, path, cookie, expect=200):
         status, headers, body = self.request("GET", path, cookie=cookie)
@@ -206,43 +205,21 @@ class DashboardServerTests(unittest.TestCase):
         icon = (helpers.ROOT / "assets" / "shoalscan-icon.svg").read_bytes()
         self.assertEqual(self.request("GET", "/static/shoalscan-icon.svg")[2], icon)
 
-    def test_login_sets_a_strict_host_cookie(self):
-        status, headers, _ = self.login()
-        self.assertEqual((status, headers["Location"]), (303, "/"))
-        cookie = headers["Set-Cookie"]
-        self.assertTrue(cookie.startswith(auth.COOKIE_NAME + "="))
+    def test_sign_in_sets_a_strict_host_cookie(self):
+        found = []
+        cookie, _ = sign_in(self.port, self.ctx, self.idp, self.ADMIN, groups=["shoal-admin"], headers_out=found)
+        self.assertIsNotNone(cookie)
+        session = [v for k, v in found if k.lower() == "set-cookie" and v.startswith(auth.COOKIE_NAME + "=")][0]
         for part in ("Path=/", "Secure", "HttpOnly", "SameSite=Strict"):
-            self.assertIn(part, cookie)
-        self.assertNotIn("Domain", cookie)
+            self.assertIn(part, session)
+        self.assertNotIn("Domain", session)
 
-    def test_wrong_token_and_cross_origin_logins_fail(self):
-        self.httpd.app.limiter = auth.LoginLimiter()
-        status, headers, _ = self.login(token="not-the-token")
-        self.assertEqual((status, headers["Location"]), (303, "/login?error=token"))
-        self.assertNotIn("Set-Cookie", headers)
-        for origin in ("https://evil.example", "null", f"http://127.0.0.1:{self.port}"):
-            with self.subTest(origin=origin):
-                status, headers, _ = self.login(origin=origin)
-                self.assertEqual(status, 403)
-                self.assertNotIn("Set-Cookie", headers)
-        status, _, _ = self.login(origin=False)
-        self.assertEqual(status, 403)
-        status, _, _ = self.request(
-            "POST", "/login", "token=" + self.token, {"Origin": self.origin, "Content-Type": "text/plain"}
+    def test_there_is_no_token_login_any_more(self):
+        status, headers, _ = self.request(
+            "POST", "/login", "token=x", {"Origin": self.origin, "Content-Type": "application/x-www-form-urlencoded"}
         )
-        self.assertEqual(status, 415)
-        self.httpd.app.limiter = auth.LoginLimiter()
-
-    def test_login_is_rate_limited(self):
-        self.httpd.app.limiter = auth.LoginLimiter()
-        try:
-            for _ in range(5):
-                self.assertEqual(self.login(token="wrong")[1]["Location"], "/login?error=token")
-            status, headers, _ = self.login()  # even the right token waits now
-            self.assertEqual((status, headers["Location"]), (303, "/login?error=limit"))
-            self.assertNotIn("Set-Cookie", headers)
-        finally:
-            self.httpd.app.limiter = auth.LoginLimiter()
+        self.assertEqual(status, 401)
+        self.assertNotIn("Set-Cookie", headers)
 
     def test_logout_needs_the_csrf_token(self):
         cookie = self.session()
@@ -264,17 +241,6 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("Max-Age=0", headers["Set-Cookie"])
         self.assertEqual(self.request("GET", "/api/repos", cookie=cookie)[0], 401)
 
-    def test_rotating_the_token_ends_sessions(self):
-        cookie = self.session()
-        self.assertEqual(self.request("GET", "/api/repos", cookie=cookie)[0], 200)
-        old = type(self).token
-        type(self).token = auth.create_token(self.token_path)
-        try:
-            self.assertEqual(self.request("GET", "/api/repos", cookie=cookie)[0], 401)
-            self.assertEqual(self.login(token=old)[1]["Location"], "/login?error=token")
-        finally:
-            self.httpd.app.limiter = auth.LoginLimiter()
-
     # ------------------------------------------------------------ request checks
 
     def test_a_wrong_host_is_refused(self):
@@ -283,13 +249,7 @@ class DashboardServerTests(unittest.TestCase):
             with self.subTest(host=host):
                 self.assertEqual(self.request("GET", "/api/repos", headers={"Host": host}, cookie=cookie)[0], 421)
                 self.assertEqual(self.request("GET", "/login", headers={"Host": host})[0], 421)
-                status, _, _ = self.request(
-                    "POST",
-                    "/login",
-                    urlencode({"token": self.token}),
-                    {"Host": host, "Origin": f"https://{host}", "Content-Type": "application/x-www-form-urlencoded"},
-                )
-                self.assertEqual(status, 421)
+                self.assertEqual(self.request("GET", "/oidc/start", headers={"Host": host})[0], 421)
 
     def test_no_path_traversal_on_static_files(self):
         cookie = self.session()
@@ -401,18 +361,6 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(reply.count(b"HTTP/1.1 "), 1, "nothing after the chunked body may be read as a request")
         self.assertIn(b" 400 ", reply.split(b"\r\n")[0])
         self.assertIn(b"Connection: close", reply)
-
-    def test_a_successful_login_clears_the_address_failures(self):
-        self.httpd.app.limiter = auth.LoginLimiter()
-        try:
-            for _ in range(4):
-                self.login(token="wrong")
-            self.assertEqual(self.login()[0], 303)
-            for _ in range(4):
-                self.assertEqual(self.login(token="wrong")[1]["Location"], "/login?error=token")
-            self.assertIn("Set-Cookie", self.login()[1])
-        finally:
-            self.httpd.app.limiter = auth.LoginLimiter()
 
     # ------------------------------------------------------------ API shapes and escaping
 
@@ -537,7 +485,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertIn("Commons Clause", about["rule_sources"][0]["licence"])
         session = self.get_json("/api/session", cookie)
         self.assertEqual(session.keys(), {"csrf", "user", "role"})
-        self.assertEqual((session["user"], session["role"]), (None, "admin"))  # the shared token, before anyone joins
+        self.assertEqual((session["user"], session["role"]), (self.ADMIN, "admin"))
 
     def test_similar_findings_come_from_stored_embeddings(self):
         cookie = self.session()
@@ -698,7 +646,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(detail["finding"]["review"]["description"], MALICIOUS)
         self.assertTrue(detail["finding"]["review"]["resolved_at"].endswith("Z"))
         self.assertEqual(detail["history"][0]["to_status"], "false_positive")
-        self.assertTrue(detail["history"][0]["who"].startswith("dashboard user (session "))
+        self.assertEqual(detail["history"][0]["who"], self.ADMIN)  # reviews name the person who signed in
         self.assertEqual(self.get_json(f"/api/review/history?{q}", cookie)["history"][0]["description"], MALICIOUS)
         self.get_json("/api/review/history?repo=acme/app&finding_key=%5B1%5D", cookie, 400)
         # Filters and the overview's counts.

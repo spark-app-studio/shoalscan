@@ -12,7 +12,7 @@
 
 - **Pinned and verified.** Every scanner binary is pinned by version and SHA-256 in `tools.lock`. Where the project publishes signatures (Opengrep signs with cosign), the signature is checked against the project's release workflow identity. There is no `curl | bash`.
 - **Offline at scan time.** Scans use local rules and local binaries only. Nothing is fetched while scanning.
-- **No credentials on the runner.** Shoalscan never needs a GitHub token or any other secret to scan, record or serve the dashboard. Triage and fixing happen on a developer machine.
+- **No credentials on the runner.** Shoalscan never needs a GitHub token or any other secret to scan or record. The dashboard holds one: the client secret it uses with your identity provider, in a 0600 file on its own server. Triage and fixing happen on a developer machine.
 - **Fail closed.** A scanner that crashes, times out or cannot parse its output fails the run. It is never read as "no findings".
 - **No silent suppression.** An inline suppression must name the rule and an issue. Suppressions are counted and shown on the dashboard, so silencing never looks like fixing.
 - **Python standard library only** for the CLI and the dashboard, so it installs anywhere Python 3.11 or later runs.
@@ -55,7 +55,7 @@ Every scanner's output is turned into one record:
 - `shoalscan check`: compare the findings with the baseline. It prints new and stale entries, emits a one-line JSON summary, and exits non-zero on a blocking result.
 - `shoalscan baseline init`: write the baseline from a full scan.
 - `shoalscan record`: store a run's summary and findings in the history database.
-- `shoalscan serve`: start the dashboard over HTTPS with token login.
+- `shoalscan serve`: start the dashboard over HTTPS, with sign-in through an OpenID Connect provider.
 - `shoalscan triage`: write a prioritised work list grouped by rule family and component.
 - `shoalscan report`: write a dated Markdown security report from the history and the baseline.
 

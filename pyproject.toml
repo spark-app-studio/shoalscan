@@ -49,5 +49,5 @@ select = ["E", "W", "F", "N", "I"]
 known-first-party = ["shoalscan"]
 # The tests' own modules come before shoalscan: importing `helpers` puts src/
 # on the import path, so a source checkout runs the tests without installing.
-known-local-folder = ["helpers", "history_fixtures", "test_end_to_end", "test_lock_and_install"]
+known-local-folder = ["fake_idp", "helpers", "history_fixtures", "test_end_to_end", "test_lock_and_install"]
 section-order = ["future", "standard-library", "third-party", "local-folder", "first-party"]

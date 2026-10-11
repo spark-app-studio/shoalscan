@@ -341,7 +341,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             db=_db(args),
             cert=Path(args.cert) if args.cert else state / "tls" / "server.pem",
             key=Path(args.key) if args.key else state / "tls" / "server.key",
-            token_hash=state / "token.sha256",
+            auth_dir=state,
             bind=args.bind,
             port=args.port,
             hosts=tuple(hosts),
@@ -353,72 +353,70 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_serve_token(args: argparse.Namespace) -> int:
-    from shoalscan.dashboard.auth import create_token
-
-    path = _state(args) / "token.sha256"
-    token = create_token(path)
-    print("A new dashboard login token (shown once; only its SHA-256 is stored):")
-    print(token)
-    print(f"Its hash is in {path}. Any earlier token and its sessions stop working.")
-    return 0
+    raise SetupError(
+        "the shared login token is gone: people sign in through your OpenID Connect provider. Start "
+        "`shoalscan serve` and open /setup to configure it (see docs/dashboard.md)"
+    )
 
 
 def _cli_who() -> str:
     return f"{history._who()} (command line)"
 
 
-def _print_invite(name: str, code: str, expires: str, url: str | None) -> None:
-    path = f"/invite#{code}"
-    link = f"{url.rstrip('/')}{path}" if url else f"https://<the dashboard's address>{path}"
-    print(f"An invite for {name} (shown once; it works once, until {expires}):")
-    print(link)
-    print("Send it over a channel you trust. Opening it gives them their own token, which you never see.")
-
-
-def _dashboard_url(value: str | None) -> str | None:
-    if value is None:
-        return None
-    from urllib.parse import urlsplit
-
-    parts = urlsplit(value)
-    if parts.scheme != "https" or not parts.hostname or parts.path not in ("", "/") or parts.query or parts.fragment:
-        raise SetupError(
-            f"--url must be the dashboard's https:// address, such as https://dash.example.com:8443: {value!r}"
-        )
-    return value
-
-
 def cmd_serve_user(args: argparse.Namespace) -> int:
     from shoalscan.dashboard import users
 
-    url = _dashboard_url(getattr(args, "url", None))
     conn = users.open_users(_state(args))
     try:
-        if args.user_command == "add":
-            code, expires = users.add_user(conn, args.name, "admin" if args.admin else "member", _cli_who())
-            _print_invite(args.name, code, expires, url)
-        elif args.user_command == "reset":
-            code, expires = users.reinvite(conn, args.name, _cli_who())
-            print(f"{args.name}'s token and sessions no longer work.")
-            _print_invite(args.name, code, expires, url)
+        if args.user_command == "allow":
+            users.allow(conn, args.email, _cli_who())
+            print(f"{users.normalise_email(args.email)} may now sign in, as a member.")
+        elif args.user_command == "disallow":
+            users.disallow(conn, args.email, _cli_who())
+            print(f"{users.normalise_email(args.email)} may no longer sign in as a member; their sessions have ended.")
         elif args.user_command in ("disable", "enable"):
-            users.set_disabled(conn, args.name, args.user_command == "disable", _cli_who())
-            print(
-                f"{args.name} is {args.user_command}d"
-                + ("; their sessions have ended." if args.user_command == "disable" else ".")
-            )
-        elif args.user_command == "role":
-            users.set_role(conn, args.name, args.role, _cli_who())
-            print(f"{args.name} is now {'an admin' if args.role == 'admin' else 'a member'}.")
+            users.set_disabled(conn, args.email, args.user_command == "disable", _cli_who())
+            done = "disabled; their sessions have ended" if args.user_command == "disable" else "enabled"
+            print(f"{users.normalise_email(args.email)} is {done}.")
         else:
             listed = users.list_users(conn)
             if not listed:
-                print("No users yet. Add the first admin with `shoalscan serve user add NAME --admin`.")
+                print(
+                    "Nobody yet. Admins come from the provider's admin claim; `serve user allow EMAIL` lets a member "
+                    "in."
+                )
             for u in listed:
-                until = f" until {u['invite_expires_at']}" if u["invite_expires_at"] else ""
-                print(f"{u['name']:<24} {u['role']:<7} {u['status']}{until}")
+                print(f"{u['email']:<40} {u['status']:<36} last sign-in {u['last_login_at'] or 'never'}")
     finally:
         conn.close()
+    return 0
+
+
+def cmd_serve_oidc(args: argparse.Namespace) -> int:
+    from shoalscan.dashboard import oidc
+
+    state = _state(args)
+    if args.oidc_command == "reset":
+        (state / oidc.CONFIG_FILE).unlink(missing_ok=True)
+        print(
+            "The sign-in settings are removed. The next `shoalscan serve` starts the setup wizard, with a new setup "
+            "code."
+        )
+        return 0
+    config = oidc.load(state)
+    if config is None:
+        print("Sign-in is not set up. Start `shoalscan serve` and open /setup.")
+        return 0
+    print(f"issuer         {config.issuer}")
+    print(f"client id      {config.client_id} (the secret is in {state / oidc.CONFIG_FILE})")
+    print(f"redirect URI   {config.redirect_uri}")
+    print(f"admins         ID tokens whose {config.admin_claim} claim holds {config.admin_value}")
+    print(f"scopes         {' '.join(config.scopes)}")
+    print(f"CA bundle      {config.ca_file or 'the system trust store'}")
+    if args.test:
+        provider = oidc.discover(config)
+        for line in [*provider.checks, oidc.check_client(provider, config)]:
+            print(f"ok             {line}")
     return 0
 
 
@@ -630,39 +628,33 @@ def add_commands(sub: argparse._SubParsersAction) -> None:
     )
     p.set_defaults(func=cmd_serve)
     serve_sub = p.add_subparsers(dest="serve_command")
-    t = serve_sub.add_parser("token", help="make the shared login token of earlier versions (until a user joins)")
+    t = serve_sub.add_parser("token", help="removed: people sign in through an OpenID Connect provider")
     t.add_argument("--state-dir", help=state_help)
     t.set_defaults(func=cmd_serve_token)
-    u = serve_sub.add_parser("user", help="add, invite again, disable, enable or list the dashboard's users")
+    u = serve_sub.add_parser("user", help="say who may sign in: allow, disallow, disable, enable or list people")
     usub = u.add_subparsers(dest="user_command", required=True)
-    url_help = "the dashboard's https:// address, to print the whole invite link"
     for name, text in (
-        ("add", "add a user and print their single-use invite link"),
-        ("reset", "invite a user again: their token and sessions stop working at once"),
+        ("allow", "let this verified email address sign in, as a member"),
+        ("disallow", "take back a member's access"),
+        ("disable", "refuse this person entirely, admins included, and end their sessions"),
+        ("enable", "undo disable"),
     ):
         x = usub.add_parser(name, help=text)
-        x.add_argument("name", help="the user name: lowercase letters, digits, dots, dashes or underscores")
-        if name == "add":
-            x.add_argument("--admin", action="store_true", help="an admin: manages users, the configuration and scans")
-        x.add_argument("--url", help=url_help)
+        x.add_argument("email", help="the person's email address, as the identity provider reports it")
         x.add_argument("--state-dir", help=state_help)
         x.set_defaults(func=cmd_serve_user)
-    for name, text in (
-        ("disable", "stop a user from signing in, and end their sessions"),
-        ("enable", "let a disabled user sign in again"),
-    ):
-        x = usub.add_parser(name, help=text)
-        x.add_argument("name", help="the user name")
-        x.add_argument("--state-dir", help=state_help)
-        x.set_defaults(func=cmd_serve_user)
-    x = usub.add_parser("role", help="make a user an admin or a member")
-    x.add_argument("name", help="the user name")
-    x.add_argument("role", choices=("admin", "member"))
+    x = usub.add_parser("list", help="list the people the dashboard knows, and their access")
     x.add_argument("--state-dir", help=state_help)
     x.set_defaults(func=cmd_serve_user)
-    x = usub.add_parser("list", help="list the users and their status")
+    o = serve_sub.add_parser("oidc", help="show or reset the OpenID Connect sign-in settings")
+    osub = o.add_subparsers(dest="oidc_command", required=True)
+    x = osub.add_parser("show", help="show the sign-in settings (never the client secret)")
+    x.add_argument("--test", action="store_true", help="also check the provider: discovery, keys and the client")
     x.add_argument("--state-dir", help=state_help)
-    x.set_defaults(func=cmd_serve_user)
+    x.set_defaults(func=cmd_serve_oidc)
+    x = osub.add_parser("reset", help="remove the sign-in settings, so the next start runs the setup wizard")
+    x.add_argument("--state-dir", help=state_help)
+    x.set_defaults(func=cmd_serve_oidc)
     t = serve_sub.add_parser(
         "init-tls", help="make a name-constrained, single-use CA and a server certificate with openssl"
     )
