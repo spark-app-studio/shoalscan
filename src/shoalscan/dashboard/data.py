@@ -21,6 +21,8 @@ import sqlite3
 from collections import Counter
 from datetime import date, datetime, timedelta
 
+from shoalscan import embeddings
+
 SEVERITIES = ("ERROR", "WARNING", "INFO")
 AGE_BUCKETS = ((7, "0-7 days"), (30, "8-30 days"), (90, "31-90 days"), (365, "91-365 days"), (None, "over a year"))
 MAX_WEEKS = 52
@@ -601,6 +603,21 @@ class Data:
             if f["key"] == key:
                 return f
         return None
+
+    def similar(
+        self, repo_id: int, key: list[str], threshold: float, all_repos: bool, model: str = embeddings.DEFAULT_MODEL
+    ) -> dict:
+        """The findings most like one finding, from stored embeddings; the dashboard never calls Ollama."""
+        row = self.conn.execute(
+            "SELECT id FROM finding_keys WHERE repo_id = ? AND tool = ? AND rule = ? AND path = ? AND fingerprint = ?",
+            (repo_id, *key),
+        ).fetchone()
+        found = (
+            embeddings.similar(self.conn, row[0], model, threshold, embeddings.DEFAULT_LIMIT, all_repos)
+            if row
+            else None
+        )
+        return {"model": model, "threshold": threshold, "embedded": found is not None, "similar": found or []}
 
     def review_history(self, repo_name: str, key: list[str], limit: int = 200) -> list[dict]:
         rows = self.conn.execute(

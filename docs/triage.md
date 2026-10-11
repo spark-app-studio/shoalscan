@@ -59,6 +59,45 @@ Triage is advice, so it warns instead of failing. It warns, in the list and on s
 
 Scan again for an up-to-date list.
 
+## Similar findings, with a local embedding model
+
+With thousands of findings, most of them repeat a few patterns, and a decision about one usually holds for its neighbours. Shoalscan can find those neighbours with an embedding model that runs on your own machine through [Ollama](https://ollama.com), by default Google's EmbeddingGemma. Nothing leaves the machine, and no token or account is needed.
+
+```sh
+ollama pull embeddinggemma
+shoalscan triage embed --repo-name owner/project        # once, then after new runs
+shoalscan triage suggest-similar 3f2a1b4c --repo-name owner/project
+```
+
+`triage embed` reads the repository's findings from the history database and stores one vector per finding. Only findings that are new, or whose message changed, are sent again. `shoalscan record --embed` does the same right after recording a run; if Ollama is not running or the model is not pulled, `record` prints a warning and still records the run.
+
+`triage suggest-similar` takes a finding's fingerprint (the whole of it, or its first 8 characters or more) and lists the three findings most like it, at a cosine similarity of 0.85 or more. Each comes with what was decided about it: its dashboard review (with who and when) or its baseline entry's issue and reason. Use it to apply one decision to a whole group, still finding by finding:
+
+```text
+Findings like community.python.lang.security.audit.dangerous-subprocess-use-audit in src/shoalscan/gitref.py (61da0a83d820), similarity at least 0.85:
+  0.995  ERROR   src/shoalscan/install.py:131  community.python.lang.security.audit.dangerous-subprocess-use-audit
+         reviewed false_positive by alice on 2026-10-02: Fixed argument list, no shell.
+```
+
+| Option | Meaning |
+|---|---|
+| `--threshold N` | the lowest similarity to list, above 0 and at most 1 (default 0.85) |
+| `--limit N` | how many to list (default 3) |
+| `--all-repos` | compare with the findings of every repository in the history, not just this one |
+| `--format json` | for scripts and agents |
+| `--model NAME` | the Ollama embedding model (default `embeddinggemma`); vectors are kept per model |
+| `--ollama-host URL` | for `embed` and `record --embed`: Ollama's address, which must be on the loopback interface (default `http://127.0.0.1:11434`) |
+
+The dashboard shows the same list under **Similar findings** on each finding's review page, from the stored vectors; the dashboard itself never calls Ollama.
+
+What is embedded and where it goes:
+
+- **The finding's text, never its code:** the tool, the rule id, the component, the path and the message.
+- **Only to Ollama on this machine.** The host must be `127.0.0.1`, `::1` or `localhost`, proxy settings are ignored, and the host is a command-line setting. It is never read from `.shoalscan.toml`, because that file belongs to the scanned repository, which must not be able to send its findings anywhere.
+- **Never during `scan` or `check`.** Similarity is advice for triage; it cannot change what blocks CI.
+
+Vectors are stored as packed float32 in the `finding_embeddings` table of the history database (schema version 12), and go when their finding's identity is pruned from the history. Similarity is computed in plain Python, so there are no new dependencies.
+
 ## Rule metadata in `findings.json`
 
 From this version, `scan` records what each rule behind a finding says about itself under `rules` in `findings.json`: its CWE and OWASP labels, confidence, likelihood and impact, fix hint, reference links, and the rule file it came from. Rules can come from the scanned repository, so the values are bounded, only http(s) links are kept, and the list escapes all of them, so they show as plain text. A findings file from an older version still works; its groups are then one per rule, without links.

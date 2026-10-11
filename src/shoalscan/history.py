@@ -269,6 +269,20 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE runs ADD COLUMN ruleset_id INTEGER REFERENCES rulesets(id);
     ALTER TABLE runs ADD COLUMN excludes TEXT;
     """,
+    # 12: local embeddings of findings, for "similar findings" in triage. One vector per
+    # finding identity and model, as packed float32 of unit length; `text_sha256` names
+    # the text it was made from, so a changed message is embedded again.
+    """
+    CREATE TABLE finding_embeddings (
+        key_id INTEGER NOT NULL REFERENCES finding_keys(id) ON DELETE CASCADE,
+        model TEXT NOT NULL,
+        text_sha256 TEXT NOT NULL,
+        dims INTEGER NOT NULL CHECK (dims > 0),
+        vector BLOB NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (key_id, model)
+    ) WITHOUT ROWID;
+    """,
 )
 REVIEW_STATUSES = ("open", "false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed", "regression")
 USER_STATUSES = ("open", "false_positive", "accepted_risk", "wont_fix", "fixed")

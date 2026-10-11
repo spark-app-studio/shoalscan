@@ -12,6 +12,7 @@ This guide collects how Shoalscan protects itself: the scan, the dashboard and t
 - A scan that fails in any way fails the command; it is never read as "no findings".
 - On a pull request with `--policy-ref`, the configuration, the baseline and the rule directories come from the base branch, so a change cannot relax its own checks ([details](baseline-and-check.md#pull-requests-the-policy-comes-from-the-base-branch)).
 - Nothing needs a token or a secret: scanning, recording and serving the dashboard all work without credentials.
+- Similar-finding suggestions use an embedding model on this machine only: finding text (never code) goes to Ollama on the loopback interface, without proxies, at a host set on the command line and never by the scanned repository ([details](triage.md#similar-findings-with-a-local-embedding-model)).
 
 ## The dashboard
 

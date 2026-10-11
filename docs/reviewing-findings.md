@@ -26,6 +26,10 @@ Reviews follow a finding by its repository's name and its identity (tool, rule, 
 
 A finding that the baseline accepts shows its baseline entry's reason and issue, read-only and marked "from baseline", until someone reviews it on the dashboard: a reason that starts with "False positive:" shows as a false positive, one that starts with "Accepted:" as an accepted risk, and any other as baselined. That needs the `check.json` that `check` writes.
 
+## Similar findings
+
+The review page of a finding lists the findings most like it, with the decision made about each, when the repository's findings have been embedded with a local model ([Similar findings](triage.md#similar-findings-with-a-local-embedding-model)). It is a hint for triage, never a decision.
+
 ## Carrying reviews into the baseline: `triage export`
 
 **Dashboard reviews do not change what blocks CI.** The baseline does. To carry reviews into the baseline, export them and commit the result through a reviewed change:

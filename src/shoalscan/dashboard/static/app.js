@@ -612,7 +612,32 @@
           el("span", { "class": "review-description" }, h.description)));
       });
       if (!res.history.length) list.appendChild(el("li", { "class": "muted" }, "No review yet."));
+      renderSimilar(f.key);
     });
+  }
+
+  function renderSimilar(key) {
+    var list = clear($("finding-similar"));
+    api("/api/similar", { finding_key: JSON.stringify(key) }).then(function (res) {
+      if (!res.embedded) {
+        list.appendChild(el("li", { "class": "muted" }, "No embeddings yet. Run shoalscan triage embed --repo-name " + state.repo + " on this server, with Ollama running."));
+        return;
+      }
+      if (!res.similar.length) {
+        list.appendChild(el("li", { "class": "muted" }, "None at similarity " + res.threshold + " or above."));
+        return;
+      }
+      res.similar.forEach(function (s) {
+        var where = s.key[2] + (s.line ? ":" + s.line : "");
+        var label = s.repo === state.repo ? internalLink(M.findingHref(null, s.key), where, "Open the similar finding in " + where) : where + " (" + s.repo + ")";
+        var d = s.decision;
+        var decided = !d ? "no decision yet"
+          : d.source === "review" ? (M.REVIEW_LABELS[d.status] || d.status) + " by " + d.by + ": " + d.description
+          : "baselined (" + d.issue + "): " + d.description;
+        list.appendChild(el("li", null, el("strong", null, s.score.toFixed(3)), " ", label, " ", el("span", { "class": "mono" }, s.key[1]),
+          el("span", { "class": "review-description" }, decided)));
+      });
+    }, function () { list.appendChild(el("li", { "class": "muted" }, "Similar findings could not be loaded.")); });
   }
 
   function submitReview(ev) {
