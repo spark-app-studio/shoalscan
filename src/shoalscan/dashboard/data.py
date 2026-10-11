@@ -28,6 +28,8 @@ AGE_BUCKETS = ((7, "0-7 days"), (30, "8-30 days"), (90, "31-90 days"), (365, "91
 MAX_WEEKS = 52
 MAX_COMPONENTS = 500
 MAX_PAGE = 500
+MAX_GROUPS = 100  # groups of similar findings listed at once
+MAX_GROUP_MEMBERS_SHOWN = 10  # findings listed under each group; the Findings view lists them all
 # The new, fixed, time-to-fix and age figures walk at most this many of the
 # newest trend runs (about a year of nightly scans).
 MAX_TREND_RUNS = 400
@@ -96,6 +98,27 @@ _REVIEW_STATUS = (
 _REVIEW_JOIN = (
     "LEFT JOIN finding_reviews fr ON fr.repo_name = (SELECT name FROM repos WHERE id = ?) AND fr.tool = fk.tool "
     "AND fr.rule = fk.rule AND fr.path = fk.path AND fr.fingerprint = fk.fingerprint"
+)
+# The untriaged findings of a run that have a vector, most important first.
+_UNTRIAGED_VECTORS = (
+    f"SELECT rf.key_id, e.vector, e.dims FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id {_REVIEW_JOIN} "
+    "JOIN finding_embeddings e ON e.key_id = rf.key_id AND e.model = ? "
+    "WHERE rf.run_id = ? AND fr.status IS NULL AND rf.baseline_reason IS NULL "
+    "ORDER BY CASE rf.severity WHEN 'ERROR' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END, "
+    "fk.path, rf.line, fk.rule, rf.key_id"
+)
+_UNTRIAGED_COUNT = (
+    f"SELECT COUNT(*) FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id {_REVIEW_JOIN} "
+    "WHERE rf.run_id = ? AND fr.status IS NULL AND rf.baseline_reason IS NULL"
+)
+_SUGGESTED_COUNT = (
+    f"SELECT COUNT(*) FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id {_REVIEW_JOIN} "
+    f"WHERE rf.run_id = ? AND {_SUGGESTED}"
+)
+_GROUP_DETAILS = (
+    "SELECT rf.key_id, rf.severity, fk.tool, fk.rule, fk.path, fk.fingerprint, rf.line, rf.component, m.text "
+    "FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id JOIN messages m ON m.id = rf.message_id "
+    "WHERE rf.run_id = ? AND rf.key_id IN (SELECT value FROM json_each(?))"
 )
 
 
@@ -372,6 +395,7 @@ class Data:
             "by_component": {"run": None, "severities": list(SEVERITIES), "max_cell": 0, "rows": []},
             "blocking": {"run": None, "known": False, "total": None, "new": None, "baselined": None, "top": []},
             "reviews": {"run": None, "untriaged_blocking": 0, "regressions": 0},
+            "embeddings": None,
         }
         if not runs:
             return result
@@ -383,6 +407,7 @@ class Data:
         buckets = Counter(self._age_bucket(start, runs[-1]["scanned_at"]) for start in timeline["open_since"].values())
         result["age_buckets"] = [{"label": label, "count": buckets[i]} for i, (_, label) in enumerate(AGE_BUCKETS)]
         result["by_component"] = self.by_component(runs[-1]["id"])
+        result["embeddings"] = self.embedding_status(repo_id, runs[-1]["id"])
         return result
 
     @staticmethod
@@ -507,6 +532,7 @@ class Data:
         baselined: bool = False,
         sort: str | None = None,
         review: str | None = None,
+        keys: list[int] | None = None,
         limit: int = 200,
         offset: int = 0,
     ) -> dict:
@@ -540,6 +566,9 @@ class Data:
             keys = self._age_keys(repo_id, run_id, age)
             where.append("rf.key_id IN (SELECT value FROM json_each(?))")
             params.append(json.dumps(keys or []))
+        if keys is not None:  # a group of similar findings
+            where.append("rf.key_id IN (SELECT value FROM json_each(?))")
+            params.append(json.dumps(keys))
         if review == "untriaged":
             where.append("fr.status IS NULL AND rf.baseline_reason IS NULL")
         elif review == "suggested":
@@ -677,6 +706,110 @@ class Data:
             else None
         )
         return {"model": model, "threshold": threshold, "embedded": found is not None, "similar": found or []}
+
+    def _groups(self, repo_id: int, run_id: int, threshold: float, model: str) -> tuple[list[list[int]], dict]:
+        """The run's untriaged findings that have a vector, in groups of two or more alike, largest first."""
+        rows = self.conn.execute(_UNTRIAGED_VECTORS, (repo_id, model, run_id)).fetchall()
+        items = [(key_id, embeddings.unpack(blob, dims)) for key_id, blob, dims in rows[: embeddings.MAX_GROUPED]]
+        groups = [g for g in embeddings.group(items, threshold) if len(g) > 1]
+        groups.sort(key=len, reverse=True)  # stable: equal sizes keep their leaders' priority order
+        counts = {
+            "untriaged": self.conn.execute(_UNTRIAGED_COUNT, (repo_id, run_id)).fetchone()[0],
+            "embedded": len(rows),
+            "considered": len(items),
+        }
+        return groups, counts
+
+    def groups(self, repo_id: int, run_id: int, threshold: float, model: str = embeddings.DEFAULT_MODEL) -> dict:
+        """Groups of similar untriaged findings in a run, to review together. Only stored vectors are used."""
+        groups, counts = self._groups(repo_id, run_id, threshold, model)
+        shown = groups[:MAX_GROUPS]
+        ids = [key_id for g in shown for key_id in g]
+        details = {r["key_id"]: r for r in self.conn.execute(_GROUP_DETAILS, (run_id, json.dumps(ids)))}
+        suggestions = self.suggestions(ids, model)
+        out = []
+        for members in shown:
+            rows = [details[k] for k in members if k in details]
+            leader = rows[0]
+            suggested = Counter(suggestions[k]["status"] for k in members if k in suggestions)
+            out.append(
+                {
+                    "key": [leader["tool"], leader["rule"], leader["path"], leader["fingerprint"]],
+                    "size": len(members),
+                    "severities": dict(Counter(r["severity"] for r in rows)),
+                    "rules": [{"rule": rule, "count": n} for rule, n in Counter(r["rule"] for r in rows).most_common()],
+                    "components": sorted({r["component"] for r in rows}),
+                    "suggested": [{"status": s, "count": n} for s, n in suggested.most_common()],
+                    "members": [
+                        {
+                            "key": [r["tool"], r["rule"], r["path"], r["fingerprint"]],
+                            "severity": r["severity"],
+                            "path": r["path"],
+                            "line": r["line"],
+                            "message": r["text"],
+                        }
+                        for r in rows[:MAX_GROUP_MEMBERS_SHOWN]
+                    ],
+                }
+            )
+        return {
+            "run": run_id,
+            "model": model,
+            "threshold": threshold,
+            **counts,
+            "max_grouped": embeddings.MAX_GROUPED,
+            "grouped": sum(len(g) for g in groups),
+            "more_groups": len(groups) - len(shown),
+            "groups": out,
+        }
+
+    def group_keys(
+        self, repo_id: int, run_id: int, leader: list[str], threshold: float, model: str = embeddings.DEFAULT_MODEL
+    ) -> list[int]:
+        """The findings of the group this finding leads, now; empty when it no longer leads one."""
+        row = self.conn.execute(
+            "SELECT id FROM finding_keys WHERE repo_id = ? AND tool = ? AND rule = ? AND path = ? AND fingerprint = ?",
+            (repo_id, *leader),
+        ).fetchone()
+        if row is None:
+            return []
+        groups, _ = self._groups(repo_id, run_id, threshold, model)
+        return next((g for g in groups if g[0] == row[0]), [])
+
+    def embedding_status(self, repo_id: int, run_id: int, model: str = embeddings.DEFAULT_MODEL) -> dict:
+        """How much of a run the stored embeddings and suggestions cover, for the Overview."""
+        total = embedded = stale = 0
+        last = None
+        for tool, rule, path, component, text, stored, created in self.conn.execute(
+            "SELECT fk.tool, fk.rule, fk.path, rf.component, m.text, e.text_sha256, e.created_at "
+            "FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id JOIN messages m ON m.id = rf.message_id "
+            "LEFT JOIN finding_embeddings e ON e.key_id = rf.key_id AND e.model = ? WHERE rf.run_id = ?",
+            (model, run_id),
+        ):
+            total += 1
+            if stored is None:
+                continue
+            embedded += 1
+            last = max(last or created, created)
+            if stored != embeddings.text_sha256(embeddings.finding_text(tool, rule, path, component, text)):
+                stale += 1
+        suggestions_at = self.conn.execute(
+            "SELECT MAX(s.computed_at) FROM finding_suggestions s JOIN finding_keys fk ON fk.id = s.key_id "
+            "WHERE fk.repo_id = ? AND s.model = ?",
+            (repo_id, model),
+        ).fetchone()[0]
+        return {
+            "model": model,
+            "run": run_id,
+            "findings": total,
+            "embedded": embedded,
+            "missing": total - embedded,
+            "stale": stale,
+            "embedded_at": last,
+            "untriaged": self.conn.execute(_UNTRIAGED_COUNT, (repo_id, run_id)).fetchone()[0],
+            "suggested": self.conn.execute(_SUGGESTED_COUNT, (repo_id, run_id, model)).fetchone()[0],
+            "suggestions_at": suggestions_at,
+        }
 
     def review_history(self, repo_name: str, key: list[str], limit: int = 200) -> list[dict]:
         rows = self.conn.execute(

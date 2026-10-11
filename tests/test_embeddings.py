@@ -129,6 +129,18 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(len(embeddings.finding_text("t", "r", "p", "c", "x" * 5000)), embeddings.MAX_TEXT_CHARS)
 
 
+class GroupingTests(unittest.TestCase):
+    def test_each_group_is_held_together_by_its_leader(self):
+        unit = embeddings.normalise
+        a, b, c = unit([1.0, 0.0, 0.0]), unit([1.0, 0.6, 0.0]), unit([1.0, 1.4, 0.0])
+        far = unit([0.0, 0.0, 1.0])
+        # a~b and b~c are alike, but a and c are not: no chain makes them one group.
+        self.assertEqual(embeddings.group([(1, a), (2, b), (3, c), (4, far)], 0.85), [[1, 2], [3], [4]])
+        self.assertEqual(embeddings.group([(2, b), (1, a), (3, c)], 0.85), [[2, 1, 3]])  # order decides the leaders
+        self.assertEqual(embeddings.group([(1, a), (2, [1.0, 0.0])], 0.5), [[1], [2]])  # other lengths never match
+        self.assertEqual(embeddings.group([], 0.85), [])
+
+
 class MathsTests(unittest.TestCase):
     def test_cosine_similarity(self):
         self.assertAlmostEqual(embeddings.cosine([1, 0], [1, 0]), 1.0)
@@ -378,6 +390,61 @@ class SuggestionTests(HistoryCase):
         self.assertEqual(self.rows()["src/y.py"]["suggestion"]["status"], "wont_fix")
         self.review(self.b, "accepted_risk", "Accepted for the demo build.")
         self.assertIsNone(self.rows()["src/y.py"]["suggestion"])  # decided now, so no hint
+
+    def data(self):
+        from shoalscan.dashboard.data import Data
+
+        data = Data(history.open_read_only(self.db))
+        self.addCleanup(data.conn.close)
+        return data, data.repo_id("acme/app"), self.conn.execute("SELECT MAX(id) FROM runs").fetchone()[0]
+
+    def test_untriaged_findings_fall_into_groups(self):
+        self.suggest()
+        data, repo_id, run = self.data()
+        res = data.groups(repo_id, run, 0.6)
+        # a is reviewed and d is in the baseline; b stands alone, c and e are alike.
+        self.assertEqual((res["untriaged"], res["embedded"], res["considered"]), (3, 3, 3))
+        self.assertEqual(len(res["groups"]), 1)
+        group = res["groups"][0]
+        self.assertEqual(group["size"], 2)
+        self.assertEqual({m["path"] for m in group["members"]}, {"src/z.py", "src/v.py"})
+        self.assertEqual(group["rules"], [{"rule": "shoalscan.tls-off", "count": 2}])
+        self.assertEqual(group["suggested"], [{"status": "false_positive", "count": 2}])
+        self.assertEqual(res["grouped"], 2)
+        keys = data.group_keys(repo_id, run, group["key"], 0.6)
+        found = data.findings(repo_id, run, keys=keys)
+        self.assertEqual({f["path"] for f in found["findings"]}, {"src/z.py", "src/v.py"})
+        self.assertEqual(data.groups(repo_id, run, 1.0)["groups"], [])
+
+    def test_a_group_shrinks_as_its_findings_are_reviewed(self):
+        data, repo_id, run = self.data()
+        leader = data.groups(repo_id, run, 0.6)["groups"][0]["key"]
+        other = self.e if leader[2] == self.c.path else self.c
+        self.review(other, "false_positive", "Test client only, as for src/w.py.")
+        data, repo_id, run = self.data()
+        self.assertEqual(data.groups(repo_id, run, 0.6)["groups"], [])
+        self.assertEqual(data.group_keys(repo_id, run, leader, 0.6), [])
+        self.assertEqual(data.findings(repo_id, run, keys=[])["total"], 0)
+
+    def test_the_embedding_status_counts_what_is_missing_or_changed(self):
+        self.suggest()
+        data, repo_id, run = self.data()
+        status = data.embedding_status(repo_id, run)
+        self.assertEqual(
+            {k: status[k] for k in ("findings", "embedded", "missing", "stale", "untriaged", "suggested")},
+            {"findings": 5, "embedded": 5, "missing": 0, "stale": 0, "untriaged": 3, "suggested": 3},
+        )
+        self.assertEqual((status["embedded_at"], status["suggestions_at"]), ("2026-10-01T00:00:00Z",) * 2)
+        changed = finding(self.c.rule, self.c.path, self.c.fingerprint, message="Certificate checks are skipped")
+        new = finding("shoalscan.secret-in-log", "src/n.py", "n0:0", message="A token is written to the log")
+        record(self.conn, self.dir, "acme/app", "b" * 40, 30, [self.a, self.b, changed, self.d, self.e, new])
+        data, repo_id, run = self.data()
+        status = data.embedding_status(repo_id, run)
+        self.assertEqual((status["findings"], status["embedded"], status["missing"], status["stale"]), (6, 5, 1, 1))
+        self.embed()
+        data, repo_id, run = self.data()
+        status = data.embedding_status(repo_id, run)
+        self.assertEqual((status["missing"], status["stale"]), (0, 0))
 
     def test_the_command_reports_suggestions(self):
         code, _, err = quiet(

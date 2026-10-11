@@ -46,6 +46,8 @@ TIMEOUT_SECONDS = 120
 MAX_TEXT_CHARS = 2000
 MAX_DIMS = 8192
 MAX_RESPONSE_BYTES = 256 * 1024 * 1024
+# Untriaged findings grouped at most, highest priority first: grouping compares each with every group.
+MAX_GROUPED = 500
 LOOPBACK = ("127.0.0.1", "::1", "localhost")
 # EmbeddingGemma is trained with task prompts; this is its prompt for semantic similarity.
 PROMPT = "task: sentence similarity | query: "
@@ -268,6 +270,28 @@ def decision_status(review_status: str | None, baseline_reason: str | None) -> s
 def dot(a: list[float], b: list[float]) -> float:
     """The cosine similarity of two unit vectors, as stored: their dot product."""
     return sum(map(operator.mul, a, b))
+
+
+def group(items: list[tuple[int, list[float]]], threshold: float) -> list[list[int]]:
+    """Group findings by similarity, in the order given (the most important first).
+
+    The first finding not yet in a group leads a new one, and takes every
+    later finding at least `threshold` alike to it. Each group is so held
+    together by its leader, never by a chain of findings that are each a
+    little like the next. Every finding ends up in exactly one group; a
+    group of one is a finding like no other.
+    """
+    groups, left = [], list(items)
+    while left:
+        (leader, vector), rest = left[0], left[1:]
+        members, left = [leader], []
+        for key_id, other in rest:
+            if len(other) == len(vector) and dot(vector, other) >= threshold:
+                members.append(key_id)
+            else:
+                left.append((key_id, other))
+        groups.append(members)
+    return groups
 
 
 def suggest_repository(

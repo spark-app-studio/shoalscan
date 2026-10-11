@@ -385,6 +385,7 @@ class DashboardServerTests(unittest.TestCase):
                 "by_component",
                 "blocking",
                 "reviews",
+                "embeddings",
             },
         )
         self.assertEqual(
@@ -500,6 +501,24 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(self.get_json(f"/api/similar?repo=acme/app&finding_key={other}", cookie)["embedded"], False)
         for bad in ("threshold=2", "threshold=0.1", "threshold=x", "all_repos=yes"):
             self.get_json(f"/api/similar?repo=acme/app&finding_key={key}&{bad}", cookie, expect=400)
+
+    def test_groups_and_the_embedding_status_come_from_stored_embeddings(self):
+        cookie = self.session()
+        status = self.get_json("/api/overview?repo=acme/app", cookie)["embeddings"]
+        # The last scheduled run holds b, c and d; c has no vector, and the stored texts are placeholders.
+        self.assertEqual(
+            {k: status[k] for k in ("findings", "embedded", "missing", "stale", "untriaged", "suggested")},
+            {"findings": 3, "embedded": 2, "missing": 1, "stale": 2, "untriaged": 2, "suggested": 0},
+        )
+        res = self.get_json("/api/groups?repo=acme/app", cookie)
+        self.assertEqual((res["untriaged"], res["embedded"], res["grouped"], res["groups"]), (2, 2, 0, []))
+        self.assertEqual(res["threshold"], 0.85)
+        for bad in ("threshold=2", "threshold=0.1", "threshold=x", "run=x"):
+            self.get_json(f"/api/groups?repo=acme/app&{bad}", cookie, expect=400)
+        # A finding that leads no group filters the findings down to none, never to all of them.
+        lone = quote(json.dumps(["opengrep", "community.python.eval", "src/d.py", "dddd:0"]))
+        self.assertEqual(self.get_json(f"/api/findings?repo=acme/app&group={lone}", cookie)["total"], 0)
+        self.get_json("/api/findings?repo=acme/app&group=%5B1%5D", cookie, expect=400)
 
     def test_lists_behind_the_counts(self):
         cookie = self.session()
