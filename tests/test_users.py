@@ -239,6 +239,28 @@ class SetupWizardTests(ServerCase):
         cookie, _ = sign_in(self.port, self.ctx, self.idp, groups=["shoal-admin"])
         self.assertIsNotNone(cookie)
 
+    def test_the_ca_comes_as_a_certificate_never_a_path(self):
+        code = self.httpd.app.setup_code
+        settings = {
+            "issuer": self.idp.issuer,
+            "client_id": FakeIdP.CLIENT_ID,
+            "client_secret": FakeIdP.CLIENT_SECRET,
+            "setup_code": code,
+        }
+        status, _, raw = self.request("POST", "/setup/test", json.dumps({**settings, "ca_file": "/etc/passwd"}))
+        self.assertEqual(status, 400)
+        self.assertIn("not a path", json.loads(raw)["error"])
+        for bad in ("not a certificate", "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", "x" * 70000):
+            status, _, raw = self.request("POST", "/setup/test", json.dumps({**settings, "ca_pem": bad}))
+            self.assertIn(status, (400, 413), bad[:20])  # refused, whether by its content or its size
+        pem = Path(self.tls["ca"]).read_text()
+        status, _, raw = self.request("POST", "/setup/save", json.dumps({**settings, "ca_pem": pem}))
+        self.assertEqual(status, 200, raw)
+        saved = self.state / oidc.CA_FILE
+        self.assertEqual(oidc.load(self.state).ca_file, str(saved))
+        self.assertEqual(saved.read_text().strip(), pem.strip())
+        self.assertEqual(stat.S_IMODE(os.stat(saved).st_mode), 0o600)
+
     def test_wrong_setup_codes_are_rate_limited(self):
         for _ in range(5):
             self.assertEqual(self.request("POST", "/setup/test", json.dumps({"setup_code": "nope"}))[0], 403)

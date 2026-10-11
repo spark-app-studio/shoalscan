@@ -11,9 +11,9 @@
 
   function settings() {
     var out = {};
-    ["setup_code", "display_name", "issuer", "client_id", "client_secret", "ca_file", "admin_claim", "admin_value"].forEach(function (name) {
+    ["setup_code", "display_name", "issuer", "client_id", "client_secret", "ca_pem", "admin_claim", "admin_value"].forEach(function (name) {
       var value = form.elements[name].value.trim();
-      if (value || name !== "ca_file") out[name] = value;
+      if (value || name !== "ca_pem") out[name] = value;
     });
     return out;
   }

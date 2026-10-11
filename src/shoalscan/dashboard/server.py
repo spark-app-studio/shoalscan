@@ -70,6 +70,7 @@ ROUTES: dict[str, tuple[str, str, bool]] = {
 MAX_URL = 4096
 MAX_BODY = 2048
 MAX_CONFIG_BODY = 64 * 1024  # a target with its policy text
+MAX_SETUP_BODY = 80 * 1024  # the sign-in settings with a pasted CA certificate
 CONFIG_POSTS = ("/api/config/target", "/api/config/enable", "/api/config/remove")
 USER_POSTS = ("/api/users/allow", "/api/users/change")
 SETUP_POSTS = ("/setup/test", "/setup/save")
@@ -686,6 +687,8 @@ class Handler(BaseHTTPRequestHandler):
         limit = (
             MAX_CONFIG_BODY
             if post_path in CONFIG_POSTS
+            else MAX_SETUP_BODY
+            if post_path in SETUP_POSTS
             else (MAX_REVIEW_BODY if post_path == "/api/review" else MAX_BODY)
         )
         if not length.isdigit() or int(length) > limit:
@@ -822,7 +825,15 @@ class Handler(BaseHTTPRequestHandler):
             self.app.limiter.failed(address)
             return self.send_error_json(403, "that is not the setup code printed on the server's console")
         request["redirect_uri"] = f"https://{self.headers.get('Host')}/oidc/callback"
+        if "ca_file" in request:
+            # No file paths from a browser: the CA comes as the certificate itself.
+            return self.send_json(400, {"ok": False, "error": "send the CA certificate itself (ca_pem), not a path"})
         try:
+            pem = request.pop("ca_pem", None)
+            if pem:
+                ca_path = self.app.auth_dir / oidc.CA_FILE
+                auth.write_private_file(ca_path, oidc.check_ca_pem(pem))
+                request["ca_file"] = str(ca_path)
             config = oidc.validate(request)
             provider = oidc.discover(config)
             checks = [*provider.checks, oidc.check_client(provider, config)]

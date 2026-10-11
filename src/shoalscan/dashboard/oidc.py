@@ -43,6 +43,9 @@ from shoalscan.dashboard.auth import write_private_file
 from shoalscan.errors import SetupError
 
 CONFIG_FILE = "oidc.toml"
+# The provider's CA certificate when the wizard is given one: always this file in the state directory.
+CA_FILE = "oidc-ca.pem"
+MAX_CA_BYTES = 64 * 1024
 TIMEOUT_SECONDS = 15
 MAX_RESPONSE_BYTES = 1024 * 1024
 CLOCK_SKEW_SECONDS = 120
@@ -87,6 +90,20 @@ def validate_url(url: object, what: str) -> str:
     if not secure or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
         raise SetupError(f"the {what} must be an https:// URL (http only on this machine), with no query: {url!r}")
     return url.rstrip("/")
+
+
+def check_ca_pem(text: object) -> str:
+    """A pasted CA certificate (PEM): one or more certificates that OpenSSL can load, and nothing else."""
+    if not isinstance(text, str) or not 0 < len(text.encode()) <= MAX_CA_BYTES:
+        raise SetupError(f"the CA certificate must be PEM text of up to {MAX_CA_BYTES // 1024} KiB")
+    text = text.strip() + "\n"
+    if not text.startswith("-----BEGIN CERTIFICATE-----") or "PRIVATE KEY" in text:
+        raise SetupError("paste the provider's CA certificate in PEM form, starting with -----BEGIN CERTIFICATE-----")
+    try:
+        ssl.create_default_context(cadata=text)
+    except (ssl.SSLError, ValueError):
+        raise SetupError("the CA certificate cannot be read; paste the whole PEM block") from None
+    return text
 
 
 def validate(raw: dict) -> Config:

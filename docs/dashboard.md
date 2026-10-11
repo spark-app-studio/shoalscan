@@ -83,7 +83,7 @@ shoalscan serve: sign-in is not set up yet. Open /setup on the dashboard and ent
 The wizard needs that code, so only someone who can see the server's console can set up sign-in; a stranger who reaches the port first cannot. A restart prints a new code. In the wizard:
 
 1. Register Shoalscan at your provider as a confidential client, with the redirect URI the wizard shows (`https://<the dashboard's address>/oidc/callback`) and a client secret. For Dex, the wizard shows the `staticClients` entry to add.
-2. Enter the setup code, the issuer URL, the client id and secret, and, if the provider's certificate comes from a private CA, the path of that CA's PEM file on the server.
+2. Enter the setup code, the issuer URL, the client id and secret, and, if the provider's certificate comes from a private CA, paste that CA's certificate (PEM). The dashboard keeps it as `oidc-ca.pem` in its state directory; it never takes a file path from the browser.
 3. Choose who is an admin: by default, anyone whose ID token's `groups` claim holds `shoal-admin`. Any claim works: a group, a role, or a claim that is `true`.
 4. **Test the connection.** The wizard reads the provider's discovery document and signing keys, checks that ID tokens are signed with RS256, that PKCE and the scopes are supported, and that the provider accepts the client id and secret. Then **Save and go to sign-in**.
 

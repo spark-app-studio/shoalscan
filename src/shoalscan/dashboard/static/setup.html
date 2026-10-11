@@ -31,8 +31,8 @@
       <input name="client_id" required maxlength="200" spellcheck="false" value="shoalscan"></label>
     <label>Client secret
       <input name="client_secret" type="password" required maxlength="500" autocomplete="new-password"></label>
-    <label>CA bundle on this server, if the provider's certificate comes from a private CA (optional)
-      <input name="ca_file" maxlength="500" spellcheck="false" placeholder="/etc/ssl/private-ca.pem"></label>
+    <label>CA certificate, if the provider's certificate comes from a private CA (optional; paste the PEM)
+      <textarea name="ca_pem" rows="4" maxlength="65536" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea></label>
     <fieldset>
       <legend>Admins</legend>
       <p class="muted small">People whose ID token carries this claim and value are admins. Everyone else needs an admin to let them in.</p>
