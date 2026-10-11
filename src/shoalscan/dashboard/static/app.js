@@ -998,8 +998,59 @@
     $("config-policy-note").textContent = t && !t.policy_editable
       ? "This repository's configuration file is set by hand in scan_targets.toml."
       : "Checked with Shoalscan's configuration rules before it is saved. The baseline's location is managed for you, so a baseline key is refused.";
+    showScanners(t);
     f.hidden = false;
     e.name.focus();
+  }
+
+  var SCANNER_NAMES = { opengrep: "Opengrep", gitleaks: "Gitleaks", hadolint: "Hadolint", zizmor: "zizmor" };
+
+  function scannerLabel(name) { return SCANNER_NAMES[name] || name; }
+
+  // The Scanners fieldset: "as the policy says" leaves the choice to the policy text (or the
+  // repository's own .shoalscan.toml); "choose here" sets it from the checkboxes.
+  function showScanners(t) {
+    var e = $("config-form").elements;
+    var handSet = !!(t && !t.policy_editable);
+    var chosen = t && t.scanners;
+    var mode = chosen ? "choose" : "policy";
+    Array.prototype.forEach.call(e.scanner_mode, function (r) { r.checked = r.value === mode; r.disabled = handSet; });
+    var ticked = chosen || (t && t.policy_scanners) || ["opengrep"];
+    var list = clear($("config-scanner-list"));
+    config.page.scanners.forEach(function (s) {
+      var box = el("input", { type: "checkbox", name: "scanner", value: s.name });
+      box.checked = ticked.indexOf(s.name) >= 0;
+      var note = (s.version ? " " + s.version : "") + (s.installed ? "" : " (not installed on this server; run shoalscan install)");
+      list.appendChild(el("label", { "class": "check" }, box, " " + scannerLabel(s.name) + note));
+    });
+    updateScannersNote();
+  }
+
+  function updateScannersNote() {
+    var e = $("config-form").elements;
+    var t = config.editing ? config.page.targets.filter(function (x) { return x.name === config.editing; })[0] : null;
+    var handSet = !!(t && !t.policy_editable);
+    var choose = !handSet && Array.prototype.some.call(e.scanner_mode, function (r) { return r.checked && r.value === "choose"; });
+    Array.prototype.forEach.call($("config-scanner-list").querySelectorAll("input"), function (b) { b.disabled = !choose; });
+    var note;
+    if (handSet) {
+      note = "This repository's configuration file is set by hand in scan_targets.toml; its scanners are set there.";
+    } else if (!choose) {
+      note = e.policy.value.trim()
+        ? "The policy text decides: its scanners key, or Opengrep alone when it has none."
+        : "With no policy text, each scan reads the repository's own .shoalscan.toml, which decides (Opengrep alone by default).";
+    } else {
+      note = "Each scan runs the scanners ticked here." + (e.policy.value.trim() ? ""
+        : " With no policy text, this gives the repository a policy of its own that sets only the scanners: its own .shoalscan.toml no longer applies.");
+    }
+    $("config-scanners-note").textContent = note;
+  }
+
+  function chosenScanners(e) {
+    var choose = Array.prototype.some.call(e.scanner_mode, function (r) { return r.checked && r.value === "choose" && !r.disabled; });
+    if (!choose) return null;
+    return Array.prototype.filter.call($("config-scanner-list").querySelectorAll("input"), function (b) { return b.checked; })
+      .map(function (b) { return b.value; });
   }
 
   function submitConfig(ev) {
@@ -1009,7 +1060,8 @@
     var source = kind === "url" ? { kind: "url", url: e.url.value } : (kind === "mirror" ? { kind: "mirror", mirror: e.mirror.value } : { kind: "clone" });
     postJson("/api/config/target", {
       original: config.editing, name: e.name.value, source: source, branch: e.branch.value,
-      enabled: e.enabled.checked, nightly: e.nightly.checked, policy: e.policy.disabled ? "" : e.policy.value
+      enabled: e.enabled.checked, nightly: e.nightly.checked, policy: e.policy.disabled ? "" : e.policy.value,
+      scanners: chosenScanners(e)
     }).then(function (r) {
       if (r.status === 200) {
         $("config-form").hidden = true;
@@ -1135,6 +1187,8 @@
     $("config-add").addEventListener("click", function () { showForm(null); });
     $("config-cancel").addEventListener("click", function () { $("config-form").hidden = true; });
     $("config-form").addEventListener("submit", submitConfig);
+    $("config-form").addEventListener("change", function (ev) { if (ev.target.name === "scanner_mode") updateScannersNote(); });
+    $("config-form").elements.policy.addEventListener("input", updateScannersNote);
     $("config-remove-cancel").addEventListener("click", function () { $("config-remove").hidden = true; });
     $("config-remove-confirm").addEventListener("click", function () {
       postJson("/api/config/remove", { name: config.removing, confirm: $("config-remove-name").value }).then(function (r) {

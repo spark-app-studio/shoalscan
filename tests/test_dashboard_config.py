@@ -86,7 +86,7 @@ class ConfigApiTests(unittest.TestCase):
 
     def target(self, **changes):
         body = {"original": None, "name": "acme/app", "source": {"kind": "url", "url": "https://github.com/acme/app.git"},
-                "branch": "main", "enabled": True, "nightly": True, "policy": ""}
+                "branch": "main", "enabled": True, "nightly": True, "policy": "", "scanners": None}
         body.update(changes)
         return body
 
@@ -99,6 +99,51 @@ class ConfigApiTests(unittest.TestCase):
             return conn.execute("SELECT who, target, action, diff, policy_before, policy_after FROM config_changes ORDER BY id").fetchall()
         finally:
             conn.close()
+
+    def managed(self) -> Path:
+        return self.state / "targets" / scanning.slug("acme/app") / "shoalscan.toml"
+
+    def test_scanners_are_chosen_on_the_page_and_reach_the_scan_policy(self):
+        from shoalscan.config import config_from_bytes
+        from shoalscan.dashboard.configedit import ConfigEditor
+
+        body = 'excludes = ["vendor"]\n'
+        status, reply = self.post("/api/config/target", self.target(policy=body, scanners=["zizmor", "opengrep", "gitleaks"]))
+        self.assertEqual(status, 200, reply)
+        text = self.managed().read_text()
+        self.assertTrue(text.startswith(scanning.SCANNERS_HEADER))
+        config = config_from_bytes(text.encode(), "managed")
+        self.assertEqual(config.scanners, ("opengrep", "gitleaks", "zizmor"))
+        self.assertEqual(config.excludes, ("vendor",))
+        editor = ConfigEditor(self.state, self.db)
+        page = editor.page(lambda name: None, [])
+        t = page["targets"][0]
+        self.assertEqual((t["scanners"], t["policy"], t["policy_scanners"]), (["opengrep", "gitleaks", "zizmor"], body, ["opengrep", "gitleaks", "zizmor"]))
+        self.assertEqual([s["name"] for s in page["scanners"]], ["opengrep", "gitleaks", "hadolint", "zizmor"])
+        self.assertTrue(all(set(s) == {"name", "version", "installed"} for s in page["scanners"]))
+        diff = json.loads(self.audit()[-1][3])
+        self.assertEqual(diff["scanners"], [None, ["opengrep", "gitleaks", "zizmor"]])
+        # Back to "as the policy says": the header goes, the policy text stays.
+        self.assertEqual(self.post("/api/config/target", self.target(original="acme/app", policy=body, scanners=None))[0], 200)
+        self.assertEqual(self.managed().read_text(), body)
+        # Chosen with no policy text: a policy that sets only the scanners.
+        self.assertEqual(self.post("/api/config/target", self.target(original="acme/app", policy="", scanners=["hadolint"]))[0], 200)
+        self.assertEqual(config_from_bytes(self.managed().read_bytes(), "managed").scanners, ("hadolint",))
+        self.assertEqual(editor.page(lambda name: None, [])["targets"][0]["policy"], "")
+
+    def test_bad_scanner_choices_are_refused(self):
+        bad = [[], ["opengrep", "opengrep"], ["trufflehog"], "opengrep", [1], {"opengrep": True}]
+        for choice in bad:
+            with self.subTest(choice=choice):
+                status, reply = self.post("/api/config/target", self.target(scanners=choice))
+                self.assertEqual(status, 400, reply)
+        status, reply = self.post("/api/config/target", self.target(policy='scanners = ["gitleaks"]\n', scanners=["opengrep"]))
+        self.assertEqual(status, 400)
+        self.assertIn("sets scanners too", reply["error"])
+        request = self.target()
+        del request["scanners"]
+        self.assertEqual(self.post("/api/config/target", request)[0], 400)
+        self.assertFalse((self.state / scanning.TARGETS_FILE).exists())
 
     def test_every_post_needs_a_session_csrf_and_the_exact_origin(self):
         for path, payload in (("/api/config/target", self.target()), ("/api/config/enable", {"name": "acme/app", "enabled": False}),
@@ -218,6 +263,7 @@ class ConfigApiTests(unittest.TestCase):
         # Its policy file is set by hand, so the page cannot replace it.
         payload = self.target(original="acme/hand", name="acme/hand", source={"kind": "clone"}, policy='excludes = ["x"]\n')
         self.assertEqual(self.post("/api/config/target", payload)[0], 400)
+        self.assertEqual(self.post("/api/config/target", {**payload, "policy": "", "scanners": ["opengrep", "gitleaks"]})[0], 400)
         self.assertEqual(self.post("/api/config/target", {**payload, "policy": ""})[0], 200)
 
 
@@ -233,7 +279,7 @@ class WriteOrderTests(unittest.TestCase):
 
         self.editor = ConfigEditor(self.state, self.db)
         self.request = {"original": None, "name": "acme/app", "source": {"kind": "url", "url": "https://github.com/acme/app.git"},
-                        "branch": "main", "enabled": True, "nightly": True, "policy": 'excludes = ["vendor"]\n'}
+                        "branch": "main", "enabled": True, "nightly": True, "policy": 'excludes = ["vendor"]\n', "scanners": None}
 
     def tearDown(self):
         self._tmp.cleanup()
