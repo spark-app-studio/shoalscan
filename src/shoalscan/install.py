@@ -18,6 +18,7 @@ from shoalscan.errors import SetupError, VerificationError
 from shoalscan.lockfile import (
     Lock,
     OpengrepSignature,
+    PinnedTool,
     current_platform,
     sha256_file,
     verify_sha256,
@@ -27,6 +28,7 @@ RULES_DIR_NAME = "opengrep-rules"
 COSIGN_TIMEOUT_SECONDS = 180
 MAX_RULE_FILE_BYTES = 2 * 1024 * 1024
 MAX_RULES_TOTAL_BYTES = 200 * 1024 * 1024
+MAX_BINARY_BYTES = 512 * 1024 * 1024
 
 Fetch = Callable[[str, Path], None]
 
@@ -87,6 +89,16 @@ def cosign_path(tools_dir: Path) -> Path:
 
 def community_rules_path(tools_dir: Path) -> Path:
     return tools_dir / "rules" / RULES_DIR_NAME
+
+
+def tool_path(tools_dir: Path, name: str) -> Path:
+    """Where a scanner pinned in its own [<name>] table is installed."""
+    return tools_dir / name
+
+
+def tool_file_path(tools_dir: Path, name: str, extra: str) -> Path:
+    """Where one of a pinned scanner's extra files, such as `gitleaks` `config`, is installed."""
+    return tools_dir / f"{name}-{extra}"
 
 
 def _log(message: str) -> None:
@@ -199,6 +211,59 @@ def install_opengrep(
     if cosign is not None:
         write_verified_record(tools_dir, lock, plat)
     _log(f"opengrep {lock.opengrep_version}: installed, SHA-256 verified")
+
+
+def extract_member(archive: Path, member: str, dest: Path) -> None:
+    """Extract the one regular file `member` from a .tar.gz archive to `dest`.
+
+    Nothing else is written. A member that is a link or a device, or appears
+    twice, is refused, and so is an archive without it.
+    """
+    found = None
+    with tarfile.open(archive, mode="r:gz") as tar:
+        for info in tar:
+            if info.name.lstrip("./") != member:
+                continue
+            if found is not None:
+                raise VerificationError(f"{archive.name} holds {member} more than once")
+            if not info.isreg() or info.size > MAX_BINARY_BYTES:
+                raise VerificationError(f"{member} in {archive.name} is not a regular file of an allowed size")
+            handle = tar.extractfile(info)
+            if handle is None:
+                raise VerificationError(f"{member} in {archive.name} cannot be read")
+            with open(dest, "wb") as out:
+                shutil.copyfileobj(handle, out)
+            found = info
+    if found is None:
+        raise VerificationError(f"{archive.name} has no {member}")
+
+
+def install_pinned_tool(tools_dir: Path, tool: PinnedTool, plat: str, fetch: Fetch, tmp: Path) -> None:
+    """Install a scanner pinned by SHA-256 and its extra files. Files already in place are verified, not downloaded again."""
+    entry = tool.platforms.get(plat)
+    if entry is None:
+        raise SetupError(f"tools.lock pins no {tool.name} for {plat}")
+    for extra, asset in sorted(tool.files.items()):
+        dest = tool_file_path(tools_dir, tool.name, extra)
+        if dest.is_file() and sha256_file(dest) == asset.sha256:
+            continue
+        staged = tmp / f"{tool.name}-{extra}"
+        _fetch_verified(fetch, asset.url, asset.sha256, staged)
+        _place(staged, dest, 0o644)
+    dest = tool_path(tools_dir, tool.name)
+    if dest.is_file() and sha256_file(dest) == entry.binary_sha256:
+        _log(f"{tool.name} {tool.version}: already installed, SHA-256 verified")
+        return
+    download_path = tmp / f"{tool.name}.download"
+    _fetch_verified(fetch, entry.download.url, entry.download.sha256, download_path)
+    if tool.member is None:
+        binary = download_path
+    else:
+        binary = tmp / tool.name
+        extract_member(download_path, tool.member, binary)
+        verify_sha256(binary, entry.binary_sha256)
+    _place(binary, dest, 0o755)
+    _log(f"{tool.name} {tool.version}: installed, SHA-256 verified")
 
 
 def _selected(rel: PurePosixPath, languages: tuple[str, ...]) -> bool:
@@ -367,5 +432,7 @@ def install(
         install_opengrep(tools_dir, lock, plat, fetch, tmp, cosign, verify_signature)
         if with_rules:
             install_rules(tools_dir, lock, fetch, tmp)
+        for name, tool in sorted(lock.tools.items()):
+            install_pinned_tool(tools_dir, tool, plat, fetch, tmp)
     _log(f"tools are ready in {tools_dir}")
 

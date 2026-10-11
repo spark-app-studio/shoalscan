@@ -406,6 +406,8 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(set(about), {"shoalscan", "scanners", "rule_sources", "scanners_in_use"})
         self.assertEqual(about["scanners"][0]["name"], "Opengrep")
         self.assertRegex(about["scanners"][0]["version"], r"^\d+\.\d+\.\d+$")
+        self.assertEqual([s["name"] for s in about["scanners"]], ["Opengrep", "cosign", "Gitleaks"])
+        self.assertEqual(about["scanners"][2]["licence"], "MIT")
         self.assertIn("Commons Clause", about["rule_sources"][0]["licence"])
         self.assertEqual(self.get_json("/api/session", cookie).keys(), {"csrf"})
 

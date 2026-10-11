@@ -14,7 +14,7 @@ from shoalscan.errors import SetupError
 
 CONFIG_NAME = ".shoalscan.toml"
 SEVERITIES = ("ERROR", "WARNING", "INFO")
-KNOWN_SCANNERS = ("opengrep",)
+KNOWN_SCANNERS = ("opengrep", "gitleaks")
 _CATEGORY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _RULE_PATTERN_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-/]*(\.\*)?$")
 # parse_warn_only globs: plain path characters and the * ? wildcards only.

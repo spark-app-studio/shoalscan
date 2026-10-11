@@ -61,6 +61,26 @@ class Assets:
         dest.write_bytes(self.files[url])
 
 
+def tool_tarball(members: dict[str, bytes], links: dict[str, str] | None = None) -> bytes:
+    """A .tar.gz with these regular files (and symbolic links), as a scanner release ships."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        for name, target in (links or {}).items():
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.SYMTYPE
+            info.linkname = target
+            tar.addfile(info)
+    return buf.getvalue()
+
+
+GITLEAKS_BINARY = b"gitleaks-binary"
+GITLEAKS_CONFIG = b'[[rules]]\nid = "test-rule"\nregex = "x"\n'
+
+
 def make_lock(assets: Assets, tarball: bytes, binary=b"opengrep-binary", cosign=b"cosign-binary"):
     data = tomllib.loads(LOCK_PATH.read_text(encoding="utf-8"))
     data = copy.deepcopy(data)
@@ -77,6 +97,12 @@ def make_lock(assets: Assets, tarball: bytes, binary=b"opengrep-binary", cosign=
         archive = Path(tmp) / "r.tar.gz"
         archive.write_bytes(tarball)
         data["rules"]["files_sha256"] = inst.files_digest(inst.extract_rules(archive, Path(tmp) / "x", ("python",)))
+    gl = data["gitleaks"]
+    archive = tool_tarball({"LICENSE": b"MIT", "gitleaks": GITLEAKS_BINARY})
+    blobs[gl["platforms"][PLAT]["url"]] = archive
+    gl["platforms"][PLAT]["sha256"], gl["platforms"][PLAT]["binary_sha256"] = sha(archive), sha(GITLEAKS_BINARY)
+    blobs[gl["config"]["url"]] = GITLEAKS_CONFIG
+    gl["config"]["sha256"] = sha(GITLEAKS_CONFIG)
     assets.files.update(blobs)
     return parse_lock(data)
 

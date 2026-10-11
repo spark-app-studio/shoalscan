@@ -36,4 +36,4 @@ Shoalscan's policy files decide what fails a pull request. Require a review from
 
 The policy-from-base model is only as strong as the protection of the base branch; see [Limits](limits.md#limits-of-shoalscans-safeguards).
 
-**Next:** [Rules](rules.md).
+**Next:** [Scanners](scanners.md).

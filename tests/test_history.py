@@ -15,6 +15,7 @@ from history_fixtures import MALICIOUS, check_output, checked, entry, finding, r
 
 from shoalscan import history
 from shoalscan.cli import main
+from shoalscan.findings import Finding
 from shoalscan.baseline import Entry
 from shoalscan.dashboard.data import Data
 from shoalscan.errors import SetupError
@@ -787,6 +788,7 @@ class ReviewTests(HistoryTestCase):
             ("parse gap over its line", {"rule_ids": ["r.a", "r.b"], "unscanned": {"skipped": [], "errors": [
                 {"path": "src/a.py", "type": "PartialParsing", "spans": [[1, 5]], "file_lines": 10}]}}),
             ("excluded", {"rule_ids": ["r.a", "r.b"], "unscanned": clean, "excludes": ["src"]}),
+            ("its scanner did not run", {"rule_ids": ["r.a", "r.b"], "unscanned": clean, "scanners": {"gitleaks": {"version": "8.30.1"}}}),
         ]
         for day, (label, meta) in enumerate(not_proof, start=2):
             with self.subTest(label=label):
@@ -796,6 +798,22 @@ class ReviewTests(HistoryTestCase):
         record(self.conn, self.tmp, "acme/app", "f" * 40, 20, [self.b], extra_meta={"rule_ids": ["r.a", "r.b"], "unscanned": {
             "skipped": [], "errors": [{"path": "src/a.py", "type": "PartialParsing", "spans": [[7, 9]], "file_lines": 10}]}})
         self.assertEqual(self.review(self.a)[0], "verified_fixed")
+
+    def test_a_secret_is_verified_fixed_only_by_a_run_of_gitleaks_with_its_rule(self):
+        leak = Finding(tool="gitleaks", rule="gitleaks.github-pat", severity="ERROR", path="src/k.py", line=2, fingerprint="kk:0",
+                       component="api", message="A GitHub token.")  # fmt: skip
+        record(self.conn, self.tmp, "acme/app", "a" * 40, 2, [self.a, leak])
+        history.set_reviews(self.db, "acme/app", [[leak.tool, leak.rule, leak.path, leak.fingerprint]], "fixed", "Rotated and removed.", "me")
+        clean = {"skipped": [], "errors": []}
+        opengrep_only = {"rule_ids": ["r.a"], "unscanned": clean, "scanners": {"opengrep": {}}}
+        record(self.conn, self.tmp, "acme/app", "b" * 40, 3, [self.a], extra_meta=opengrep_only)
+        self.assertEqual(self.review(leak)[0], "fixed")
+        other_rule = {"rule_ids": ["r.a", "gitleaks.aws-access-token"], "unscanned": clean, "scanners": {"opengrep": {}, "gitleaks": {}}}
+        record(self.conn, self.tmp, "acme/app", "c" * 40, 4, [self.a], extra_meta=other_rule)
+        self.assertEqual(self.review(leak)[0], "fixed")
+        ran = {"rule_ids": ["r.a", "gitleaks.github-pat"], "unscanned": clean, "scanners": {"opengrep": {}, "gitleaks": {}}}
+        record(self.conn, self.tmp, "acme/app", "d" * 40, 5, [self.a], extra_meta=ran)
+        self.assertEqual(self.review(leak)[0], "verified_fixed")
 
     def test_a_commit_rescan_never_moves_reviews(self):
         history.set_reviews(self.db, "acme/app", [self.key(self.a)], "fixed", "Fixed by escaping the input.", "me")

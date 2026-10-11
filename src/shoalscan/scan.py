@@ -7,10 +7,10 @@ import shutil
 import tempfile
 import time
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from shoalscan import __version__, opengrep
+from shoalscan import __version__, gitleaks, opengrep
 from shoalscan.check import CHECK_JSON
 from shoalscan.config import Config
 from shoalscan.errors import ScanError, SetupError
@@ -42,6 +42,18 @@ class Tools:
     community_commit: str | None
     shoalscan_rules: Path | None
     signature_verified: bool = True
+    # Scanners pinned by SHA-256 in their own tools.lock table, by name.
+    pinned: dict[str, "PinnedBinary"] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PinnedBinary:
+    """An installed scanner and its extra files, each with the SHA-256 it must have."""
+
+    version: str
+    path: Path
+    sha256: str
+    files: dict[str, tuple[Path, str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -187,7 +199,27 @@ def run_scan(
                 "suppressed_findings": opengrep.ignored_count(doc),
             }
             suppressed_by_scanner += opengrep.ignored_count(doc)
-        sarif_text = build_sarif(sarif_source, root, sarif_index, own_findings)
+        extra_runs = []
+        if "gitleaks" in config.scanners:
+            pin = tools.pinned.get("gitleaks")
+            if pin is None:
+                raise SetupError("gitleaks is enabled but tools.lock pins no gitleaks")
+            config_file, config_sha256 = pin.files["config"]
+            leaks, leak_rules = gitleaks.run(
+                pin.path, pin.sha256, config_file, config_sha256, root, stage, config.limits, config.components, config.excludes
+            )
+            findings += leaks
+            extra_runs.append((gitleaks.TOOL, pin.version, leaks))
+            meta["rule_ids"] = sorted({*meta.get("rule_ids", []), *leak_rules})
+            meta.setdefault("rules", {}).update(gitleaks.rule_metadata(leaks))
+            meta["scanners"]["gitleaks"] = {
+                "version": pin.version,
+                "verification": "sha256",
+                "config_sha256": config_sha256,
+                "rules": len(leak_rules),
+                "findings": len(leaks),
+            }
+        sarif_text = build_sarif(sarif_source, root, sarif_index, own_findings, extra_runs)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 

@@ -29,7 +29,7 @@ Then install the pinned scanners. By default they go into `$XDG_CACHE_HOME/shoal
 shoalscan install
 ```
 
-This downloads Opengrep 1.30.2, cosign and a snapshot of the community rules, over HTTPS only. Every file is checked against its SHA-256 in `tools.lock` before it is used, and each download has a time limit that every read respects. The extracted rules are checked against one digest of all their files, pinned in `tools.lock`; nothing stored in the tools directory is trusted for that check. Files are moved into place atomically, so an interrupted install never leaves a half-written tool behind. Running `install` again verifies what is already there and downloads only what is missing or does not match. Pass `--no-community-rules` to skip the rules snapshot.
+This downloads Opengrep 1.30.2, cosign, a snapshot of the community rules and Gitleaks 8.30.1 with its default rules, over HTTPS only. Gitleaks runs only when you enable it ([Scanners](scanners.md)). Every file is checked against its SHA-256 in `tools.lock` before it is used, and each download has a time limit that every read respects. The extracted rules are checked against one digest of all their files, pinned in `tools.lock`; nothing stored in the tools directory is trusted for that check. Files are moved into place atomically, so an interrupted install never leaves a half-written tool behind. Running `install` again verifies what is already there and downloads only what is missing or does not match. Pass `--no-community-rules` to skip the rules snapshot.
 
 ### Signature verification with cosign
 

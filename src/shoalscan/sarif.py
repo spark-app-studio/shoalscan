@@ -79,13 +79,14 @@ def rewrite_opengrep_sarif(doc: dict, root: Path, index: dict) -> dict:
     return doc
 
 
-def shoalscan_run(findings: list[Finding]) -> dict:
+def shoalscan_run(findings: list[Finding], name: str = "shoalscan", version: str = __version__) -> dict:
+    """A SARIF run made from findings: Shoalscan's own, or a scanner's whose native SARIF is not used."""
     rules = sorted({f.rule for f in findings})
     return {
         "tool": {
             "driver": {
-                "name": "shoalscan",
-                "version": __version__,
+                "name": name,
+                "version": version,
                 "rules": [{"id": r, "shortDescription": {"text": r}} for r in rules],
             }
         },
@@ -109,7 +110,11 @@ def shoalscan_run(findings: list[Finding]) -> dict:
     }
 
 
-def build_sarif(opengrep_sarif: Path | None, root: Path, index: dict, own: list[Finding]) -> str:
+def build_sarif(opengrep_sarif: Path | None, root: Path, index: dict, own: list[Finding],
+                extra_runs: list[tuple[str, str, list[Finding]]] | None = None) -> str:
+    """Opengrep's SARIF, rewritten, plus a run of Shoalscan's own findings and one per
+    `extra_runs` entry (name, version, findings). Gitleaks' own SARIF holds the
+    secrets it found, so its run is built from the findings instead."""
     if opengrep_sarif is not None:
         try:
             with open(opengrep_sarif, encoding="utf-8") as handle:
@@ -123,5 +128,7 @@ def build_sarif(opengrep_sarif: Path | None, root: Path, index: dict, own: list[
             "version": "2.1.0",
             "runs": [],
         }
+    for name, version, found in extra_runs or []:
+        doc["runs"].append(shoalscan_run(found, name, version))
     doc["runs"].append(shoalscan_run(own))
     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
