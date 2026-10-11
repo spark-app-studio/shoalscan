@@ -1,8 +1,9 @@
 """Post-process Opengrep's SARIF file and add Shoalscan's own findings.
 
-Locations become repository-relative, and each result gets Shoalscan's
+Locations become repository-relative, each result gets Shoalscan's
 fingerprint in `partialFingerprints`, so code scanning tools can track
-findings across line shifts.
+findings across line shifts, and code snippets are removed, so the file
+never carries a copy of a secret a rule matched.
 """
 
 from __future__ import annotations
@@ -29,11 +30,29 @@ def _relativise(uri: str, root: Path) -> str | None:
         return None
 
 
+def _drop_snippets(node: object) -> None:
+    """Remove every `snippet` (the matched source text) inside a SARIF result.
+
+    A snippet copies the scanned line, and with it any secret a rule found
+    there, into a file that CI often uploads or keeps as an artifact.
+    Locations stay, so code scanning tools still show the line from the
+    repository itself.
+    """
+    if isinstance(node, dict):
+        node.pop("snippet", None)
+        for value in node.values():
+            _drop_snippets(value)
+    elif isinstance(node, list):
+        for value in node:
+            _drop_snippets(value)
+
+
 def rewrite_opengrep_sarif(doc: dict, root: Path, index: dict) -> dict:
     if not isinstance(doc, dict) or not isinstance(doc.get("runs"), list):
         raise ScanError("opengrep SARIF output has no runs")
     for run in doc["runs"]:
         for result in run.get("results", []) or []:
+            _drop_snippets(result)
             rel = None
             line = col = None
             for loc in result.get("locations", []) or []:
