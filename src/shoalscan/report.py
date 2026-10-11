@@ -144,7 +144,7 @@ def build(conn, repo: str, first: date, last: date, generated_at: str) -> dict:
         doc["components"] = [
             {
                 "component": r["component"],
-                "by_severity": dict(zip(SEVERITIES, r["cells"])),
+                "by_severity": dict(zip(SEVERITIES, r["cells"], strict=True)),
                 "new_blocking": r["new_blocking"],
                 "heat": r["score"],
             }

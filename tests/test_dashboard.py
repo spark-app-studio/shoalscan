@@ -21,6 +21,7 @@ from history_fixtures import MALICIOUS, sample_history
 
 from shoalscan import embeddings, history
 from shoalscan.dashboard import auth, oidc, server, tlsgen
+from shoalscan.errors import SetupError
 
 OPENSSL = tlsgen.find_openssl()
 STATIC = Path(server.STATIC_DIR)
@@ -128,12 +129,12 @@ class DashboardServerTests(unittest.TestCase):
             conn.close()
 
     def test_init_tls_refuses_bad_names_and_overwrites(self):
-        with self.assertRaises(Exception):
+        with self.assertRaises(SetupError):
             tlsgen.generate(self.tls["cert"].parent, ["127.0.0.1"], [])
         for bad in ("a,b", "x\ny", "*.example.com", "-bad"):
-            with self.subTest(bad=bad), self.assertRaises(Exception):
+            with self.subTest(bad=bad), self.assertRaises(SetupError):
                 tlsgen.check_dns(bad)
-        with self.assertRaises(Exception):
+        with self.assertRaises(SetupError):
             tlsgen.check_ip("0.0.0.0")
 
     # ------------------------------------------------------------ headers

@@ -39,7 +39,8 @@ target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "N", "I"]
+# B: likely bugs (flake8-bugbear), such as zip() without strict= or an unused loop variable.
+select = ["E", "W", "F", "N", "I", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 # The schema migrations are SQL text that has shipped; they are never edited, not even to wrap lines.

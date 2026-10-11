@@ -61,7 +61,7 @@ Every scanner's output is turned into one record:
 
 ## Dashboard
 
-- **Server:** a small standard-library HTTPS server. It serves TLS only and uses a token login, CSRF protection, a same-origin Content Security Policy and rate-limited login.
+- **Server:** a small standard-library HTTPS server. It serves TLS only and signs people in through an OpenID Connect provider, with CSRF protection, a same-origin Content Security Policy and rate limits on sign-in.
 - **Trend data:** comes from a scheduled full scan of the default branch. Pull-request runs show what each change introduced.
 - **Repositories:** one history database can hold several, so one dashboard can serve them all.
 

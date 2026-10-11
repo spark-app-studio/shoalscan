@@ -175,7 +175,7 @@ def cosine(a: list[float], b: list[float]) -> float:
     na, nb = norm(a), norm(b)
     if na == 0 or nb == 0:
         return 0.0
-    return sum(x * y for x, y in zip(a, b)) / (na * nb)
+    return sum(x * y for x, y in zip(a, b, strict=True)) / (na * nb)
 
 
 def pack(v: list[float]) -> bytes:
@@ -242,7 +242,10 @@ def embed_repository(
             "?, ?) "
             "ON CONFLICT (key_id, model) DO UPDATE SET text_sha256 = excluded.text_sha256, dims = excluded.dims, "
             "vector = excluded.vector, created_at = excluded.created_at",
-            [(key_id, model, text_sha256(text), len(v), pack(v), now) for (key_id, text), v in zip(todo, vectors)],
+            [
+                (key_id, model, text_sha256(text), len(v), pack(v), now)
+                for (key_id, text), v in zip(todo, vectors, strict=True)
+            ],
         )
     return EmbedResult(len(todo), up_to_date)
 

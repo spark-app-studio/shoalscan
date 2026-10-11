@@ -185,7 +185,7 @@ def normalise(
             component=component_for(it["path"], components),
             message=it["message"],
         )
-        for it, fp in zip(items, prints)
+        for it, fp in zip(items, prints, strict=True)
     ]
     return findings, meta
 

@@ -194,5 +194,5 @@ def lint_findings(suppressions: list[Suppression], components: dict[str, str]) -
                 "marker and one space before the rule id."
             ),
         )
-        for s, fp in zip(bad, prints)
+        for s, fp in zip(bad, prints, strict=True)
     ]
