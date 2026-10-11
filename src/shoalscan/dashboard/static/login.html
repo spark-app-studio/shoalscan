@@ -13,13 +13,16 @@
 <main class="login-card">
   <img src="/static/shoalscan-icon.svg" alt="" width="96" height="96">
   <h1>Shoalscan</h1>
-  <p class="muted">Enter the dashboard token. <code>shoalscan serve token</code> makes a new one.</p>
+  <p class="muted">Sign in with your user name and your personal token. An admin invites new users.</p>
   <p id="login-error" class="error" role="alert" hidden></p>
-  <form method="post" action="/login" autocomplete="off">
+  <form method="post" action="/login">
+    <label for="name">User name</label>
+    <input id="name" name="name" type="text" maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false">
     <label for="token">Token</label>
     <input id="token" name="token" type="password" required maxlength="128" autocomplete="current-password" spellcheck="false">
     <button type="submit">Log in</button>
   </form>
+  <p class="muted small">Before anyone has joined, leave the user name empty and use the shared token from <code>shoalscan serve token</code>.</p>
 </main>
 </body>
 </html>

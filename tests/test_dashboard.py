@@ -534,7 +534,9 @@ class DashboardServerTests(unittest.TestCase):
         )
         self.assertEqual(about["scanners"][2]["licence"], "MIT")
         self.assertIn("Commons Clause", about["rule_sources"][0]["licence"])
-        self.assertEqual(self.get_json("/api/session", cookie).keys(), {"csrf"})
+        session = self.get_json("/api/session", cookie)
+        self.assertEqual(session.keys(), {"csrf", "user", "role"})
+        self.assertEqual((session["user"], session["role"]), (None, "admin"))  # the shared token, before anyone joins
 
     def test_similar_findings_come_from_stored_embeddings(self):
         cookie = self.session()

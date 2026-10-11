@@ -18,10 +18,12 @@
     <a href="#/findings" data-view="findings">Findings</a>
     <a href="#/runs" data-view="runs">Runs</a>
     <a href="#/config" data-view="config" id="nav-config" hidden>Configuration</a>
+    <a href="#/users" data-view="users" id="nav-users" hidden>Users</a>
     <a href="#/about" data-view="about">About</a>
   </nav>
   <div class="top-right">
     <label class="repo-picker">Repository <select id="repo"></select></label>
+    <span id="whoami" class="muted small"></span>
     <button id="logout" type="button" class="secondary">Log out</button>
   </div>
 </header>
@@ -253,6 +255,32 @@
     <h2>Changes</h2>
     <div class="table-wrap"><table id="config-changes" class="data">
       <thead><tr><th>When</th><th>Who</th><th>Repository</th><th>Change</th><th>What changed</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
+  <section id="view-users" hidden>
+    <h1>Users</h1>
+    <p class="muted">Each person signs in with their own token. An invite link works once, for 24 hours, and gives its holder their token; you never see it. Inviting someone again replaces their token and ends their sessions.</p>
+    <p id="users-shared" class="muted" hidden>Nobody has joined yet, so the shared token from <code>shoalscan serve token</code> still signs in. It stops working when the first user joins.</p>
+    <p id="users-message" role="status"></p>
+    <form id="users-form" class="filters">
+      <label>Name <input name="name" maxlength="64" spellcheck="false" autocomplete="off" autocapitalize="none" placeholder="alice"></label>
+      <label>Role <select name="role"><option value="member">Member: reads and reviews</option><option value="admin">Admin: also users, configuration and scans</option></select></label>
+      <button type="submit">Invite</button>
+    </form>
+    <section id="users-invite" class="config-form" hidden aria-labelledby="users-invite-title">
+      <h2 id="users-invite-title"></h2>
+      <p>Send this link to them over a channel you trust. It is shown only now, works once, and expires <span id="users-invite-expires"></span>.</p>
+      <pre class="scan-log" id="users-invite-link"></pre>
+    </section>
+    <div class="table-wrap"><table id="users-table" class="data">
+      <thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Added</th><th>Actions</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <h2>Changes</h2>
+    <div class="table-wrap"><table id="users-events" class="data">
+      <thead><tr><th>When</th><th>Who</th><th>User</th><th>What</th></tr></thead>
       <tbody></tbody>
     </table></div>
   </section>

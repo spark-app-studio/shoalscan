@@ -360,6 +360,65 @@ def cmd_serve_token(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cli_who() -> str:
+    return f"{history._who()} (command line)"
+
+
+def _print_invite(name: str, code: str, expires: str, url: str | None) -> None:
+    path = f"/invite#{code}"
+    link = f"{url.rstrip('/')}{path}" if url else f"https://<the dashboard's address>{path}"
+    print(f"An invite for {name} (shown once; it works once, until {expires}):")
+    print(link)
+    print("Send it over a channel you trust. Opening it gives them their own token, which you never see.")
+
+
+def _dashboard_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(value)
+    if parts.scheme != "https" or not parts.hostname or parts.path not in ("", "/") or parts.query or parts.fragment:
+        raise SetupError(
+            f"--url must be the dashboard's https:// address, such as https://dash.example.com:8443: {value!r}"
+        )
+    return value
+
+
+def cmd_serve_user(args: argparse.Namespace) -> int:
+    from shoalscan.dashboard import users
+
+    url = _dashboard_url(getattr(args, "url", None))
+    conn = users.open_users(_state(args))
+    try:
+        if args.user_command == "add":
+            code, expires = users.add_user(conn, args.name, "admin" if args.admin else "member", _cli_who())
+            _print_invite(args.name, code, expires, url)
+        elif args.user_command == "reset":
+            code, expires = users.reinvite(conn, args.name, _cli_who())
+            print(f"{args.name}'s token and sessions no longer work.")
+            _print_invite(args.name, code, expires, url)
+        elif args.user_command in ("disable", "enable"):
+            users.set_disabled(conn, args.name, args.user_command == "disable", _cli_who())
+            print(
+                f"{args.name} is {args.user_command}d"
+                + ("; their sessions have ended." if args.user_command == "disable" else ".")
+            )
+        elif args.user_command == "role":
+            users.set_role(conn, args.name, args.role, _cli_who())
+            print(f"{args.name} is now {'an admin' if args.role == 'admin' else 'a member'}.")
+        else:
+            listed = users.list_users(conn)
+            if not listed:
+                print("No users yet. Add the first admin with `shoalscan serve user add NAME --admin`.")
+            for u in listed:
+                until = f" until {u['invite_expires_at']}" if u["invite_expires_at"] else ""
+                print(f"{u['name']:<24} {u['role']:<7} {u['status']}{until}")
+    finally:
+        conn.close()
+    return 0
+
+
 def cmd_serve_init_tls(args: argparse.Namespace) -> int:
     from shoalscan.dashboard.tlsgen import generate
 
@@ -562,9 +621,39 @@ def add_commands(sub: argparse._SubParsersAction) -> None:
     )
     p.set_defaults(func=cmd_serve)
     serve_sub = p.add_subparsers(dest="serve_command")
-    t = serve_sub.add_parser("token", help="make a new login token and print it once")
+    t = serve_sub.add_parser("token", help="make the shared login token of earlier versions (until a user joins)")
     t.add_argument("--state-dir", help=state_help)
     t.set_defaults(func=cmd_serve_token)
+    u = serve_sub.add_parser("user", help="add, invite again, disable, enable or list the dashboard's users")
+    usub = u.add_subparsers(dest="user_command", required=True)
+    url_help = "the dashboard's https:// address, to print the whole invite link"
+    for name, text in (
+        ("add", "add a user and print their single-use invite link"),
+        ("reset", "invite a user again: their token and sessions stop working at once"),
+    ):
+        x = usub.add_parser(name, help=text)
+        x.add_argument("name", help="the user name: lowercase letters, digits, dots, dashes or underscores")
+        if name == "add":
+            x.add_argument("--admin", action="store_true", help="an admin: manages users, the configuration and scans")
+        x.add_argument("--url", help=url_help)
+        x.add_argument("--state-dir", help=state_help)
+        x.set_defaults(func=cmd_serve_user)
+    for name, text in (
+        ("disable", "stop a user from signing in, and end their sessions"),
+        ("enable", "let a disabled user sign in again"),
+    ):
+        x = usub.add_parser(name, help=text)
+        x.add_argument("name", help="the user name")
+        x.add_argument("--state-dir", help=state_help)
+        x.set_defaults(func=cmd_serve_user)
+    x = usub.add_parser("role", help="make a user an admin or a member")
+    x.add_argument("name", help="the user name")
+    x.add_argument("role", choices=("admin", "member"))
+    x.add_argument("--state-dir", help=state_help)
+    x.set_defaults(func=cmd_serve_user)
+    x = usub.add_parser("list", help="list the users and their status")
+    x.add_argument("--state-dir", help=state_help)
+    x.set_defaults(func=cmd_serve_user)
     t = serve_sub.add_parser(
         "init-tls", help="make a name-constrained, single-use CA and a server certificate with openssl"
     )

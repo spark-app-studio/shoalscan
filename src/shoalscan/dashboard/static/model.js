@@ -44,6 +44,7 @@
     files: { run: id, kind: oneOf(FILE_KINDS) },
     suppressions: { run: id },
     config: {},
+    users: {},
     changes: { week: week, change: oneOf(["new", "fixed"]), offset: id },
     about: {}
   };

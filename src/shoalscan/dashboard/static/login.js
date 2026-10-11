@@ -3,7 +3,7 @@
 // written into the page: the message comes from a fixed table.
 (function () {
   var messages = {
-    token: "That token is not valid.",
+    token: "That user name and token do not match an active user.",
     limit: "Too many failed attempts. Wait 15 minutes and try again."
   };
   var reason = new URLSearchParams(window.location.search).get("error");
