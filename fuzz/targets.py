@@ -108,18 +108,22 @@ def _provider(n: int, e: int) -> oidc.Provider:
     return oidc.Provider(_ISSUER, f"{_ISSUER}/auth", f"{_ISSUER}/token", f"{_ISSUER}/keys", {"k1": (n, e)})
 
 
-def _no_refresh(provider, config) -> None:  # an unknown key id never reaches the network here
-    return None
-
-
-oidc.refresh_keys = _no_refresh
+def _verify(provider: oidc.Provider, token: str) -> dict:
+    """verify_id_token, with an unknown key id never reaching the network. Only for this call:
+    the targets also run inside the test suite, where other tests need the real refresh."""
+    real = oidc.refresh_keys
+    oidc.refresh_keys = lambda provider, config: None
+    try:
+        return oidc.verify_id_token(provider, _CONFIG, token, _NONCE, now=_NOW)
+    finally:
+        oidc.refresh_keys = real
 
 
 def id_token(data: bytes) -> None:
     """Any string as an ID token: refused with an OidcError, never another exception."""
     provider = _provider((1 << 2047) | 0x10001, 65537)
     try:
-        oidc.verify_id_token(provider, _CONFIG, _text(data), _NONCE, now=_NOW)
+        _verify(provider, _text(data))
     except oidc.OidcError:
         return
     raise AssertionError("an unsigned token was accepted")
@@ -145,7 +149,7 @@ def id_token_claims(data: bytes) -> None:
     except (ValueError, RecursionError):  # not JSON the signer can write back
         return
     try:
-        got = oidc.verify_id_token(_provider(n, e), _CONFIG, token, _NONCE, now=_NOW)
+        got = _verify(_provider(n, e), token)
     except oidc.OidcError:
         return
     assert isinstance(got, dict) and got.get("iss") == _ISSUER and got.get("nonce") == _NONCE
