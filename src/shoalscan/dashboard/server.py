@@ -147,7 +147,8 @@ def about_info() -> dict:
     """Scanners and rule sources with their pinned versions and licences, from tools.lock."""
     with open(default_lock_path(), "rb") as handle:
         lock = tomllib.load(handle)
-    og, cs, rules, gl, hl = lock.get("opengrep", {}), lock.get("cosign", {}), lock.get("rules", {}), lock.get("gitleaks"), lock.get("hadolint")
+    og, cs, rules = lock.get("opengrep", {}), lock.get("cosign", {}), lock.get("rules", {})
+    gl, hl, zz = lock.get("gitleaks"), lock.get("hadolint"), lock.get("zizmor")
     return {
         "shoalscan": {"version": __version__, "licence": "Apache-2.0", "project_url": PROJECT_URL, "licence_url": LICENSE_URL},
         "scanners": [
@@ -157,6 +158,8 @@ def about_info() -> dict:
                 "source": gl.get("source")}] if isinstance(gl, dict) else []),
             *([{"name": "Hadolint", "role": "Dockerfile linter (when enabled)", "version": hl.get("version"), "licence": hl.get("license"),
                 "source": hl.get("source")}] if isinstance(hl, dict) else []),
+            *([{"name": "zizmor", "role": "GitHub Actions auditor (when enabled)", "version": zz.get("version"), "licence": zz.get("license"),
+                "source": zz.get("source")}] if isinstance(zz, dict) else []),
         ],
         "rule_sources": [
             {

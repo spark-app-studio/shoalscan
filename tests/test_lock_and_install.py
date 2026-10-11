@@ -106,6 +106,10 @@ def make_lock(assets: Assets, tarball: bytes, binary=b"opengrep-binary", cosign=
     hl = data["hadolint"]["platforms"][PLAT]
     blobs[hl["url"]] = b"hadolint-binary"
     hl["sha256"] = hl["binary_sha256"] = sha(b"hadolint-binary")
+    zz = data["zizmor"]["platforms"][PLAT]
+    archive = tool_tarball({"zizmor": b"zizmor-binary"})
+    blobs[zz["url"]] = archive
+    zz["sha256"], zz["binary_sha256"] = sha(archive), sha(b"zizmor-binary")
     assets.files.update(blobs)
     return parse_lock(data)
 

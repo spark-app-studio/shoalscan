@@ -8,11 +8,11 @@ On a pull request run with `--policy-ref`, this file is read from the base branc
 
 ```toml
 # Which scanners run (see Scanners). Default: ["opengrep"].
-scanners = ["opengrep", "gitleaks", "hadolint"]
+scanners = ["opengrep", "gitleaks", "hadolint", "zizmor"]
 
 # Paths every scanner skips, in gitignore style. Opengrep receives them as
 # --exclude patterns; the repository's own .semgrepignore files are ignored.
-# Gitleaks findings under them are dropped, and Hadolint never sees them.
+# Gitleaks findings under them are dropped; Hadolint and zizmor never see them.
 excludes = ["target", "node_modules", "vendor", "**/fixtures/**"]
 # A pattern that could match every file (such as **, * or *e*) is refused:
 # each must name a directory or file, or have a literal prefix, suffix or
@@ -34,6 +34,10 @@ baseline = ".shoalscan/baseline.toml"
 [hadolint]
 # Hadolint and ShellCheck rules to leave out (see Scanners).
 ignore = ["DL3008"]
+
+[zizmor]
+# zizmor audits to leave out (see Scanners).
+ignore = ["artipacked"]
 
 [opengrep]
 community_rules = true    # the pinned opengrep-rules snapshot

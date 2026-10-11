@@ -14,7 +14,7 @@ from shoalscan.errors import SetupError
 
 CONFIG_NAME = ".shoalscan.toml"
 SEVERITIES = ("ERROR", "WARNING", "INFO")
-KNOWN_SCANNERS = ("opengrep", "gitleaks", "hadolint")
+KNOWN_SCANNERS = ("opengrep", "gitleaks", "hadolint", "zizmor")
 _CATEGORY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _RULE_PATTERN_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-/]*(\.\*)?$")
 # parse_warn_only globs: plain path characters and the * ? wildcards only.
@@ -25,6 +25,7 @@ _PARSE_GLOB_RE = re.compile(r"^[A-Za-z0-9_.\-/*?]+$")
 _FILE_NAME_RE = re.compile(r"^(?:[A-Za-z0-9_][A-Za-z0-9_.\-]*(?:\.\*)?|\*(?:\.[A-Za-z0-9_\-]+)+)$")
 _DIR_SEGMENT_RE = re.compile(r"^(?:\*\*|\*|[A-Za-z0-9_.\-]+)$")
 _HADOLINT_RULE_RE = re.compile(r"^(?:DL|SC)\d{4}$")
+_ZIZMOR_AUDIT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,99}$")
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,12 @@ class OpengrepSettings:
 @dataclass(frozen=True)
 class HadolintSettings:
     # Hadolint and ShellCheck rule codes to leave out, such as DL3008.
+    ignore: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ZizmorSettings:
+    # zizmor audits to leave out, such as artipacked.
     ignore: tuple[str, ...] = ()
 
 
@@ -66,6 +73,7 @@ class Config:
     components: dict[str, str] = field(default_factory=dict)
     opengrep: OpengrepSettings = OpengrepSettings()
     hadolint: HadolintSettings = HadolintSettings()
+    zizmor: ZizmorSettings = ZizmorSettings()
     limits: Limits = Limits()
     source: str = "defaults"
 
@@ -160,7 +168,7 @@ def _parse_glob(value: str) -> str:
 def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
     _check_keys(
         data,
-        {"scanners", "excludes", "blocking", "baseline", "non_blocking_paths", "parse_warn_only", "components", "opengrep", "hadolint", "limits"},
+        {"scanners", "excludes", "blocking", "baseline", "non_blocking_paths", "parse_warn_only", "components", "opengrep", "hadolint", "zizmor", "limits"},
         "the top level",
     )
     defaults = Config()
@@ -243,6 +251,16 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
             raise SetupError(f"{CONFIG_NAME}: hadolint.ignore entries must be rule codes such as DL3008 or SC2086: {code!r}")
     hadolint = HadolintSettings(ignore=tuple(sorted(set(ignore))))
 
+    zi_raw = data.get("zizmor", {})
+    if not isinstance(zi_raw, dict):
+        raise SetupError(f"{CONFIG_NAME}: [zizmor] must be a table")
+    _check_keys(zi_raw, {"ignore"}, "[zizmor]")
+    audits = _str_list(zi_raw.get("ignore", []), "zizmor.ignore")
+    for audit in audits:
+        if not _ZIZMOR_AUDIT_RE.match(audit):
+            raise SetupError(f"{CONFIG_NAME}: zizmor.ignore entries must be audit names such as artipacked: {audit!r}")
+    zizmor = ZizmorSettings(ignore=tuple(sorted(set(audits))))
+
     lim_raw = data.get("limits", {})
     if not isinstance(lim_raw, dict):
         raise SetupError(f"{CONFIG_NAME}: [limits] must be a table")
@@ -265,6 +283,7 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
         components=components,
         opengrep=opengrep,
         hadolint=hadolint,
+        zizmor=zizmor,
         limits=limits,
         source=source,
     )

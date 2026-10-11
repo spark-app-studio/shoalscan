@@ -10,7 +10,7 @@ A shoal is a hidden hazard under the water. A lighthouse warns ships about it; S
 
 ## Why Shoalscan
 
-- **One scan, many pinned and verified tools.** Shoalscan runs [Opengrep](https://github.com/opengrep/opengrep) and, when you enable them, [Gitleaks](https://github.com/gitleaks/gitleaks) for secrets and [Hadolint](https://github.com/hadolint/hadolint) for Dockerfiles, with more scanners to come, and turns their output into one finding format. Every tool and the community rules snapshot are pinned by SHA-256 in `tools.lock`, and signatures are checked where the tool publishes them.
+- **One scan, many pinned and verified tools.** Shoalscan runs [Opengrep](https://github.com/opengrep/opengrep) and, when you enable them, [Gitleaks](https://github.com/gitleaks/gitleaks) for secrets, [Hadolint](https://github.com/hadolint/hadolint) for Dockerfiles and [zizmor](https://github.com/zizmorcore/zizmor) for GitHub Actions, with more scanners to come, and turns their output into one finding format. Every tool and the community rules snapshot are pinned by SHA-256 in `tools.lock`, and signatures are checked where the tool publishes them.
 - **Offline scans.** A scan uses local binaries and local rules only, and makes no network calls. Nothing needs a token or a secret.
 - **A baseline that only shrinks.** The first full scan records every existing finding. After that, a pull request fails only on the findings it introduces, and a baseline entry that no longer reproduces also fails. On a pull request the policy is read from the base branch, so a change cannot exclude its own files or accept its own findings.
 - **History and a small self-hosted dashboard.** Each run is stored in a local SQLite database, and an HTTPS dashboard shows open findings, the baseline burning down, new and fixed findings, and files that were not fully scanned.
@@ -75,7 +75,7 @@ shoalscan scan && shoalscan check
 2. [Configuration](docs/configuration.md): every `.shoalscan.toml` key, and partial parses with `parse_warn_only`.
 3. [The baseline and the check](docs/baseline-and-check.md): findings and fingerprints, the baseline file, `check` and its summary, inline suppressions, renames, and why pull requests read the policy from the base branch.
 4. [CI](docs/ci.md): the GitHub Actions workflow, the self-hosted runner script and the recommended CODEOWNERS.
-5. [Scanners](docs/scanners.md): Opengrep, Gitleaks and Hadolint, and how the scanned repository is kept from silencing them.
+5. [Scanners](docs/scanners.md): Opengrep, Gitleaks, Hadolint and zizmor, and how the scanned repository is kept from silencing them.
 6. [Rules](docs/rules.md): Shoalscan's own rules and the community rules snapshot.
 7. [The dashboard](docs/dashboard.md): recording runs, correcting the history, serving the dashboard and its pages.
 8. [Reviewing findings](docs/reviewing-findings.md): review statuses, automatic verification of fixes, and `triage export`.
@@ -91,7 +91,7 @@ shoalscan scan && shoalscan check
 
 ## Status
 
-Early development. Phase 1 (Opengrep install, scan, baseline and check) and phase 2 (the run history and the dashboard) are done. Phase 3 added triage work lists (`shoalscan triage`) and dated security reports (`shoalscan report`). Phase 4 has added Gitleaks for secrets and Hadolint for Dockerfiles; zizmor, trivy config and clippy's security lints come next. See [CHANGELOG.md](CHANGELOG.md) for changes.
+Early development. Phase 1 (Opengrep install, scan, baseline and check) and phase 2 (the run history and the dashboard) are done. Phase 3 added triage work lists (`shoalscan triage`) and dated security reports (`shoalscan report`). Phase 4 has added Gitleaks for secrets, Hadolint for Dockerfiles and zizmor for GitHub Actions; trivy config and clippy's security lints come next. See [CHANGELOG.md](CHANGELOG.md) for changes.
 
 ## Contributing and security
 
