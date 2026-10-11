@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import operator
 import sqlite3
 import urllib.error
 import urllib.request
@@ -242,6 +243,89 @@ def embed_repository(
             [(key_id, model, text_sha256(text), len(v), pack(v), now) for (key_id, text), v in zip(todo, vectors)],
         )
     return EmbedResult(len(todo), up_to_date)
+
+
+# Decisions a similar finding can suggest: those that hold for a pattern, not for one place.
+# ("Fixed" is about one place in the code, so it never becomes a suggestion.)
+SUGGESTIBLE = ("false_positive", "accepted_risk", "wont_fix")
+
+
+def decision_status(review_status: str | None, baseline_reason: str | None) -> str | None:
+    """The status a finding's decision suggests for findings like it, if any.
+
+    A dashboard review decides; without one, a baseline reason that starts
+    "False positive:" or "Accepted:" does, as on the dashboard.
+    """
+    if review_status is not None:
+        return review_status if review_status in SUGGESTIBLE else None
+    if baseline_reason and baseline_reason.startswith("False positive:"):
+        return "false_positive"
+    if baseline_reason and baseline_reason.startswith("Accepted:"):
+        return "accepted_risk"
+    return None
+
+
+def dot(a: list[float], b: list[float]) -> float:
+    """The cosine similarity of two unit vectors, as stored: their dot product."""
+    return sum(map(operator.mul, a, b))
+
+
+def suggest_repository(
+    conn: sqlite3.Connection, repo: str, model: str, threshold: float = DEFAULT_THRESHOLD, now: str = ""
+) -> int:
+    """For each untriaged finding of the repository's latest run, store the most similar finding
+    that has a decision, if it is at least `threshold` alike. Returns how many were stored.
+
+    Untriaged means no dashboard review and no baseline entry. Earlier
+    suggestions of the repository for this model are replaced.
+    """
+    row = conn.execute("SELECT id, name FROM repos WHERE name = ?", (repo,)).fetchone()
+    if row is None:
+        raise SetupError(f"the history database has no runs of {repo}")
+    repo_id = row[0]
+    latest = conn.execute(
+        "SELECT id FROM runs WHERE repo_id = ? AND outcome IS NOT 'scan_error' ORDER BY scanned_at DESC, id DESC LIMIT "
+        "1",
+        (repo_id,),
+    ).fetchone()
+    decided: list[tuple[int, list[float]]] = []
+    untriaged: list[tuple[int, list[float]]] = []
+    for key_id, blob, dims, review, reason, in_latest in conn.execute(
+        "SELECT fk.id, e.vector, e.dims, fr.status, "
+        "(SELECT rf.baseline_reason FROM run_findings rf JOIN runs r ON r.id = rf.run_id WHERE rf.key_id = fk.id "
+        " ORDER BY r.scanned_at DESC, r.id DESC LIMIT 1), "
+        "EXISTS (SELECT 1 FROM run_findings WHERE run_id = ? AND key_id = fk.id) "
+        "FROM finding_embeddings e JOIN finding_keys fk ON fk.id = e.key_id "
+        "LEFT JOIN finding_reviews fr ON fr.repo_name = ? AND fr.tool = fk.tool AND fr.rule = fk.rule "
+        "AND fr.path = fk.path AND fr.fingerprint = fk.fingerprint "
+        "WHERE fk.repo_id = ? AND e.model = ?",
+        (latest[0] if latest else -1, repo, repo_id, model),
+    ):
+        if decision_status(review, reason) is not None:
+            decided.append((key_id, unpack(blob, dims)))
+        elif review is None and reason is None and in_latest:
+            untriaged.append((key_id, unpack(blob, dims)))
+    rows = []
+    for key_id, vector in untriaged:
+        best_id, best = None, threshold
+        for other_id, other in decided:
+            if len(other) == len(vector):
+                score = dot(vector, other)
+                if score >= best:
+                    best_id, best = other_id, score
+        if best_id is not None:
+            rows.append((key_id, model, best_id, round(best, 4), now))
+    with conn:
+        conn.execute(
+            "DELETE FROM finding_suggestions WHERE model = ? AND key_id IN (SELECT id FROM finding_keys WHERE repo_id "
+            "= ?)",
+            (model, repo_id),
+        )
+        conn.executemany(
+            "INSERT INTO finding_suggestions (key_id, model, neighbour_id, score, computed_at) VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+    return len(rows)
 
 
 def similar(

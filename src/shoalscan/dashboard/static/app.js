@@ -516,6 +516,7 @@
       fillSelect(form.elements.review, M.REVIEW_FILTERS.map(function (r) { return { value: r, label: M.REVIEW_LABELS[r] }; }), params.review, "Any");
       state.findingsRun = res.run;
       state.selected = {};
+      state.findingRows = {};
       renderBulk();
       form.setAttribute("data-run", params.run || "");
       $("findings-note").textContent = plural(res.total, "finding", "findings") + " in run " + res.run + " match.";
@@ -535,6 +536,7 @@
           if (box.checked) state.selected[JSON.stringify(f.key)] = f.key; else delete state.selected[JSON.stringify(f.key)];
           renderBulk();
         });
+        state.findingRows[JSON.stringify(f.key)] = f;
         var reviewHref = M.findingHref(res.run, f.key);
         body.appendChild(el("tr", null,
           el("td", null, box),
@@ -545,12 +547,47 @@
           el("td", null, fmtDate(f.first_seen)),
           el("td", null, f.new_blocking ? "new, blocking" : (f["new"] ? "new" : "")),
           el("td", null, badge(f.review)),
+          el("td", null, suggestionCell(f.suggestion)),
           el("td", null, localTime(f.review && f.review.source === "review" ? f.review.resolved_at : null)),
           el("td", null, reviewHref ? internalLink(reviewHref, "Review", "Review " + f.rule + " in " + f.path + " line " + f.line) : "-")));
       });
-      if (!res.findings.length) body.appendChild(el("tr", null, el("td", { colspan: "10", "class": "empty" }, "No findings match.")));
+      if (!res.findings.length) body.appendChild(el("tr", null, el("td", { colspan: "11", "class": "empty" }, "No findings match.")));
       pager($("findings-pager"), res, "findings", params);
     });
+  }
+
+  // A suggestion is a hint from a similar finding's decision; a person still decides.
+  function suggestionCell(s) {
+    if (!s) return "";
+    var label = (M.REVIEW_LABELS[s.status] || s.status) + "? " + s.score.toFixed(2);
+    var why = "Like " + s.like[2] + " (" + s.like[1] + "), " + (s.source === "review" ? "reviewed" : "baselined") + " as " +
+      (M.REVIEW_LABELS[s.status] || s.status) + ": " + (s.description || "");
+    var href = M.findingHref(null, s.like);
+    return href ? internalLink(href, label, why, "suggestion") : el("span", { "class": "suggestion", title: why }, label);
+  }
+
+  function useSuggestion() {
+    var picked = Object.keys(state.selected || {}).map(function (k) { return (state.findingRows || {})[k]; });
+    var form = $("bulk-review").elements;
+    var withOne = picked.filter(function (f) { return f && f.suggestion; });
+    if (!picked.length || withOne.length !== picked.length) {
+      $("bulk-message").textContent = "Select only findings that have a suggestion.";
+      return;
+    }
+    var status = withOne[0].suggestion.status;
+    if (withOne.some(function (f) { return f.suggestion.status !== status; })) {
+      $("bulk-message").textContent = "The selected findings have different suggestions; select ones that agree.";
+      return;
+    }
+    var scores = withOne.map(function (f) { return f.suggestion.score; });
+    var first = withOne[0].suggestion;
+    var label = M.REVIEW_LABELS[status];
+    form.status.value = status;
+    form.description.value = "Like findings already marked " + label + " (similarity " + Math.min.apply(null, scores).toFixed(2) +
+      (withOne.length > 1 ? " to " + Math.max.apply(null, scores).toFixed(2) : "") + "), for example " + first.like[2] + ": " +
+      (first.description || "").slice(0, 1500);
+    $("bulk-message").textContent = "Check the status and the description, edit them if needed, then Apply. Nothing is saved until you do.";
+    form.description.focus();
   }
 
   function renderBulk() {
@@ -1265,6 +1302,7 @@
     $("bulk-review").addEventListener("submit", submitBulk);
     $("review-form").addEventListener("submit", submitReview);
     fillSelect($("bulk-review").elements.status, M.USER_STATUSES.map(function (s) { return { value: s, label: M.REVIEW_LABELS[s] }; }), "", "Choose a status");
+    $("bulk-suggest").addEventListener("click", useSuggestion);
     $("findings-all").addEventListener("change", function (ev) {
       document.querySelectorAll("#findings-table tbody input[type=checkbox]").forEach(function (b) {
         if (b.checked !== ev.target.checked) { b.checked = ev.target.checked; b.dispatchEvent(new Event("change")); }

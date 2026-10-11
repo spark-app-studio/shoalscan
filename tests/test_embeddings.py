@@ -198,7 +198,9 @@ class OllamaClientTests(unittest.TestCase):
             self.assertEqual(len(embeddings.embed(["a"], "embeddinggemma", self.ollama.host, timeout=5)), 1)
 
 
-class StorageTests(unittest.TestCase):
+class HistoryCase(unittest.TestCase):
+    """The sample history in a fresh database, with a fake Ollama."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
@@ -220,6 +222,8 @@ class StorageTests(unittest.TestCase):
     def key_id(self, path):
         return self.conn.execute("SELECT id FROM finding_keys WHERE path = ?", (path,)).fetchone()[0]
 
+
+class StorageTests(HistoryCase):
     def test_the_schema_has_the_table(self):
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], history.SCHEMA_VERSION)
         cols = [r[1] for r in self.conn.execute("PRAGMA table_info(finding_embeddings)")]
@@ -299,7 +303,105 @@ class StorageTests(unittest.TestCase):
         self.assertEqual({f["repo"] for f in everyone}, {"acme/app", "acme/other"})
 
 
-class CommandTests(StorageTests):
+class SuggestionTests(HistoryCase):
+    """Untriaged findings get the decision of their most similar decided finding, as a hint."""
+
+    def setUp(self):
+        super().setUp()
+        from shoalscan.baseline import Entry
+
+        self.a = finding(
+            "community.python.eval", "src/x.py", "x0:0", message="Eval of user input allows code injection"
+        )
+        self.b = finding(
+            "community.python.eval", "src/y.py", "y0:0", message="Eval of user input allows code injection here"
+        )
+        self.c = finding(
+            "shoalscan.tls-off", "src/z.py", "z0:0", message="Certificate checks are turned off for this client"
+        )
+        self.d = finding(
+            "shoalscan.tls-off", "src/w.py", "w0:0", message="Certificate checks are turned off for that client"
+        )
+        self.e = finding(
+            "shoalscan.tls-off", "src/v.py", "v0:0", message="Certificate checks are turned off for the client"
+        )
+        base = [
+            Entry(self.d.tool, self.d.rule, self.d.path, self.d.fingerprint, "#7", "False positive: test client only")
+        ]
+        record(self.conn, self.dir, "acme/app", "a" * 40, 29, [self.a, self.b, self.c, self.d, self.e], baseline=base)
+        self.review(self.a, "false_positive", "Input is a constant.")
+        self.embed()
+
+    def review(self, f, status, description):
+        history.set_reviews(self.db, "acme/app", [[f.tool, f.rule, f.path, f.fingerprint]], status, description, "me")
+
+    def suggest(self, threshold=0.6):
+        return embeddings.suggest_repository(self.conn, "acme/app", "embeddinggemma", threshold, "2026-10-01T00:00:00Z")
+
+    def rows(self, **kw):
+        from shoalscan.dashboard.data import Data
+
+        data = Data(history.open_read_only(self.db))
+        try:
+            repo_id = data.repo_id("acme/app")
+            run = self.conn.execute("SELECT MAX(id) FROM runs").fetchone()[0]
+            return {f["path"]: f for f in data.findings(repo_id, run, limit=500, **kw)["findings"]}
+        finally:
+            data.conn.close()
+
+    def test_untriaged_findings_get_the_closest_decision(self):
+        self.assertGreaterEqual(self.suggest(), 3)
+        rows = self.rows()
+        self.assertEqual(rows["src/y.py"]["suggestion"]["status"], "false_positive")
+        self.assertEqual(rows["src/y.py"]["suggestion"]["like"][2], "src/x.py")
+        self.assertEqual(rows["src/y.py"]["suggestion"]["source"], "review")
+        self.assertEqual(rows["src/y.py"]["suggestion"]["description"], "Input is a constant.")
+        self.assertEqual(rows["src/z.py"]["suggestion"]["like"][2], "src/w.py")
+        self.assertEqual(rows["src/z.py"]["suggestion"]["source"], "baseline")
+        self.assertEqual(rows["src/z.py"]["suggestion"]["by"], "#7")
+        for decided in ("src/x.py", "src/w.py"):
+            self.assertIsNone(rows[decided]["suggestion"])
+        self.assertEqual(set(self.rows(review="suggested")), {"src/y.py", "src/z.py", "src/v.py"})
+
+    def test_a_high_threshold_suggests_less(self):
+        self.assertEqual(self.suggest(threshold=1.0), 0)
+        self.assertEqual(self.rows(review="suggested"), {})
+
+    def test_suggestions_follow_decisions_as_they_change(self):
+        self.suggest()
+        self.review(self.a, "open", "Reopened after a second look.")
+        self.assertIsNone(self.rows()["src/y.py"]["suggestion"])
+        self.assertNotIn("src/y.py", self.rows(review="suggested"))
+        self.review(self.a, "fixed", "Removed the eval call entirely.")
+        self.assertIsNone(self.rows()["src/y.py"]["suggestion"])  # a fix is about one place, never a pattern
+        self.review(self.a, "wont_fix", "Legacy module, retired next quarter.")
+        self.assertEqual(self.rows()["src/y.py"]["suggestion"]["status"], "wont_fix")
+        self.review(self.b, "accepted_risk", "Accepted for the demo build.")
+        self.assertIsNone(self.rows()["src/y.py"]["suggestion"])  # decided now, so no hint
+
+    def test_the_command_reports_suggestions(self):
+        code, _, err = quiet(
+            [
+                "triage",
+                "embed",
+                "--repo-name",
+                "acme/app",
+                "--ollama-host",
+                self.ollama.host,
+                "--threshold",
+                "0.6",
+                "--db",
+                str(self.db),
+            ]
+        )
+        self.assertEqual(code, 0, err)
+        self.assertRegex(err, r"\d+ untriaged findings have a suggestion")
+        self.assertEqual(
+            quiet(["triage", "embed", "--repo-name", "acme/app", "--threshold", "2", "--db", str(self.db)])[0], 2
+        )
+
+
+class CommandTests(HistoryCase):
     def setUp(self):
         super().setUp()
         self.conn.close()

@@ -283,6 +283,19 @@ MIGRATIONS: tuple[str, ...] = (
         PRIMARY KEY (key_id, model)
     ) WITHOUT ROWID;
     """,
+    # 13: for each untriaged finding, the most similar finding with a decision, worked out
+    # when findings are embedded, so the dashboard can show suggestions without the maths.
+    """
+    CREATE TABLE finding_suggestions (
+        key_id INTEGER NOT NULL REFERENCES finding_keys(id) ON DELETE CASCADE,
+        model TEXT NOT NULL,
+        neighbour_id INTEGER NOT NULL REFERENCES finding_keys(id) ON DELETE CASCADE,
+        score REAL NOT NULL,
+        computed_at TEXT NOT NULL,
+        PRIMARY KEY (key_id, model)
+    ) WITHOUT ROWID;
+    CREATE INDEX finding_suggestions_by_neighbour ON finding_suggestions (neighbour_id);
+    """,
 )
 REVIEW_STATUSES = ("open", "false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed", "regression")
 USER_STATUSES = ("open", "false_positive", "accepted_risk", "wont_fix", "fixed")

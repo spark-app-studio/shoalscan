@@ -12,11 +12,12 @@
   var SEVERITIES = ["ERROR", "WARNING", "INFO"];
   var FILE_KINDS = ["skipped", "error", "changed_unscanned", "partial_warning", "partial_warn_only", "excluded_changed"];
   var AGE_BUCKETS = 5;
-  var REVIEW_FILTERS = ["untriaged", "open", "false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed", "regression", "baselined"];
+  var REVIEW_FILTERS = ["untriaged", "suggested", "open", "false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed", "regression", "baselined"];
   var USER_STATUSES = ["open", "false_positive", "accepted_risk", "wont_fix", "fixed"];
   var REVIEW_LABELS = {
     untriaged: "Untriaged", open: "Open", false_positive: "False positive", accepted_risk: "Accepted risk", wont_fix: "Won't fix",
-    fixed: "Fixed (awaiting verification)", verified_fixed: "Verified fixed", regression: "Regression", baselined: "Baselined"
+    fixed: "Fixed (awaiting verification)", verified_fixed: "Verified fixed", regression: "Regression", baselined: "Baselined",
+    suggested: "Untriaged, with a suggestion"
   };
   var HEAT_ROWS_SHOWN = 15;
 

@@ -28,7 +28,7 @@ A finding that the baseline accepts shows its baseline entry's reason and issue,
 
 ## Similar findings
 
-The review page of a finding lists the findings most like it, with the decision made about each, when the repository's findings have been embedded with a local model ([Similar findings](triage.md#similar-findings-with-a-local-embedding-model)). It is a hint for triage, never a decision.
+The review page of a finding lists the findings most like it, with the decision made about each, when the repository's findings have been embedded with a local model ([Similar findings](triage.md#similar-findings-with-a-local-embedding-model)). It is a hint for triage, never a decision. The Findings page also shows a suggestion for each untriaged finding and can fill in a bulk review from it ([Suggestions on the Findings page](triage.md#suggestions-on-the-findings-page)).
 
 ## Carrying reviews into the baseline: `triage export`
 

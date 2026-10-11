@@ -513,6 +513,7 @@ class DashboardServerTests(unittest.TestCase):
                 "blocking_class",
                 "key",
                 "review",
+                "suggestion",
             },
         )
 
