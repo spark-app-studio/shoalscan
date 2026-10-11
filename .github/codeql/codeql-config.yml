@@ -1,0 +1,10 @@
+# CodeQL configuration.
+#
+# These paths hold deliberately insecure code, kept so that Shoalscan's
+# tests have something to find: the Opengrep rule tests next to each rule
+# (rules/*.py, *.js, *.ts, *.rs) and the sample repository the end-to-end
+# tests scan (tests/data/). They are never run or shipped. Shoalscan's own
+# scan leaves them out for the same reason (see .shoalscan.toml).
+paths-ignore:
+  - rules
+  - tests/data

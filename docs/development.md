@@ -28,6 +28,10 @@ ruff check src tests scripts
 
 CI runs both checks. The test modules import `helpers` before `shoalscan` (it puts `src/` on the import path), and the import order in `pyproject.toml` keeps it that way.
 
+## Deliberately insecure fixtures
+
+`rules/` holds each rule's Opengrep tests, and `tests/data/` the sample repository the end-to-end tests scan. Both contain insecure code on purpose, so that Shoalscan has something to find. They are never run or shipped, and both Shoalscan's own scan (`.shoalscan.toml`) and CodeQL (`.github/codeql/codeql-config.yml`) leave them out. CodeQL alerts raised on them before that were dismissed as false positives, with the reason recorded.
+
 ## Design and changes
 
 [design.md](design.md) describes the goals, principles and plan. [CHANGELOG.md](../CHANGELOG.md) lists the changes in each release.

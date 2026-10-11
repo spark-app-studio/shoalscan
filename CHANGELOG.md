@@ -35,6 +35,7 @@ All notable changes to Shoalscan are recorded here.
 ### Project
 
 - The code follows PEP 8 with 120-character lines, formatted and checked by Ruff 0.14.0 (a development tool, pinned by hash in `requirements-dev.txt`, never a dependency). CI runs `ruff check` and `ruff format --check`. `CloneTooLarge` in the scan worker is now `CloneTooLargeError`.
+- CodeQL leaves out the deliberately insecure test fixtures in `rules/` and `tests/data/`, as Shoalscan's own scan does; the alerts raised on them were dismissed as false positives.
 
 ## 0.1.1 (2026-10-11)
 
