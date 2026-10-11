@@ -1,0 +1,12 @@
+# Shoalscan has no runtime dependencies and the build needs only setuptools,
+# so the GitHub Actions used by the workflows are the only thing to update.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

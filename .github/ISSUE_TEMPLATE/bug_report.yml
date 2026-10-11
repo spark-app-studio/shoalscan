@@ -1,0 +1,75 @@
+name: Bug report
+description: Report something in Shoalscan that does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug. Please do not use this form for security vulnerabilities; report those privately as described in [SECURITY.md](https://github.com/spark-app-studio/shoalscan/blob/main/SECURITY.md).
+
+        Before you submit, please remove tokens, passwords, private keys, internal host names and any other secrets from everything you paste below.
+  - type: input
+    id: version
+    attributes:
+      label: Shoalscan version
+      description: The output of `shoalscan --version`, and the commit if you run from source.
+      placeholder: shoalscan 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: The operating system, its version and the CPU architecture.
+      placeholder: Ubuntu 24.04 on x86_64, or macOS 15 on arm64
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: The output of `python3 --version`.
+      placeholder: Python 3.12.7
+    validations:
+      required: true
+  - type: textarea
+    id: scanners
+    attributes:
+      label: Scanner versions
+      description: |
+        The scanner versions from `tools.lock` (for example the Opengrep version), and whether you changed `tools.lock` or installed the tools somewhere other than the default with `SHOALSCAN_TOOLS_DIR`.
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The commands you ran and, if it matters, your `.shoalscan.toml`. A minimal repository that shows the problem helps most.
+      placeholder: |
+        1. Write this .shoalscan.toml: ...
+        2. Run `shoalscan scan`
+        3. Run `shoalscan check`
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happened instead, including the exit status if it matters.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and output
+      description: Relevant output, such as the error message or the `SHOALSCAN_SUMMARY` line. Remove any secrets first. This is rendered as plain text.
+      render: text
+    validations:
+      required: false

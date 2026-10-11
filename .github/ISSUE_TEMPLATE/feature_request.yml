@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest a new feature, scanner or rule, or an improvement to an existing one.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the suggestion. If you would like to add a new scanner or rule, this issue is the right first step; [CONTRIBUTING.md](https://github.com/spark-app-studio/shoalscan/blob/main/CONTRIBUTING.md) explains what we will want to agree on before any code is written.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what makes it hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The proposal
+      description: What you would like Shoalscan to do. For a new scanner, include where it is published, how its releases are signed or checksummed, and its licence. For a new rule, include examples of code it should report and code it should leave alone.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you have considered
+      description: Other ways to solve the problem, including workarounds you use today.
+    validations:
+      required: false
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to work on this?
+      options:
+        - "Yes, I would like to open a pull request"
+        - "Maybe, with some guidance"
+        - "No"
+    validations:
+      required: false
