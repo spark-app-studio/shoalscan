@@ -271,6 +271,17 @@ def add_commands(sub: argparse._SubParsersAction) -> None:
     t.add_argument("--db", help="history database (default: the same default as `record`)")
     t.set_defaults(func=cmd_triage_export)
 
+    from shoalscan import report
+
+    p = sub.add_parser(
+        "report",
+        help="write a dated security report on one repository from the history database",
+        description="Write a dated Markdown (or JSON) security report on one repository for a period of whole UTC days: "
+        "the posture at the end, the trend, what was found and fixed, what the baseline accepts, reviews and coverage.",
+    )
+    report.add_arguments(p)
+    p.set_defaults(func=report.run)
+
     p = sub.add_parser("history", help="look at or correct the history database")
     hsub = p.add_subparsers(dest="history_command", required=True)
     h = hsub.add_parser("list-runs", help="list a repository's runs, newest first, with their ids")
