@@ -14,7 +14,7 @@ A shoal is a hidden hazard under the water. A lighthouse warns ships about it; S
 - **Offline scans.** A scan uses local binaries and local rules only, and makes no network calls. Nothing needs a token or a secret.
 - **A baseline that only shrinks.** The first full scan records every existing finding. After that, a pull request fails only on the findings it introduces, and a baseline entry that no longer reproduces also fails. On a pull request the policy is read from the base branch, so a change cannot exclude its own files or accept its own findings.
 - **History and a small self-hosted dashboard.** Each run is stored in a local SQLite database, and an HTTPS dashboard shows open findings, the baseline burning down, new and fixed findings, and files that were not fully scanned.
-- **Work lists and reports.** `shoalscan triage` turns a scan into a prioritised list of what to fix, one rule family per pull request, and `shoalscan report` writes a dated security report from the history.
+- **Work lists and reports.** `shoalscan triage` turns a scan into a prioritised list of what to fix, one rule family per pull request, `shoalscan triage suggest-similar` finds the findings most like one and what was decided about them with a local embedding model, and `shoalscan report` writes a dated security report from the history.
 
 ## Who it's for
 

@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from shoalscan import PROJECT_URL, __version__, history
+from shoalscan import PROJECT_URL, __version__, embeddings, history
 from shoalscan.dashboard import auth, scanning
 from shoalscan.dashboard.configedit import ConfigEditor
 from shoalscan.dashboard.data import AGE_BUCKETS, FILE_KINDS, REVIEW_FILTERS, SEVERITIES, SORTS, Data
@@ -87,6 +87,7 @@ API_PATHS = frozenset(
         "/api/config/baseline",
         "/api/finding",
         "/api/review/history",
+        "/api/similar",
     }
 )
 _WEEK = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -481,6 +482,16 @@ def _flag(query: dict, name: str) -> bool:
     return value == "1"
 
 
+def _threshold(query: dict) -> float:
+    """threshold=0.85: the lowest similarity to list, from 0.5 to 1."""
+    value = _one(query, "threshold", 10)
+    if value is None or value == "":
+        return embeddings.DEFAULT_THRESHOLD
+    if not re.fullmatch(r"(0\.\d{1,4}|1(\.0{1,4})?)", value) or not 0.5 <= float(value) <= 1:
+        raise ValueError("threshold must be from 0.5 to 1")
+    return float(value)
+
+
 def _int(query: dict, name: str, default: int | None, low: int, high: int) -> int | None:
     value = _one(query, name, 20)
     if value is None or value == "":
@@ -829,6 +840,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/runs":
                 runs = data.runs(repo_id, _int(query, "limit", 100, 1, 500), _int(query, "offset", 0, 0, 10**9))
                 return self.send_json(200, {"repo": repo, **runs, "deletions": data.deletions(repo)})
+            if path == "/api/similar":
+                threshold = _threshold(query)
+                return self.send_json(
+                    200,
+                    {"repo": repo, **data.similar(repo_id, _finding_key(query), threshold, _flag(query, "all_repos"))},
+                )
             if path == "/api/review/history":
                 return self.send_json(200, {"repo": repo, "history": data.review_history(repo, _finding_key(query))})
             if path == "/api/changes":

@@ -13,12 +13,12 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import helpers  # noqa: F401
 from history_fixtures import MALICIOUS, sample_history
 
-from shoalscan import history
+from shoalscan import embeddings, history
 from shoalscan.dashboard import auth, server, tlsgen
 
 OPENSSL = tlsgen.find_openssl()
@@ -36,6 +36,19 @@ class DashboardServerTests(unittest.TestCase):
         cls.tls = tlsgen.generate(base / "tls", ["127.0.0.1"], [])
         conn = history.open_for_write(base / "history.sqlite3")
         sample_history(conn, base)
+        # Vectors as `triage embed` would store them: a and d alike, b apart.
+        for path, vector in (
+            ("src/a.py", [1.0, 0.0, 0.1]),
+            ("src/d.py", [0.9, 0.1, 0.1]),
+            ("web/b.js", [0.0, 1.0, 0.0]),
+        ):
+            v = embeddings.normalise(vector)
+            conn.execute(
+                "INSERT INTO finding_embeddings SELECT id, 'embeddinggemma', 'x', 3, ?, 'now' FROM finding_keys "
+                "WHERE path = ?",
+                (embeddings.pack(v), path),
+            )
+        conn.commit()
         conn.close()
         cls.token_path = base / "state" / "token.sha256"
         cls.token = auth.create_token(cls.token_path)
@@ -522,6 +535,20 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(about["scanners"][2]["licence"], "MIT")
         self.assertIn("Commons Clause", about["rule_sources"][0]["licence"])
         self.assertEqual(self.get_json("/api/session", cookie).keys(), {"csrf"})
+
+    def test_similar_findings_come_from_stored_embeddings(self):
+        cookie = self.session()
+        key = quote(json.dumps(["opengrep", "community.python.eval", "src/a.py", "aaaa:0"]))
+        res = self.get_json(f"/api/similar?repo=acme/app&finding_key={key}", cookie)
+        self.assertTrue(res["embedded"])
+        self.assertEqual([s["key"][2] for s in res["similar"]], ["src/d.py"])
+        self.assertGreater(res["similar"][0]["score"], 0.85)
+        res = self.get_json(f"/api/similar?repo=acme/app&finding_key={key}&threshold=0.5", cookie)
+        self.assertEqual([s["key"][2] for s in res["similar"]], ["src/d.py"])
+        other = quote(json.dumps(["opengrep", "shoalscan.secret-in-log", "src/c.py", "cccc:0"]))
+        self.assertEqual(self.get_json(f"/api/similar?repo=acme/app&finding_key={other}", cookie)["embedded"], False)
+        for bad in ("threshold=2", "threshold=0.1", "threshold=x", "all_repos=yes"):
+            self.get_json(f"/api/similar?repo=acme/app&finding_key={key}&{bad}", cookie, expect=400)
 
     def test_lists_behind_the_counts(self):
         cookie = self.session()

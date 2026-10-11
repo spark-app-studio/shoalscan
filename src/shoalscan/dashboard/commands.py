@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-from shoalscan import history
+from shoalscan import embeddings, history
 from shoalscan.check import CHECK_JSON
 from shoalscan.errors import SetupError
 from shoalscan.locations import default_out_dir
@@ -49,6 +49,10 @@ def _read_check_output(name: str) -> str:
 
 
 def cmd_record(args: argparse.Namespace) -> int:
+    if args.embed:
+        # Checked before anything is recorded, so a bad setting never leaves half the work done.
+        embeddings.validate_host(args.ollama_host)
+        embeddings.validate_model(args.model)
     if args.findings:
         findings_path = Path(args.findings)
     else:
@@ -104,7 +108,105 @@ def cmd_record(args: argparse.Namespace) -> int:
         f"shoalscan record: {what} {info.kind} run {result.run_id} for {info.repo} at {info.commit[:12]} ({outcome}) "
         f"in {db}{pruned}{note}"
     )
+    if args.embed:
+        _embed(db, info.repo, args, warn_only=True)
     return 0
+
+
+def _embed(db: Path, repo: str, args: argparse.Namespace, warn_only: bool) -> int:
+    """Embed a repository's findings. When Ollama cannot, warn (record) or fail (triage embed); never a traceback."""
+    conn = history.open_for_write(db)
+    try:
+        result = embeddings.embed_repository(
+            conn, repo, args.model, args.ollama_host, now=history.parse_timestamp(None)
+        )
+    except embeddings.OllamaError as exc:
+        print(f"shoalscan: warning: no embeddings were made: {exc}", file=sys.stderr)
+        return 0 if warn_only else 2
+    finally:
+        conn.close()
+    print(
+        f"shoalscan: embedded {result.embedded} findings of {repo} with {args.model}; "
+        f"{result.up_to_date} were up to date",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def cmd_triage_embed(args: argparse.Namespace) -> int:
+    embeddings.validate_host(args.ollama_host)
+    embeddings.validate_model(args.model)
+    db = _db(args)
+    if not db.is_file():
+        raise SetupError(f"history database not found: {db}")
+    return _embed(db, args.repo_name, args, warn_only=False)
+
+
+def cmd_triage_suggest_similar(args: argparse.Namespace) -> int:
+    """Print the findings most like one finding, with what was decided about each."""
+    embeddings.validate_model(args.model)
+    if not 0 < args.threshold <= 1:
+        raise SetupError("--threshold must be above 0 and at most 1")
+    if not 1 <= args.limit <= 50:
+        raise SetupError("--limit must be from 1 to 50")
+    db = _db(args)
+    if not db.is_file():
+        raise SetupError(f"history database not found: {db}")
+    conn = history.open_read_only(db)
+    try:
+        keys = embeddings.find_keys(conn, args.repo_name, args.fingerprint)
+        if not keys:
+            raise SetupError(f"{args.repo_name} has no finding with the fingerprint {args.fingerprint}")
+        if len(keys) > 1:
+            listing = "\n".join(f"  {k[3]}  {k[1]}  {k[2]}" for _, k in keys[:20])
+            raise SetupError(f"{len(keys)} findings match {args.fingerprint}; give more of the fingerprint:\n{listing}")
+        key_id, key = keys[0]
+        found = embeddings.similar(conn, key_id, args.model, args.threshold, args.limit, args.all_repos)
+    finally:
+        conn.close()
+    if found is None:
+        raise SetupError(
+            f"this finding has no {args.model} embedding yet; run `shoalscan triage embed --repo-name "
+            f"{args.repo_name}` "
+            "with Ollama running"
+        )
+    if args.format == "json":
+        print(
+            json.dumps({"finding": key, "model": args.model, "threshold": args.threshold, "similar": found}, indent=2)
+        )
+        return 0
+    print(f"Findings like {key[1]} in {key[2]} ({key[3][:12]}), similarity at least {args.threshold}:")
+    if not found:
+        print("  none")
+    for f in found:
+        where = f"{f['key'][2]}:{f['line']}" if f["line"] else f["key"][2]
+        repo = "" if f["repo"] == args.repo_name else f" [{f['repo']}]"
+        print(f"  {f['score']:.3f}  {f['severity'] or '-':<7} {where}  {f['key'][1]}{repo}")
+        d = f["decision"]
+        if d is None:
+            print("         no decision yet")
+        elif d["source"] == "review":
+            print(
+                f"         reviewed {d['status']} by {d['by']} on {d['at'][:10]}: "
+                f"{' '.join(d['description'].split())[:200]}"
+            )
+        else:
+            print(f"         baselined ({d['issue']}): {' '.join(d['description'].split())[:200]}")
+    return 0
+
+
+def _embedding_options(p: argparse.ArgumentParser, host: bool = True) -> None:
+    p.add_argument(
+        "--model",
+        default=embeddings.DEFAULT_MODEL,
+        help=f"Ollama embedding model (default: {embeddings.DEFAULT_MODEL})",
+    )
+    if host:
+        p.add_argument(
+            "--ollama-host",
+            default=embeddings.DEFAULT_HOST,
+            help=f"Ollama on this machine's loopback interface (default: {embeddings.DEFAULT_HOST})",
+        )
 
 
 def _describe(run: dict) -> str:
@@ -343,6 +445,13 @@ def add_commands(sub: argparse._SubParsersAction) -> None:
         default=history.DEFAULT_KEEP_PR_DAYS,
         help=f"days of pull-request runs kept (default: {history.DEFAULT_KEEP_PR_DAYS})",
     )
+    p.add_argument(
+        "--embed",
+        action="store_true",
+        help="also embed the repository's new findings with a local Ollama, for similar-finding suggestions "
+        "(a warning, never a failure, when Ollama is not available)",
+    )
+    _embedding_options(p)
     p.set_defaults(func=cmd_record)
 
     from shoalscan import triage
@@ -368,6 +477,33 @@ def add_commands(sub: argparse._SubParsersAction) -> None:
     )
     t.add_argument("--db", help="history database (default: the same default as `record`)")
     t.set_defaults(func=cmd_triage_export)
+    t = tsub.add_parser(
+        "embed", help="embed a repository's findings with a local Ollama model, for similar-finding suggestions"
+    )
+    t.add_argument("--repo-name", required=True, help="the repository's name in the history, such as owner/project")
+    t.add_argument("--db", help="history database (default: the same default as `record`)")
+    _embedding_options(t)
+    t.set_defaults(func=cmd_triage_embed)
+    t = tsub.add_parser(
+        "suggest-similar",
+        help="list the findings most like one finding, with the review or baseline decision made about each",
+    )
+    t.add_argument("fingerprint", help="the finding's fingerprint, or at least its first 8 characters")
+    t.add_argument("--repo-name", required=True, help="the repository's name in the history, such as owner/project")
+    t.add_argument(
+        "--threshold",
+        type=float,
+        default=embeddings.DEFAULT_THRESHOLD,
+        help=f"lowest cosine similarity to list (default: {embeddings.DEFAULT_THRESHOLD})",
+    )
+    t.add_argument("--limit", type=int, default=embeddings.DEFAULT_LIMIT, help="how many to list (default: 3)")
+    t.add_argument(
+        "--all-repos", action="store_true", help="compare with the findings of every repository in the history"
+    )
+    t.add_argument("--format", choices=("text", "json"), default="text", help="output format (default: text)")
+    t.add_argument("--db", help="history database (default: the same default as `record`)")
+    _embedding_options(t, host=False)
+    t.set_defaults(func=cmd_triage_suggest_similar)
 
     from shoalscan import report
 
