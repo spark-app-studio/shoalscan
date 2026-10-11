@@ -677,8 +677,13 @@ class Data:
             picked = self.change_keys(repo_id, week, change)
         limit = max(1, min(limit, MAX_PAGE))
         offset = max(0, offset)
+        items = self._change_items(picked[offset : offset + limit])
+        return {"week": week, "change": change, "total": len(picked), "limit": limit, "offset": offset, "findings": items}
+
+    def _change_items(self, picked: list[tuple[int, int, str]]) -> list[dict]:
+        """Each (run the finding is shown from, key id, when) with the finding's details from that run."""
         items = []
-        for shown_run, key_id, when in picked[offset : offset + limit]:
+        for shown_run, key_id, when in picked:
             r = self.conn.execute(
                 "SELECT rf.severity, fk.rule, fk.path, rf.line, rf.component, m.text FROM run_findings rf "
                 "JOIN finding_keys fk ON fk.id = rf.key_id JOIN messages m ON m.id = rf.message_id "
@@ -688,7 +693,85 @@ class Data:
             if r:
                 items.append({"when": when, "run": shown_run, "severity": r["severity"], "rule": r["rule"], "path": r["path"],
                               "line": r["line"], "component": r["component"], "message": r["text"]})
-        return {"week": week, "change": change, "total": len(picked), "limit": limit, "offset": offset, "findings": items}
+        return items
+
+    @staticmethod
+    def _period_weeks(since: str, until: str, counts: dict[str, dict]) -> list[dict]:
+        """Every week of the period, empty ones included. The caller bounds the period."""
+        last = _week(until)
+        week = _week(since)
+        weeks = []
+        while week <= last:
+            weeks.append({"week": week.isoformat(), **counts.get(week.isoformat(), {"new": 0, "fixed": 0})})
+            week += timedelta(weeks=1)
+        return weeks
+
+    def period(self, repo_id: int, since: str, until: str, limit: int = MAX_PAGE) -> dict:
+        """What changed in the trend runs scanned from `since` to `until` (UTC timestamps, both included).
+
+        The walk is the Overview's: a finding is new in the run where it
+        appears and fixed in the run where it goes away. It starts from the
+        repository's first walked trend run, so the time to fix of a finding
+        fixed in the period counts from when it really appeared (within the
+        MAX_TREND_RUNS bound). `start` is the newest trend run before the
+        period, the state it began from; `end` is the newest trend run in it.
+        At most `limit` new and fixed findings are listed, oldest change
+        first, ERROR first within one run.
+
+        `complete` is False when the walk does not reach back to the run
+        before the period's first run: the changes early in the period are
+        then missing, and the counts must not be presented as complete.
+        """
+        runs = [r for r in self._trend_runs(repo_id) if r["scanned_at"] <= until]
+        walked = runs[-MAX_TREND_RUNS:]
+        before = [r for r in runs if r["scanned_at"] < since]
+        inside = [r for r in runs if r["scanned_at"] >= since]
+        # The first run inside needs the run before it in the walk, unless it is the first run of all.
+        complete = not inside or len(inside) + (1 if before else 0) <= len(walked)
+        new: list[tuple[int, int, str]] = []
+        fixed: list[tuple[int, int, str]] = []
+        fix_days: Counter = Counter()
+        open_since: dict[int, str] = {}
+        for index, run, current, previous in self._walk(runs):
+            when = run["scanned_at"]
+            for key in sorted(current - previous):
+                open_since[key] = when
+                if index > 0 and when >= since:
+                    new.append((run["id"], key, when))
+            for key in sorted(previous - current):
+                started = open_since.pop(key)
+                if when >= since:
+                    fixed.append((walked[index - 1]["id"], key, when))
+                    fix_days[round((_parse(when) - _parse(started)).total_seconds() / 8640)] += 1
+        weekly: dict[str, dict] = {}
+        for change, picked in (("new", new), ("fixed", fixed)):
+            for _, _, when in picked:
+                week = weekly.setdefault(_week(when).isoformat(), {"new": 0, "fixed": 0})
+                week[change] += 1
+
+        def listed(picked: list[tuple[int, int, str]]) -> list[dict]:
+            # The walk yields changes oldest first, so the cut keeps the oldest.
+            items = self._change_items(picked[: max(0, limit)])
+            items.sort(key=lambda i: (i["when"], SEVERITY_RANK.get(i["severity"], 3), i["path"], i["line"], i["rule"]))
+            return items
+
+        count = sum(fix_days.values())
+        return {
+            "since": since,
+            "until": until,
+            "runs": len(inside),
+            "complete": complete,
+            "start": _run_dict(before[-1]) if before else None,
+            "end": _run_dict(inside[-1]) if inside else None,
+            "new": {"total": len(new), "findings": listed(new)},
+            "fixed": {"total": len(fixed), "findings": listed(fixed)},
+            "weekly": self._period_weeks(since, until, weekly),
+            "time_to_fix": {
+                "fixed": count,
+                "mean_days": round(sum(k * n for k, n in fix_days.items()) / count / 10, 1) if count else None,
+                "median_days": round(_median(fix_days) / 10, 1) if count else None,
+            },
+        }
 
     # -------------------------------------------------------- runs
 

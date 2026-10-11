@@ -63,4 +63,4 @@ Scan again for an up-to-date list.
 
 From this version, `scan` records what each rule behind a finding says about itself under `rules` in `findings.json`: its CWE and OWASP labels, confidence, likelihood and impact, fix hint, reference links, and the rule file it came from. Rules can come from the scanned repository, so the values are bounded, only http(s) links are kept, and the list escapes all of them, so they show as plain text. A findings file from an older version still works; its groups are then one per rule, without links.
 
-**Next:** [Scheduled scans](scheduled-scans.md).
+**Next:** [The security report](report.md).
