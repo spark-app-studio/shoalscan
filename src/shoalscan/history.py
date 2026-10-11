@@ -968,6 +968,11 @@ def _covered(meta: dict, tool: str, rule: str, path: str, line: int | None) -> b
         rules = meta.get("rule_ids")
         if not isinstance(rules, list) or rule not in rules:
             return False
+    if tool == "hadolint":
+        # Hadolint cannot list its rules; it ran them all except those the policy ignores.
+        ignored = meta["scanners"]["hadolint"].get("ignore") if isinstance(meta["scanners"]["hadolint"], dict) else None
+        if not isinstance(ignored, list) or rule.split(".", 1)[-1] in ignored:
+            return False
     excludes = meta.get("excludes")
     if isinstance(excludes, list):
         try:

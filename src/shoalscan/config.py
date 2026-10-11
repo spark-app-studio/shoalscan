@@ -14,7 +14,7 @@ from shoalscan.errors import SetupError
 
 CONFIG_NAME = ".shoalscan.toml"
 SEVERITIES = ("ERROR", "WARNING", "INFO")
-KNOWN_SCANNERS = ("opengrep", "gitleaks")
+KNOWN_SCANNERS = ("opengrep", "gitleaks", "hadolint")
 _CATEGORY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _RULE_PATTERN_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-/]*(\.\*)?$")
 # parse_warn_only globs: plain path characters and the * ? wildcards only.
@@ -24,6 +24,7 @@ _PARSE_GLOB_RE = re.compile(r"^[A-Za-z0-9_.\-/*?]+$")
 # with one extension (`*.sh`, `*.min.js`).
 _FILE_NAME_RE = re.compile(r"^(?:[A-Za-z0-9_][A-Za-z0-9_.\-]*(?:\.\*)?|\*(?:\.[A-Za-z0-9_\-]+)+)$")
 _DIR_SEGMENT_RE = re.compile(r"^(?:\*\*|\*|[A-Za-z0-9_.\-]+)$")
+_HADOLINT_RULE_RE = re.compile(r"^(?:DL|SC)\d{4}$")
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,12 @@ class OpengrepSettings:
     categories: tuple[str, ...] = ("security",)
     # Exact rule ids, or `prefix.*`. Applied to every rule source.
     exclude_rules: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class HadolintSettings:
+    # Hadolint and ShellCheck rule codes to leave out, such as DL3008.
+    ignore: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -58,6 +65,7 @@ class Config:
     parse_warn_only: tuple[str, ...] = ()
     components: dict[str, str] = field(default_factory=dict)
     opengrep: OpengrepSettings = OpengrepSettings()
+    hadolint: HadolintSettings = HadolintSettings()
     limits: Limits = Limits()
     source: str = "defaults"
 
@@ -152,7 +160,7 @@ def _parse_glob(value: str) -> str:
 def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
     _check_keys(
         data,
-        {"scanners", "excludes", "blocking", "baseline", "non_blocking_paths", "parse_warn_only", "components", "opengrep", "limits"},
+        {"scanners", "excludes", "blocking", "baseline", "non_blocking_paths", "parse_warn_only", "components", "opengrep", "hadolint", "limits"},
         "the top level",
     )
     defaults = Config()
@@ -225,6 +233,16 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
     if not (opengrep.community_rules or opengrep.shoalscan_rules or opengrep.rule_dirs):
         raise SetupError(f"{CONFIG_NAME}: [opengrep] enables no rules")
 
+    ha_raw = data.get("hadolint", {})
+    if not isinstance(ha_raw, dict):
+        raise SetupError(f"{CONFIG_NAME}: [hadolint] must be a table")
+    _check_keys(ha_raw, {"ignore"}, "[hadolint]")
+    ignore = _str_list(ha_raw.get("ignore", []), "hadolint.ignore")
+    for code in ignore:
+        if not _HADOLINT_RULE_RE.match(code):
+            raise SetupError(f"{CONFIG_NAME}: hadolint.ignore entries must be rule codes such as DL3008 or SC2086: {code!r}")
+    hadolint = HadolintSettings(ignore=tuple(sorted(set(ignore))))
+
     lim_raw = data.get("limits", {})
     if not isinstance(lim_raw, dict):
         raise SetupError(f"{CONFIG_NAME}: [limits] must be a table")
@@ -246,6 +264,7 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
         parse_warn_only=parse_warn_only,
         components=components,
         opengrep=opengrep,
+        hadolint=hadolint,
         limits=limits,
         source=source,
     )

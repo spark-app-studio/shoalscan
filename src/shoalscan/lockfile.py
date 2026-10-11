@@ -78,7 +78,7 @@ class PinnedTool:
 
 
 # Scanners pinned in their own [<name>] table, and the extra files each needs.
-PINNED_TOOLS: dict[str, tuple[str, ...]] = {"gitleaks": ("config",)}
+PINNED_TOOLS: dict[str, tuple[str, ...]] = {"gitleaks": ("config",), "hadolint": ()}
 
 
 @dataclass(frozen=True)

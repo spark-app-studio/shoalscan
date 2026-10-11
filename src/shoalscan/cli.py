@@ -176,7 +176,8 @@ def cmd_install(args: argparse.Namespace) -> int:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     result, _ = _do_scan(args)
-    if not result.meta["scanners"].get("opengrep", {}).get("signature_verified", False):
+    opengrep_meta = result.meta["scanners"].get("opengrep")
+    if opengrep_meta is not None and not opengrep_meta.get("signature_verified", False):
         bar = "!" * 78
         print(
             f"{bar}\nshoalscan: WARNING: there is no record that the installed Opengrep's cosign signature was\n"

@@ -136,3 +136,34 @@ binary_sha256 = "88f91962aa2f93ac6ab281d553b9e125f5197bbbce38f9f2437f7299c32e550
 url = "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_arm64.tar.gz"
 sha256 = "e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080"
 binary_sha256 = "00e91bbe655bd7c47753e8cfe61cb76ea1a5d7e7702fe161ee40102b46b3823b"
+
+# Hadolint lints Dockerfiles, with ShellCheck built in for RUN instructions.
+# Its releases publish bare binaries and a checksums file, but no signature
+# or provenance attestation, so these pins rest on SHA-256 alone; each was
+# checked against checksums.sha256 of the v2.15.1 release. The download is
+# the binary itself, so `binary_sha256` equals `sha256`.
+[hadolint]
+version = "2.15.1"
+source = "https://github.com/hadolint/hadolint/releases/tag/v2.15.1"
+license = "GPL-3.0"
+verification = "sha256 (the project publishes no signature)"
+
+[hadolint.platforms.darwin-x86_64]
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-macos-x86_64"
+sha256 = "ffe9bb18b23d5ed1eae50237aecdbb523d016e96da0bd4e7aa432040acfc3fde"
+binary_sha256 = "ffe9bb18b23d5ed1eae50237aecdbb523d016e96da0bd4e7aa432040acfc3fde"
+
+[hadolint.platforms.darwin-arm64]
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-macos-arm64"
+sha256 = "5c09f3213f8e40406abe048233d985eebef336d4a6a20021be47fadb6cf480a2"
+binary_sha256 = "5c09f3213f8e40406abe048233d985eebef336d4a6a20021be47fadb6cf480a2"
+
+[hadolint.platforms.linux-x86_64]
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64"
+sha256 = "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507"
+binary_sha256 = "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507"
+
+[hadolint.platforms.linux-arm64]
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-arm64"
+sha256 = "f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d"
+binary_sha256 = "f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d"
