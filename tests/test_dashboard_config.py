@@ -10,30 +10,54 @@ import unittest
 from pathlib import Path
 
 import helpers  # noqa: F401
-from test_dashboard_scan import DashboardHarness
-from test_scanjob import Fixture
 
 from shoalscan import history
 from shoalscan.dashboard import scanning, server, tlsgen
 from shoalscan.errors import SetupError
+from test_dashboard_scan import DashboardHarness
+from test_scanjob import Fixture
 
 HOSTS = scanning.DEFAULT_HOSTS
 
 
 class ValidationTests(unittest.TestCase):
     def test_urls(self):
-        for good in ("https://github.com/acme/app.git", "https://github.com/acme/app", "https://gitlab.com/group/sub/project"):
+        for good in (
+            "https://github.com/acme/app.git",
+            "https://github.com/acme/app",
+            "https://gitlab.com/group/sub/project",
+        ):
             with self.subTest(good=good):
                 self.assertEqual(scanning.validate_url(good, HOSTS), good)
         hostile = [
-            "file:///etc/passwd", "ext::sh -c id", "http://github.com/acme/app", "ssh://git@github.com/acme/app",
-            "git://github.com/acme/app", "https://user:secret@github.com/acme/app", "https://token@github.com/acme/app",
-            "https://evil.example/acme/app", "https://github.com.evil.example/acme/app", "https://github.com:443/acme/app",
-            "--upload-pack=touch /tmp/pwned", "https://github.com/acme/app --upload-pack=x", "https://github.com/acme/app?x=1",
-            "https://github.com/acme/app#frag", "https://gіthub.com/acme/app", "https://github.com/acme/app\n",
-            " https://github.com/acme/app", "https://github.com/../etc", "https://github.com/-x/app", "https://github.com/acme",
-            "HTTPS://github.com/acme/app", "https://GitHub.com/acme/app", "https://github.com//acme/app", "https://github.com/acme/app/%2e%2e",
-            "", None, 7, "https://" + "a" * 400,
+            "file:///etc/passwd",
+            "ext::sh -c id",
+            "http://github.com/acme/app",
+            "ssh://git@github.com/acme/app",
+            "git://github.com/acme/app",
+            "https://user:secret@github.com/acme/app",
+            "https://token@github.com/acme/app",
+            "https://evil.example/acme/app",
+            "https://github.com.evil.example/acme/app",
+            "https://github.com:443/acme/app",
+            "--upload-pack=touch /tmp/pwned",
+            "https://github.com/acme/app --upload-pack=x",
+            "https://github.com/acme/app?x=1",
+            "https://github.com/acme/app#frag",
+            "https://gіthub.com/acme/app",
+            "https://github.com/acme/app\n",
+            " https://github.com/acme/app",
+            "https://github.com/../etc",
+            "https://github.com/-x/app",
+            "https://github.com/acme",
+            "HTTPS://github.com/acme/app",
+            "https://GitHub.com/acme/app",
+            "https://github.com//acme/app",
+            "https://github.com/acme/app/%2e%2e",
+            "",
+            None,
+            7,
+            "https://" + "a" * 400,
         ]
         for bad in hostile:
             with self.subTest(bad=bad), self.assertRaises(SetupError):
@@ -42,8 +66,26 @@ class ValidationTests(unittest.TestCase):
     def test_branches(self):
         for good in ("main", "release/1.2", "feature-x", "v2"):
             self.assertEqual(scanning.validate_branch(good), good)
-        for bad in ("-x", "--upload-pack=x", "a..b", "a b", "a~1", "a^", "a:b", "main\n", "a.lock", "@", "", "x/", "/x", "a\\b",
-                    "refs/heads/../x", "mäin", None, "a" * 300):
+        for bad in (
+            "-x",
+            "--upload-pack=x",
+            "a..b",
+            "a b",
+            "a~1",
+            "a^",
+            "a:b",
+            "main\n",
+            "a.lock",
+            "@",
+            "",
+            "x/",
+            "/x",
+            "a\\b",
+            "refs/heads/../x",
+            "mäin",
+            None,
+            "a" * 300,
+        ):
             with self.subTest(bad=bad), self.assertRaises(SetupError):
                 scanning.validate_branch(bad)
 
@@ -55,13 +97,22 @@ class ValidationTests(unittest.TestCase):
     def test_policy(self):
         self.assertEqual(scanning.validate_policy('excludes = ["vendor"]\n'), 'excludes = ["vendor"]\n')
         self.assertEqual(scanning.validate_policy(""), "")
-        for bad in ("excludes = [", "surprise = 1\n", 'baseline = "x.toml"\n', 'blocking = ["WARNING"]\n', "x" * 40000,
-                    'excludes = ["**"]\n', 'excludes = ["vendor", "*"]\n'):
+        for bad in (
+            "excludes = [",
+            "surprise = 1\n",
+            'baseline = "x.toml"\n',
+            'blocking = ["WARNING"]\n',
+            "x" * 40000,
+            'excludes = ["**"]\n',
+            'excludes = ["vendor", "*"]\n',
+        ):
             with self.subTest(bad=bad[:30]), self.assertRaises(SetupError):
                 scanning.validate_policy(bad)
 
 
-@unittest.skipIf(tlsgen.find_openssl() is None, "the openssl command is not installed, so no test certificate can be made")
+@unittest.skipIf(
+    tlsgen.find_openssl() is None, "the openssl command is not installed, so no test certificate can be made"
+)
 class ConfigApiTests(unittest.TestCase):
     def setUp(self):
         server.Handler._log, self._log = (lambda self, status: None), server.Handler._log
@@ -82,11 +133,21 @@ class ConfigApiTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def post(self, path, payload, **kw):
-        return self.dash.post(path, payload, sid=kw.get("sid", self.sid), csrf=kw.get("csrf", self.csrf), origin=kw.get("origin", "own"))
+        return self.dash.post(
+            path, payload, sid=kw.get("sid", self.sid), csrf=kw.get("csrf", self.csrf), origin=kw.get("origin", "own")
+        )
 
     def target(self, **changes):
-        body = {"original": None, "name": "acme/app", "source": {"kind": "url", "url": "https://github.com/acme/app.git"},
-                "branch": "main", "enabled": True, "nightly": True, "policy": "", "scanners": None}
+        body = {
+            "original": None,
+            "name": "acme/app",
+            "source": {"kind": "url", "url": "https://github.com/acme/app.git"},
+            "branch": "main",
+            "enabled": True,
+            "nightly": True,
+            "policy": "",
+            "scanners": None,
+        }
         body.update(changes)
         return body
 
@@ -96,7 +157,9 @@ class ConfigApiTests(unittest.TestCase):
     def audit(self) -> list:
         conn = sqlite3.connect(self.db)
         try:
-            return conn.execute("SELECT who, target, action, diff, policy_before, policy_after FROM config_changes ORDER BY id").fetchall()
+            return conn.execute(
+                "SELECT who, target, action, diff, policy_before, policy_after FROM config_changes ORDER BY id"
+            ).fetchall()
         finally:
             conn.close()
 
@@ -108,7 +171,9 @@ class ConfigApiTests(unittest.TestCase):
         from shoalscan.dashboard.configedit import ConfigEditor
 
         body = 'excludes = ["vendor"]\n'
-        status, reply = self.post("/api/config/target", self.target(policy=body, scanners=["zizmor", "opengrep", "gitleaks"]))
+        status, reply = self.post(
+            "/api/config/target", self.target(policy=body, scanners=["zizmor", "opengrep", "gitleaks"])
+        )
         self.assertEqual(status, 200, reply)
         text = self.managed().read_text()
         self.assertTrue(text.startswith(scanning.SCANNERS_HEADER))
@@ -118,16 +183,23 @@ class ConfigApiTests(unittest.TestCase):
         editor = ConfigEditor(self.state, self.db)
         page = editor.page(lambda name: None, [])
         t = page["targets"][0]
-        self.assertEqual((t["scanners"], t["policy"], t["policy_scanners"]), (["opengrep", "gitleaks", "zizmor"], body, ["opengrep", "gitleaks", "zizmor"]))
+        self.assertEqual(
+            (t["scanners"], t["policy"], t["policy_scanners"]),
+            (["opengrep", "gitleaks", "zizmor"], body, ["opengrep", "gitleaks", "zizmor"]),
+        )
         self.assertEqual([s["name"] for s in page["scanners"]], ["opengrep", "gitleaks", "hadolint", "zizmor", "trivy"])
         self.assertTrue(all(set(s) == {"name", "version", "installed"} for s in page["scanners"]))
         diff = json.loads(self.audit()[-1][3])
         self.assertEqual(diff["scanners"], [None, ["opengrep", "gitleaks", "zizmor"]])
         # Back to "as the policy says": the header goes, the policy text stays.
-        self.assertEqual(self.post("/api/config/target", self.target(original="acme/app", policy=body, scanners=None))[0], 200)
+        self.assertEqual(
+            self.post("/api/config/target", self.target(original="acme/app", policy=body, scanners=None))[0], 200
+        )
         self.assertEqual(self.managed().read_text(), body)
         # Chosen with no policy text: a policy that sets only the scanners.
-        self.assertEqual(self.post("/api/config/target", self.target(original="acme/app", policy="", scanners=["hadolint"]))[0], 200)
+        self.assertEqual(
+            self.post("/api/config/target", self.target(original="acme/app", policy="", scanners=["hadolint"]))[0], 200
+        )
         self.assertEqual(config_from_bytes(self.managed().read_bytes(), "managed").scanners, ("hadolint",))
         self.assertEqual(editor.page(lambda name: None, [])["targets"][0]["policy"], "")
 
@@ -137,7 +209,9 @@ class ConfigApiTests(unittest.TestCase):
             with self.subTest(choice=choice):
                 status, reply = self.post("/api/config/target", self.target(scanners=choice))
                 self.assertEqual(status, 400, reply)
-        status, reply = self.post("/api/config/target", self.target(policy='scanners = ["gitleaks"]\n', scanners=["opengrep"]))
+        status, reply = self.post(
+            "/api/config/target", self.target(policy='scanners = ["gitleaks"]\n', scanners=["opengrep"])
+        )
         self.assertEqual(status, 400)
         self.assertIn("sets scanners too", reply["error"])
         request = self.target()
@@ -146,8 +220,11 @@ class ConfigApiTests(unittest.TestCase):
         self.assertFalse((self.state / scanning.TARGETS_FILE).exists())
 
     def test_every_post_needs_a_session_csrf_and_the_exact_origin(self):
-        for path, payload in (("/api/config/target", self.target()), ("/api/config/enable", {"name": "acme/app", "enabled": False}),
-                              ("/api/config/remove", {"name": "acme/app", "confirm": "acme/app"})):
+        for path, payload in (
+            ("/api/config/target", self.target()),
+            ("/api/config/enable", {"name": "acme/app", "enabled": False}),
+            ("/api/config/remove", {"name": "acme/app", "confirm": "acme/app"}),
+        ):
             with self.subTest(path=path):
                 self.assertEqual(self.dash.post(path, payload)[0], 401)
                 self.assertEqual(self.post(path, payload, csrf=None)[0], 403)
@@ -160,13 +237,27 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(status, 200, body)
         path = self.state / scanning.TARGETS_FILE
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
-        self.assertEqual([p.name for p in self.state.iterdir() if p.name.startswith(".")], [], "no temporary files are left")
+        self.assertEqual(
+            [p.name for p in self.state.iterdir() if p.name.startswith(".")], [], "no temporary files are left"
+        )
         data = self.file()
         self.assertEqual(data["history_db"], str(self.db))
-        self.assertEqual(data["target"], [{"name": "acme/app", "source": "https://github.com/acme/app.git", "branch": "main",
-                                           "enabled": True, "nightly": True}])
+        self.assertEqual(
+            data["target"],
+            [
+                {
+                    "name": "acme/app",
+                    "source": "https://github.com/acme/app.git",
+                    "branch": "main",
+                    "enabled": True,
+                    "nightly": True,
+                }
+            ],
+        )
         policy = 'excludes = ["vendor"]\n'
-        status, body = self.post("/api/config/target", self.target(original="acme/app", branch="develop", policy=policy))
+        status, body = self.post(
+            "/api/config/target", self.target(original="acme/app", branch="develop", policy=policy)
+        )
         self.assertEqual(status, 200, body)
         managed = self.state / "targets" / scanning.slug("acme/app") / "shoalscan.toml"
         self.assertEqual(managed.read_text(), policy)
@@ -188,8 +279,13 @@ class ConfigApiTests(unittest.TestCase):
         # Remove asks for the name again, and keeps the history.
         conn = history.open_for_write(self.db)
         try:
-            history.record_run(conn, history.RunInfo("acme/app", "main", "a" * 40, "scheduled", "2026-09-01T00:00:00Z"), [], {},
-                               {"result": "pass", "findings": 0})
+            history.record_run(
+                conn,
+                history.RunInfo("acme/app", "main", "a" * 40, "scheduled", "2026-09-01T00:00:00Z"),
+                [],
+                {},
+                {"result": "pass", "findings": 0},
+            )
         finally:
             conn.close()
         self.assertEqual(self.post("/api/config/remove", {"name": "acme/app", "confirm": "acme/ap"})[0], 400)
@@ -233,14 +329,23 @@ class ConfigApiTests(unittest.TestCase):
         status, _, _ = self.dash.request("PUT", "/api/config/baseline?target=acme/app", cookie=self.sid)
         self.assertEqual(status, 405)
         # A registered mirror is fine.
-        self.assertEqual(self.post("/api/config/target", self.target(name="acme/private", source={"kind": "mirror", "mirror": "private-app"}))[0], 200)
+        self.assertEqual(
+            self.post(
+                "/api/config/target",
+                self.target(name="acme/private", source={"kind": "mirror", "mirror": "private-app"}),
+            )[0],
+            200,
+        )
 
     def test_the_baseline_is_shown_read_only(self):
         self.assertEqual(self.post("/api/config/target", self.target())[0], 200)
         managed = self.state / "targets" / scanning.slug("acme/app") / "baseline.toml"
         managed.parent.mkdir(parents=True, exist_ok=True)
-        managed.write_text('version = 1\n\n[[finding]]\ntool = "opengrep"\nrule = "r"\npath = "a.py"\nfingerprint = "f:0"\n'
-                           'issue = "#1"\nreason = "accepted"\n', encoding="utf-8")
+        managed.write_text(
+            'version = 1\n\n[[finding]]\ntool = "opengrep"\nrule = "r"\npath = "a.py"\nfingerprint = "f:0"\n'
+            'issue = "#1"\nreason = "accepted"\n',
+            encoding="utf-8",
+        )
         status, body = self.dash.get("/api/config/baseline?target=acme/app", self.sid)
         self.assertEqual(status, 200)
         self.assertEqual((body["size"], body["entries"][0]["path"]), (1, "a.py"))
@@ -252,18 +357,27 @@ class ConfigApiTests(unittest.TestCase):
         (self.base / "fx").mkdir()
         f = Fixture(self.base / "fx")
         (self.state / scanning.TARGETS_FILE).write_text(
-            f'history_db = "{self.db}"\ncooldown_minutes = 3\n\n[[target]]\nname = "acme/hand"\nclone = "{f.clone}"\nbranch = "main"\n'
-            f'python = "{f.python}"\nconfig = "{self.base}/hand.toml"\n', encoding="utf-8")
+            f'history_db = "{self.db}"\ncooldown_minutes = 3\n\n[[target]]\nname = "acme/hand"\nclone = '
+            f'"{f.clone}"\nbranch = "main"\n'
+            f'python = "{f.python}"\nconfig = "{self.base}/hand.toml"\n',
+            encoding="utf-8",
+        )
         (self.state / scanning.TARGETS_FILE).chmod(0o600)
         self.assertEqual(self.post("/api/config/enable", {"name": "acme/hand", "enabled": False})[0], 200)
         data = self.file()
         self.assertEqual(data["cooldown_minutes"], 3)
-        self.assertEqual({k: data["target"][0][k] for k in ("clone", "python", "config", "enabled")},
-                         {"clone": str(f.clone), "python": str(f.python), "config": f"{self.base}/hand.toml", "enabled": False})
+        self.assertEqual(
+            {k: data["target"][0][k] for k in ("clone", "python", "config", "enabled")},
+            {"clone": str(f.clone), "python": str(f.python), "config": f"{self.base}/hand.toml", "enabled": False},
+        )
         # Its policy file is set by hand, so the page cannot replace it.
-        payload = self.target(original="acme/hand", name="acme/hand", source={"kind": "clone"}, policy='excludes = ["x"]\n')
+        payload = self.target(
+            original="acme/hand", name="acme/hand", source={"kind": "clone"}, policy='excludes = ["x"]\n'
+        )
         self.assertEqual(self.post("/api/config/target", payload)[0], 400)
-        self.assertEqual(self.post("/api/config/target", {**payload, "policy": "", "scanners": ["opengrep", "gitleaks"]})[0], 400)
+        self.assertEqual(
+            self.post("/api/config/target", {**payload, "policy": "", "scanners": ["opengrep", "gitleaks"]})[0], 400
+        )
         self.assertEqual(self.post("/api/config/target", {**payload, "policy": ""})[0], 200)
 
 
@@ -278,8 +392,16 @@ class WriteOrderTests(unittest.TestCase):
         from shoalscan.dashboard.configedit import ConfigEditor
 
         self.editor = ConfigEditor(self.state, self.db)
-        self.request = {"original": None, "name": "acme/app", "source": {"kind": "url", "url": "https://github.com/acme/app.git"},
-                        "branch": "main", "enabled": True, "nightly": True, "policy": 'excludes = ["vendor"]\n', "scanners": None}
+        self.request = {
+            "original": None,
+            "name": "acme/app",
+            "source": {"kind": "url", "url": "https://github.com/acme/app.git"},
+            "branch": "main",
+            "enabled": True,
+            "nightly": True,
+            "policy": 'excludes = ["vendor"]\n',
+            "scanners": None,
+        }
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -296,9 +418,13 @@ class WriteOrderTests(unittest.TestCase):
 
         order = []
         real_audit, real_policy, real_save = history.append_config_change, scanning.write_policy, scanning.save_targets
-        with mock.patch.object(history, "append_config_change", lambda *a, **k: order.append("audit") or real_audit(*a, **k)), \
-                mock.patch.object(scanning, "write_policy", lambda *a, **k: order.append("policy") or real_policy(*a, **k)), \
-                mock.patch.object(scanning, "save_targets", lambda *a, **k: order.append("targets") or real_save(*a, **k)):
+        with (
+            mock.patch.object(
+                history, "append_config_change", lambda *a, **k: order.append("audit") or real_audit(*a, **k)
+            ),
+            mock.patch.object(scanning, "write_policy", lambda *a, **k: order.append("policy") or real_policy(*a, **k)),
+            mock.patch.object(scanning, "save_targets", lambda *a, **k: order.append("targets") or real_save(*a, **k)),
+        ):
             self.assertEqual(self.editor.save_target(dict(self.request), "who")[0], 200)
         self.assertEqual(order, ["audit", "policy", "targets"])
 
@@ -319,7 +445,9 @@ class WriteOrderTests(unittest.TestCase):
         self.assertEqual(policy_path.read_text(), 'excludes = ["vendor"]\n')
 
 
-@unittest.skipIf(tlsgen.find_openssl() is None, "the openssl command is not installed, so no test certificate can be made")
+@unittest.skipIf(
+    tlsgen.find_openssl() is None, "the openssl command is not installed, so no test certificate can be made"
+)
 class ConfigOffTests(unittest.TestCase):
     def test_the_page_is_off_without_a_targets_file_or_allow_config(self):
         server.Handler._log, log = (lambda self, status: None), server.Handler._log

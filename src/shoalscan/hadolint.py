@@ -47,9 +47,24 @@ CONFIG_TEXT = "{}\n"
 # per-Dockerfile ignore files, editor leftovers, and templates that Hadolint
 # could not parse until they are rendered.
 NOT_DOCKERFILE_SUFFIXES = (
-    ".md", ".txt", ".rst", ".adoc", ".dockerignore", ".orig", ".bak", ".swp", ".rej",
-    ".j2", ".jinja", ".jinja2", ".tmpl", ".tpl", ".template", ".erb", ".mustache",
-)  # fmt: skip
+    ".md",
+    ".txt",
+    ".rst",
+    ".adoc",
+    ".dockerignore",
+    ".orig",
+    ".bak",
+    ".swp",
+    ".rej",
+    ".j2",
+    ".jinja",
+    ".jinja2",
+    ".tmpl",
+    ".tpl",
+    ".template",
+    ".erb",
+    ".mustache",
+)
 
 
 def is_dockerfile(name: str) -> bool:
@@ -94,11 +109,14 @@ def build_command(binary: Path, config: Path, ignore: tuple[str, ...], files: li
     cmd = [
         str(binary),
         # Shoalscan's empty configuration, never a .hadolint.yaml.
-        "--config", str(config),
+        "--config",
+        str(config),
         "--disable-ignore-pragma",
-        "--no-fail", "--no-color",
-        "--format", "json",
-    ]  # fmt: skip
+        "--no-fail",
+        "--no-color",
+        "--format",
+        "json",
+    ]
     for code in ignore:
         cmd += ["--ignore", code]
     return cmd + [str(f) for f in files]
@@ -130,7 +148,9 @@ def stage_context(lines: list[str], line: int) -> str:
     return ""
 
 
-def normalise(results: list, root: Path, scanned: set[str], components: dict[str, str]) -> tuple[list[Finding], list[dict]]:
+def normalise(
+    results: list, root: Path, scanned: set[str], components: dict[str, str]
+) -> tuple[list[Finding], list[dict]]:
     """Findings, and an unscanned error for each file Hadolint could not parse."""
     lines_cache: dict[str, list[str]] = {}
     items, errors = [], {}
@@ -175,8 +195,16 @@ def normalise(results: list, root: Path, scanned: set[str], components: dict[str
         )
     prints = assign_fingerprints(items)
     findings = [
-        Finding(tool=TOOL, rule=it["rule"], severity=it["severity"], path=it["path"], line=it["line"], fingerprint=fp,
-                component=component_for(it["path"], components), message=it["message"])  # fmt: skip
+        Finding(
+            tool=TOOL,
+            rule=it["rule"],
+            severity=it["severity"],
+            path=it["path"],
+            line=it["line"],
+            fingerprint=fp,
+            component=component_for(it["path"], components),
+            message=it["message"],
+        )
         for it, fp in zip(items, prints)
     ]
     # A file that did not parse has no other results worth keeping.
@@ -189,14 +217,34 @@ def rule_metadata(findings: list[Finding]) -> dict[str, dict]:
     out = {}
     for f in findings:
         code = f.rule.split(".", 1)[1]
-        url = (f"https://github.com/hadolint/hadolint/wiki/{code}" if code.startswith("DL")
-               else f"https://www.shellcheck.net/wiki/{code}")  # fmt: skip
-        out[f.rule] = {"file": None, "cwe": [], "owasp": [], "fix": None, "references": [url], "confidence": None, "likelihood": None, "impact": None}
+        url = (
+            f"https://github.com/hadolint/hadolint/wiki/{code}"
+            if code.startswith("DL")
+            else f"https://www.shellcheck.net/wiki/{code}"
+        )
+        out[f.rule] = {
+            "file": None,
+            "cwe": [],
+            "owasp": [],
+            "fix": None,
+            "references": [url],
+            "confidence": None,
+            "likelihood": None,
+            "impact": None,
+        }
     return out
 
 
-def run(binary: Path, binary_sha256: str, root: Path, stage: Path, limits: Limits, components: dict[str, str],
-        excludes: tuple[str, ...], ignore: tuple[str, ...]) -> tuple[list[Finding], dict, int]:  # fmt: skip
+def run(
+    binary: Path,
+    binary_sha256: str,
+    root: Path,
+    stage: Path,
+    limits: Limits,
+    components: dict[str, str],
+    excludes: tuple[str, ...],
+    ignore: tuple[str, ...],
+) -> tuple[list[Finding], dict, int]:
     """Lint the repository's Dockerfiles. Returns the findings, the unscanned files and how many files were linted."""
     if not binary.is_file():
         raise SetupError(f"hadolint is not installed: {binary} (run `shoalscan install`)")

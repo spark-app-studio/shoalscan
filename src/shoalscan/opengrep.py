@@ -122,12 +122,15 @@ def build_command(
         "--disable-version-check",
         # A pull request must not be able to hide files with its own ignore file.
         "--x-ignore-semgrepignore-files",
-        "--jobs", str(limits.jobs),
-        "--timeout", str(limits.rule_timeout_seconds),
-        "--max-target-bytes", str(limits.max_target_bytes),
+        "--jobs",
+        str(limits.jobs),
+        "--timeout",
+        str(limits.rule_timeout_seconds),
+        "--max-target-bytes",
+        str(limits.max_target_bytes),
         # --verbose adds paths.skipped (with reasons) to the JSON output.
         "--verbose",
-    ]  # fmt: skip
+    ]
     for pattern in excludes:
         cmd.append(f"--exclude={pattern}")
     cmd.append(str(target))
@@ -317,7 +320,9 @@ def rule_metadata(doc: dict, rule_files: dict[str, str]) -> dict[str, dict]:
             "cwe": _meta_list(meta.get("cwe")),
             "owasp": _meta_list(meta.get("owasp")),
             "fix": _meta_text(meta.get("fix")),
-            "references": [u for u in _meta_list(meta.get("references")) if u.startswith(("https://", "http://")) and " " not in u],
+            "references": [
+                u for u in _meta_list(meta.get("references")) if u.startswith(("https://", "http://")) and " " not in u
+            ],
         }
         for level in _META_LEVELS:
             text = _meta_text(meta.get(level))

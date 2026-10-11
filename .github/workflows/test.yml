@@ -26,3 +26,17 @@ jobs:
       # tests that need the pinned scanners skip with a reason when
       # SHOALSCAN_TOOLS_DIR is not set.
       - run: python -m unittest discover -s tests
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      # Ruff is a development tool, pinned by hash; the package has no dependencies.
+      - run: python -m pip install --require-hashes -r requirements-dev.txt
+      - run: ruff check src tests scripts
+      - run: ruff format --check src tests scripts

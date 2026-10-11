@@ -11,8 +11,9 @@ import unittest
 from pathlib import Path
 
 import helpers
-
 from history_fixtures import MALICIOUS
+from test_end_to_end import SAMPLE, TOOLS, tools_ready
+
 from shoalscan import markdown as md
 from shoalscan import opengrep, triage
 from shoalscan.baseline import Entry, render_baseline
@@ -20,7 +21,6 @@ from shoalscan.check import compare
 from shoalscan.cli import main
 from shoalscan.findings import Finding, findings_to_json
 from shoalscan.gitref import baseline_binding_path, worktree_state
-from test_end_to_end import SAMPLE, TOOLS, tools_ready
 
 HAS_GIT = shutil.which("git") is not None
 COMMIT = "a" * 40
@@ -28,7 +28,16 @@ MARKERS = ("no" + "sem", "no" + "opengrep")
 
 
 def finding(rule, path, fp, severity="ERROR", component="api", message="a problem", line=3):
-    return Finding(tool="opengrep", rule=rule, severity=severity, path=path, line=line, fingerprint=fp, component=component, message=message)
+    return Finding(
+        tool="opengrep",
+        rule=rule,
+        severity=severity,
+        path=path,
+        line=line,
+        fingerprint=fp,
+        component=component,
+        message=message,
+    )
 
 
 def entry(f: Finding, issue="#1", reason="known") -> Entry:
@@ -36,13 +45,38 @@ def entry(f: Finding, issue="#1", reason="known") -> Entry:
 
 
 RULES = {
-    "shoalscan.python-tls": {"file": "shoalscan/tls.yaml", "cwe": ["CWE-295: Improper Certificate Validation"], "owasp": [],
-                             "fix": "Trust a CA bundle.", "references": [], "confidence": "HIGH"},
-    "community.python.requests.no-verify": {"file": "community/python/requests/no-verify.yaml", "cwe": ["CWE-295: Improper Certificate Validation"],
-                                            "owasp": ["A07:2021"], "fix": None, "references": ["https://example.com/a"], "confidence": "LOW"},
-    "shoalscan.secret-in-log": {"file": "shoalscan/log.yaml", "cwe": ["CWE-532: Sensitive Information in Log"], "owasp": [],
-                                "fix": None, "references": [], "confidence": "MEDIUM"},
-    "repo.rules.custom": {"file": "repo/rules/custom.yaml", "cwe": [], "owasp": [], "fix": None, "references": [], "confidence": None},
+    "shoalscan.python-tls": {
+        "file": "shoalscan/tls.yaml",
+        "cwe": ["CWE-295: Improper Certificate Validation"],
+        "owasp": [],
+        "fix": "Trust a CA bundle.",
+        "references": [],
+        "confidence": "HIGH",
+    },
+    "community.python.requests.no-verify": {
+        "file": "community/python/requests/no-verify.yaml",
+        "cwe": ["CWE-295: Improper Certificate Validation"],
+        "owasp": ["A07:2021"],
+        "fix": None,
+        "references": ["https://example.com/a"],
+        "confidence": "LOW",
+    },
+    "shoalscan.secret-in-log": {
+        "file": "shoalscan/log.yaml",
+        "cwe": ["CWE-532: Sensitive Information in Log"],
+        "owasp": [],
+        "fix": None,
+        "references": [],
+        "confidence": "MEDIUM",
+    },
+    "repo.rules.custom": {
+        "file": "repo/rules/custom.yaml",
+        "cwe": [],
+        "owasp": [],
+        "fix": None,
+        "references": [],
+        "confidence": None,
+    },
 }
 META = {
     "shoalscan_version": "0.1.1",
@@ -61,7 +95,15 @@ class MarkdownTests(unittest.TestCase):
 
     def test_text_never_starts_a_block(self):
         # A list item's content is parsed as blocks, so a leading marker would make a heading, a list or a rule.
-        cases = {"# h": "\\# h", "- x": "\\- x", "+ x": "\\+ x", "---": "\\---", "===": "\\===", "1. x": "1\\. x", "12) x": "12\\) x"}
+        cases = {
+            "# h": "\\# h",
+            "- x": "\\- x",
+            "+ x": "\\+ x",
+            "---": "\\---",
+            "===": "\\===",
+            "1. x": "1\\. x",
+            "12) x": "12\\) x",
+        }
         for raw, expected in cases.items():
             self.assertEqual(md.text(raw), expected, raw)
         self.assertEqual(md.text("a # b - c 1. d"), "a # b - c 1. d")
@@ -79,7 +121,15 @@ class MarkdownTests(unittest.TestCase):
 
     def test_link_keeps_only_plain_web_urls(self):
         self.assertEqual(md.link("rule", "https://example.com/a?b=1#c"), "[rule](<https://example.com/a?b=1#c>)")
-        for bad in ("javascript:alert(1)", "data:text/html,x", "https://a/b c", "https://a/b)c", "https://a/<b>", None, 3):
+        for bad in (
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "https://a/b c",
+            "https://a/b)c",
+            "https://a/<b>",
+            None,
+            3,
+        ):
             self.assertEqual(md.link("rule", bad), "rule", bad)
         self.assertEqual(md.link("<b>", "javascript:x"), "\\<b\\>")
 
@@ -98,17 +148,26 @@ class RuleMetadataTests(unittest.TestCase):
 
     def test_metadata_is_normalised_and_bounded(self):
         doc = self.doc(
-            self.result("a", {
-                "cwe": "CWE-295: Improper\nCertificate Validation",
-                "owasp": ["A1", "A1", 3, "A2"],
-                "references": ["https://ok.example/x", "javascript:alert(1)", "https://bad example", "ftp://x", "http://plain.example"],
-                "fix": "x" * 2000,
-                "confidence": "high",
-                "impact": {"no": "dict"},
-            }),
+            self.result(
+                "a",
+                {
+                    "cwe": "CWE-295: Improper\nCertificate Validation",
+                    "owasp": ["A1", "A1", 3, "A2"],
+                    "references": [
+                        "https://ok.example/x",
+                        "javascript:alert(1)",
+                        "https://bad example",
+                        "ftp://x",
+                        "http://plain.example",
+                    ],
+                    "fix": "x" * 2000,
+                    "confidence": "high",
+                    "impact": {"no": "dict"},
+                },
+            ),
             self.result("b", "not a dict"),
             self.result("c", {"cwe": ["CWE-1"]}, ignored=True),
-        )  # fmt: skip
+        )
         out = opengrep.rule_metadata(doc, {"a": "shoalscan/a.yaml"})
         self.assertEqual(set(out), {"a", "b"})
         a = out["a"]
@@ -118,7 +177,19 @@ class RuleMetadataTests(unittest.TestCase):
         self.assertEqual(a["references"], ["https://ok.example/x", "http://plain.example"])
         self.assertEqual(len(a["fix"]), opengrep.MAX_META_TEXT)
         self.assertEqual((a["confidence"], a["impact"], a["likelihood"]), ("HIGH", None, None))
-        self.assertEqual(out["b"], {"file": None, "cwe": [], "owasp": [], "fix": None, "references": [], "confidence": None, "likelihood": None, "impact": None})
+        self.assertEqual(
+            out["b"],
+            {
+                "file": None,
+                "cwe": [],
+                "owasp": [],
+                "fix": None,
+                "references": [],
+                "confidence": None,
+                "likelihood": None,
+                "impact": None,
+            },
+        )
 
     def test_lists_are_capped(self):
         out = opengrep.rule_metadata(self.doc(self.result("a", {"cwe": [f"CWE-{n}" for n in range(20)]})), {})
@@ -127,7 +198,10 @@ class RuleMetadataTests(unittest.TestCase):
     def test_staging_records_each_rule_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             stats = opengrep.stage_rules(Path(tmp), [opengrep.RuleSource("shoalscan", helpers.ROOT / "rules")])
-        self.assertEqual(stats.rule_files["shoalscan.python-tls-verification-disabled"], "shoalscan/tls-verification-disabled-python.yaml")
+        self.assertEqual(
+            stats.rule_files["shoalscan.python-tls-verification-disabled"],
+            "shoalscan/tls-verification-disabled-python.yaml",
+        )
         self.assertEqual(set(stats.rule_files), stats.rule_ids)
 
 
@@ -139,9 +213,14 @@ class FamilyAndExplanationTests(unittest.TestCase):
 
     def test_explanation_links(self):
         e = triage.explanation
-        self.assertEqual(e({"file": "community/python/x.yaml"}, META)["url"],
-                         f"https://github.com/opengrep/opengrep-rules/blob/{COMMIT}/python/x.yaml")  # fmt: skip
-        self.assertEqual(e({"file": "shoalscan/tls.yaml"}, META)["url"], "https://github.com/spark-app-studio/shoalscan/blob/v0.1.1/rules/tls.yaml")
+        self.assertEqual(
+            e({"file": "community/python/x.yaml"}, META)["url"],
+            f"https://github.com/opengrep/opengrep-rules/blob/{COMMIT}/python/x.yaml",
+        )
+        self.assertEqual(
+            e({"file": "shoalscan/tls.yaml"}, META)["url"],
+            "https://github.com/spark-app-studio/shoalscan/blob/v0.1.1/rules/tls.yaml",
+        )
         self.assertEqual(e({"file": "repo/rules/custom.yaml"}, META), {"url": None, "path": "rules/custom.yaml"})
 
     def test_explanation_refuses_odd_values(self):
@@ -149,7 +228,10 @@ class FamilyAndExplanationTests(unittest.TestCase):
         none = {"url": None, "path": None}
         self.assertEqual(e({"file": "community/../x.yaml"}, META), none)
         self.assertEqual(e({"file": "community/x y.yaml"}, META), none)
-        self.assertEqual(e({"file": "community/x.yaml"}, {**META, "scanners": {"opengrep": {"community_rules_commit": "main"}}}), none)
+        self.assertEqual(
+            e({"file": "community/x.yaml"}, {**META, "scanners": {"opengrep": {"community_rules_commit": "main"}}}),
+            none,
+        )
         self.assertEqual(e({"file": "shoalscan/x.yaml"}, {**META, "shoalscan_version": "1.0/../../evil"}), none)
         self.assertEqual(e({}, META), none)
 
@@ -157,7 +239,9 @@ class FamilyAndExplanationTests(unittest.TestCase):
 class BuildTests(unittest.TestCase):
     def setUp(self):
         self.tls_old = finding("shoalscan.python-tls", "src/a.py", "f1", component="api")
-        self.tls_community = finding("community.python.requests.no-verify", "src/b.py", "f2", severity="WARNING", component="api")
+        self.tls_community = finding(
+            "community.python.requests.no-verify", "src/b.py", "f2", severity="WARNING", component="api"
+        )
         self.log_new = finding("shoalscan.secret-in-log", "web/c.py", "f3", component="web")
         self.custom_info = finding("repo.rules.custom", "src/d.py", "f4", severity="INFO", component="api")
         self.docs_new = finding("shoalscan.secret-in-log", "docs/e.py", "f5", component="docs")
@@ -177,7 +261,9 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(log["counts"]["new_blocking"], 1)
         self.assertEqual(log["counts"]["new"], 1)  # the docs/ finding is new but in a non-blocking path
         self.assertEqual(tls["title"], "CWE-295: Improper Certificate Validation")
-        self.assertEqual([r["rule"] for r in tls["rules"]], ["shoalscan.python-tls", "community.python.requests.no-verify"])
+        self.assertEqual(
+            [r["rule"] for r in tls["rules"]], ["shoalscan.python-tls", "community.python.requests.no-verify"]
+        )
         self.assertEqual(tls["counts"]["by_severity"], {"ERROR": 1, "WARNING": 1, "INFO": 0})
         self.assertEqual(tls["heat"], 13)
         self.assertEqual(custom["rules"][0]["explanation"], {"url": None, "path": "rules/custom.yaml"})
@@ -198,8 +284,19 @@ class BuildTests(unittest.TestCase):
 
     def test_totals_and_stale_entries(self):
         doc = self.build()
-        self.assertEqual(doc["totals"], {"findings": 5, "new_blocking": 1, "new": 2, "baselined": 2, "blocking_class": 3,
-                                         "groups": 3, "stale": 1, "baseline_size": 3})  # fmt: skip
+        self.assertEqual(
+            doc["totals"],
+            {
+                "findings": 5,
+                "new_blocking": 1,
+                "new": 2,
+                "baselined": 2,
+                "blocking_class": 3,
+                "groups": 3,
+                "stale": 1,
+                "baseline_size": 3,
+            },
+        )
         self.assertEqual(doc["stale"][0]["path"], "src/gone.py")
 
     def test_blocking_only_drops_info_and_non_blocking_paths(self):
@@ -228,7 +325,9 @@ class RenderTests(unittest.TestCase):
         out = triage.render_markdown(b.build())
         self.assertLess(out.index("Remove 1 stale baseline entry"), out.index("CWE-532"))
         self.assertLess(out.index("CWE-532"), out.index("CWE-295"))
-        self.assertIn(f"[rule](<https://github.com/opengrep/opengrep-rules/blob/{COMMIT}/python/requests/no-verify.yaml>)", out)
+        self.assertIn(
+            f"[rule](<https://github.com/opengrep/opengrep-rules/blob/{COMMIT}/python/requests/no-verify.yaml>)", out
+        )
         self.assertIn("rule file `rules/custom.yaml`", out)
         self.assertIn("- ERROR `web/c.py:3` `shoalscan.secret-in-log`: **new, blocks**", out)
         self.assertIn("baselined (#1: False positive: test helper)", out)
@@ -240,8 +339,18 @@ class RenderTests(unittest.TestCase):
         bad = finding("shoalscan.x", "src/a.py", "f1", message=MALICIOUS + "\n## injected heading", component=MALICIOUS)
         evil_path = finding("shoalscan.x", "src/`` <img src=x>|.py", "f2", message=MALICIOUS + "\n## injected heading")
         result = compare([bad, evil_path], [entry(bad, reason=MALICIOUS + "\n# h")], ("ERROR", "WARNING"))
-        meta = {"rules": {"shoalscan.x": {"file": "shoalscan/x.yaml", "cwe": [MALICIOUS], "owasp": [], "fix": MALICIOUS,
-                                          "references": ["javascript:alert(1)"], "confidence": None}}}  # fmt: skip
+        meta = {
+            "rules": {
+                "shoalscan.x": {
+                    "file": "shoalscan/x.yaml",
+                    "cwe": [MALICIOUS],
+                    "owasp": [],
+                    "fix": MALICIOUS,
+                    "references": ["javascript:alert(1)"],
+                    "confidence": None,
+                }
+            }
+        }
         out = triage.render_markdown(triage.build([bad, evil_path], meta, result))
         # The hostile path is the one place a raw < may appear: inside a code span, in a list item.
         span = "```src/`` <img src=x>|.py:3```"
@@ -254,8 +363,18 @@ class RenderTests(unittest.TestCase):
 
     def test_rule_text_cannot_start_a_block_in_a_list_item(self):
         f = finding("repo.rules.x", "src/a.py", "f1", message="# Security review passed")
-        meta = {"rules": {"repo.rules.x": {"file": "repo/rules/x.yaml", "cwe": ["1. not a cwe"], "owasp": ["---"], "fix": "+ none",
-                                           "references": [], "confidence": None}}}  # fmt: skip
+        meta = {
+            "rules": {
+                "repo.rules.x": {
+                    "file": "repo/rules/x.yaml",
+                    "cwe": ["1. not a cwe"],
+                    "owasp": ["---"],
+                    "fix": "+ none",
+                    "references": [],
+                    "confidence": None,
+                }
+            }
+        }
         out = triage.render_markdown(triage.build([f], meta, compare([f], [], ("ERROR",))))
         self.assertIn("  - \\# Security review passed", out)
         self.assertIn("  - 1\\. not a cwe; \\---", out)
@@ -274,8 +393,12 @@ class RenderTests(unittest.TestCase):
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", *args],
-        cwd=repo, check=True, capture_output=True, text=True, timeout=60,
-    ).stdout  # fmt: skip
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout
 
 
 @unittest.skipUnless(HAS_GIT, "needs git")
@@ -306,8 +429,15 @@ class CommandTests(unittest.TestCase):
     def write_findings(self, policy_ref=None):
         meta = {
             **{k: v for k, v in META.items() if k != "worktree"},
-            "worktree": worktree_state(self.repo.resolve(), baseline_binding_path(self.repo, self.repo / "baseline.toml")),
-            "policy": {"ref": policy_ref, "commit": None, "config_sha256": hashlib.sha256(self.config.encode()).hexdigest(), "adoption": False},
+            "worktree": worktree_state(
+                self.repo.resolve(), baseline_binding_path(self.repo, self.repo / "baseline.toml")
+            ),
+            "policy": {
+                "ref": policy_ref,
+                "commit": None,
+                "config_sha256": hashlib.sha256(self.config.encode()).hexdigest(),
+                "adoption": False,
+            },
         }
         (self.out / "findings.json").write_text(findings_to_json([self.old, self.new], meta))
 
@@ -373,7 +503,18 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(code, 2)
 
     def test_export_still_works_beside_the_work_list(self):
-        code, _, err = main_quiet(["triage", "export", "--repo", "owner/project", "--issue", "#1", "--db", str(Path(self.tmp.name) / "none.db")])
+        code, _, err = main_quiet(
+            [
+                "triage",
+                "export",
+                "--repo",
+                "owner/project",
+                "--issue",
+                "#1",
+                "--db",
+                str(Path(self.tmp.name) / "none.db"),
+            ]
+        )
         self.assertEqual(code, 2)  # no database, but the export command parsed and ran
         self.assertNotIn("unrecognized", err)
 

@@ -43,6 +43,14 @@ Shoalscan's own Opengrep rules in `rules/` have tests next to them. After instal
 - **Standard library only.** Shoalscan has no runtime dependencies, and that is a deliberate part of its security model: everything it runs is either in this repository or pinned in `tools.lock`. A change that adds a runtime dependency needs to be discussed in an issue first, before any code is written.
 - **Type hints** on new and changed functions.
 - **Small, focused changes.** One pull request should do one thing. A refactor and a behaviour change are easier to review as two pull requests.
+- **PEP 8, checked by Ruff,** with 120-character lines. Ruff formats the code and checks PEP 8 naming, layout and import order; CI runs both. Install the pinned version and run it before you push:
+
+  ```sh
+  python3 -m pip install --require-hashes -r requirements-dev.txt
+  ruff format src tests scripts && ruff check src tests scripts
+  ```
+
+  Ruff is a development tool only; it is not a dependency of Shoalscan. The configuration is in `pyproject.toml`. The schema migrations in `history.py` are exempt from the line length, because shipped migrations are never edited.
 - Follow the style of the surrounding code. Prefer clear names and plain control flow over clever tricks.
 - Fail closed. When Shoalscan cannot be sure a scan or a check is correct, it must report an error rather than a pass.
 

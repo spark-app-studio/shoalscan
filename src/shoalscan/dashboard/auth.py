@@ -106,7 +106,9 @@ class Sessions:
             if len(self._items) >= MAX_SESSIONS:
                 oldest = min(self._items, key=lambda k: self._items[k].last_used)
                 del self._items[oldest]
-            self._items[sha256_hex(sid)] = Session(now, now, secrets.token_urlsafe(32), self.tokens.stored(), secrets.token_hex(4))
+            self._items[sha256_hex(sid)] = Session(
+                now, now, secrets.token_urlsafe(32), self.tokens.stored(), secrets.token_hex(4)
+            )
         return sid
 
     def get(self, sid: str | None) -> Session | None:

@@ -12,12 +12,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import helpers
+from test_end_to_end import SAMPLE, TOOLS, tools_ready
 
 from shoalscan import gitref
 from shoalscan.cli import main
 from shoalscan.errors import SetupError
-from test_end_to_end import SAMPLE, TOOLS, tools_ready
 
 RULE = """rules:
 - id: no-pickle-loads
@@ -33,8 +32,12 @@ RULE = """rules:
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-c", "user.name=test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", *args],
-        cwd=repo, check=True, capture_output=True, text=True, timeout=60,
-    ).stdout  # fmt: skip
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout
 
 
 @unittest.skipUnless(shutil.which("git") and tools_ready(), "needs git and the installed Opengrep")
@@ -52,7 +55,9 @@ class PolicyRefTests(unittest.TestCase):
         )
         (self.repo / "security-rules").mkdir()
         (self.repo / "security-rules" / "pickle.yaml").write_text(RULE, encoding="utf-8")
-        (self.repo / "src" / "load.py").write_text("import pickle\n\ndef load(b):\n    return pickle.loads(b)\n", encoding="utf-8")
+        (self.repo / "src" / "load.py").write_text(
+            "import pickle\n\ndef load(b):\n    return pickle.loads(b)\n", encoding="utf-8"
+        )
         (self.repo / "big_unchanged.py").write_text("x = 1\n" * 600, encoding="utf-8")
         self.out = base / "out"
         git(self.repo, "init", "-q", "-b", "main")
@@ -107,7 +112,9 @@ class PolicyRefTests(unittest.TestCase):
             encoding="utf-8",
         )
         (self.repo / "security-rules" / "pickle.yaml").unlink()
-        (self.repo / "src" / "more.py").write_text("import pickle\n\ndef more(b):\n    return pickle.loads(b)\n", encoding="utf-8")
+        (self.repo / "src" / "more.py").write_text(
+            "import pickle\n\ndef more(b):\n    return pickle.loads(b)\n", encoding="utf-8"
+        )
         self.commit("relax")
         code, summary, out = self.run_policy()
         self.assertEqual(code, 1, out)
@@ -121,7 +128,10 @@ class PolicyRefTests(unittest.TestCase):
         entries = (self.repo / "baseline.toml").read_text(encoding="utf-8")
         (self.repo / "baseline.toml").write_text(
             entries
-            + '\n[[finding]]\ntool = "opengrep"\nrule = "x"\npath = "src/new.py"\nfingerprint = "f:0"\nissue = "#9"\nreason = "sneaky"\n',
+            + (
+                '\n[[finding]]\ntool = "opengrep"\nrule = "x"\npath = "src/new.py"\nfingerprint = "f:0"\nissue = '
+                '"#9"\nreason = "sneaky"\n'
+            ),
             encoding="utf-8",
         )
         self.commit("add an entry")
@@ -132,13 +142,17 @@ class PolicyRefTests(unittest.TestCase):
 
         # Changing an entry's reason is a change too.
         git(self.repo, "checkout", "-q", "main", "--", "baseline.toml")
-        (self.repo / "baseline.toml").write_text(entries.replace('reason = "initial"', 'reason = "edited"', 1), encoding="utf-8")
+        (self.repo / "baseline.toml").write_text(
+            entries.replace('reason = "initial"', 'reason = "edited"', 1), encoding="utf-8"
+        )
         self.commit("edit an entry")
         code, summary, _ = self.run_policy()
         self.assertEqual((code, summary["baseline_additions"]), (1, 1))
 
     def test_fix_and_remove_entry_passes(self):
-        (self.repo / "src" / "load.py").write_text("import json\n\ndef load(b):\n    return json.loads(b)\n", encoding="utf-8")
+        (self.repo / "src" / "load.py").write_text(
+            "import json\n\ndef load(b):\n    return json.loads(b)\n", encoding="utf-8"
+        )
         text = (self.repo / "baseline.toml").read_text(encoding="utf-8")
         blocks = text.split("\n[[finding]]\n")
         kept = [b for b in blocks if "no-pickle-loads" not in b]
@@ -167,7 +181,9 @@ class PolicyRefTests(unittest.TestCase):
         base = git(self.repo, "rev-parse", "refs/heads/main").strip()
         git(self.repo, "update-ref", "refs/remotes/origin/main", base)
         # A change commits a relaxed policy and tags it with the branch's names.
-        (self.repo / ".shoalscan.toml").write_text('excludes = ["src"]\n[opengrep]\ncommunity_rules = false\n', encoding="utf-8")
+        (self.repo / ".shoalscan.toml").write_text(
+            'excludes = ["src"]\n[opengrep]\ncommunity_rules = false\n', encoding="utf-8"
+        )
         self.commit("relaxed")
         relaxed = git(self.repo, "rev-parse", "HEAD").strip()
         git(self.repo, "tag", "origin/main", relaxed)
@@ -242,7 +258,10 @@ class PolicyRefTests(unittest.TestCase):
         self.commit("dockerfile")
         git(self.repo, "update-ref", "refs/heads/main", "HEAD")
         # A change the experimental Dockerfile parser leaves mostly unparsed, over the added lines.
-        broken = "FROM alpine:3.20\nRUN echo $(( 1 + )) ; fi ; done ; esac ;; ))) {{\nRUN cat <<- 'X' | sh\n\techo [[ -n \"${a:?}\" ]]\nX\nRUN echo ok\nUSER app\n"
+        broken = (
+            "FROM alpine:3.20\nRUN echo $(( 1 + )) ; fi ; done ; esac ;; ))) {{\nRUN cat <<- 'X' | sh\n\techo [[ -n "
+            '"${a:?}" ]]\nX\nRUN echo ok\nUSER app\n'
+        )
         (service / "Dockerfile").write_text(broken, encoding="utf-8")
         code, summary, out = self.run_policy()
         self.assertEqual(code, 1, out)
@@ -276,12 +295,15 @@ class PolicyRefTests(unittest.TestCase):
     def test_a_helm_template_with_a_syntax_error_only_warns_when_listed(self):
         yaml_rule = (
             "rules:\n  - id: privileged-container\n    languages: [yaml]\n    severity: WARNING\n"
-            "    message: a privileged container\n    pattern: \"privileged: true\"\n"
+            '    message: a privileged container\n    pattern: "privileged: true"\n'
         )
         (self.repo / "security-rules" / "k8s.yaml").write_text(yaml_rule, encoding="utf-8")
         templates = self.repo / "deploy" / "chart" / "templates"
         templates.mkdir(parents=True)
-        body = 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ include "app.fullname" . }}\nspec:\n  {{- if .Values.replicas }}\n  replicas: {{ .Values.replicas }}\n  {{- end }}\n'
+        body = (
+            'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {{ include "app.fullname" . }}\nspec:\n  {{- if '
+            ".Values.replicas }}\n  replicas: {{ .Values.replicas }}\n  {{- end }}\n"
+        )
         (templates / "deployment.yaml").write_text(body, encoding="utf-8")
         self.commit("chart")
         git(self.repo, "update-ref", "refs/heads/main", "HEAD")
@@ -293,7 +315,9 @@ class PolicyRefTests(unittest.TestCase):
         # The base branch lists Helm templates as warn-only: the same change now warns, loudly.
         (templates / "deployment.yaml").write_text(body, encoding="utf-8")
         config = (self.repo / ".shoalscan.toml").read_text(encoding="utf-8")
-        (self.repo / ".shoalscan.toml").write_text('parse_warn_only = ["deploy/**/templates/*.yaml"]\n' + config, encoding="utf-8")
+        (self.repo / ".shoalscan.toml").write_text(
+            'parse_warn_only = ["deploy/**/templates/*.yaml"]\n' + config, encoding="utf-8"
+        )
         self.commit("warn-only templates")
         git(self.repo, "update-ref", "refs/heads/main", "HEAD")
         (templates / "deployment.yaml").write_text(body + "  minReadySeconds: 5\n", encoding="utf-8")
@@ -321,7 +345,9 @@ class PolicyRefTests(unittest.TestCase):
         git(self.repo, "mv", "src/load.py", "src/loader.py")
         self.rename("src/load.py", "src/loader.py")
         text = (self.repo / "baseline.toml").read_text(encoding="utf-8")
-        (self.repo / "baseline.toml").write_text(text.replace('reason = "initial"', 'reason = "moved"'), encoding="utf-8")
+        (self.repo / "baseline.toml").write_text(
+            text.replace('reason = "initial"', 'reason = "moved"'), encoding="utf-8"
+        )
         self.commit("move and edit")
         code, summary, _ = self.run_policy()
         self.assertEqual(code, 1)
@@ -360,8 +386,10 @@ class AdoptionTests(unittest.TestCase):
     def cli(self, *args):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = main([*args, "--repo", str(self.repo), "--out", str(self.out), "--policy-ref", "refs/heads/main"]
-                        + (["--tools-dir", str(TOOLS)] if args[0] == "scan" else []))
+            code = main(
+                [*args, "--repo", str(self.repo), "--out", str(self.out), "--policy-ref", "refs/heads/main"]
+                + (["--tools-dir", str(TOOLS)] if args[0] == "scan" else [])
+            )
         return code, out.getvalue() + err.getvalue()
 
     def write_policy(self, config=True, baseline=True):

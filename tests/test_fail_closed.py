@@ -96,7 +96,7 @@ class RunScanTests(unittest.TestCase):
         (self.repo / "a.py").write_text("x = 1\n", encoding="utf-8")
         self.out = base / "out"
         self.out.mkdir()
-        (self.out / FINDINGS_JSON).write_text("{\"stale\": true}", encoding="utf-8")
+        (self.out / FINDINGS_JSON).write_text('{"stale": true}', encoding="utf-8")
         self.bin_dir = base / "bin"
         self.bin_dir.mkdir()
         self.scanner = StandInScanner(self.bin_dir)

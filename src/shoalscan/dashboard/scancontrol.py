@@ -23,8 +23,20 @@ from shoalscan import history
 from shoalscan.dashboard import scanning
 from shoalscan.errors import SetupError
 
-ENV_ALLOW = ("PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "USER", "LOGNAME", "SSL_CERT_FILE",
-             "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME")
+ENV_ALLOW = (
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TMPDIR",
+    "USER",
+    "LOGNAME",
+    "SSL_CERT_FILE",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CONFIG_HOME",
+)
 HOUR = 3600
 
 
@@ -83,7 +95,9 @@ class ScanControl:
         running = self.running()
         targets = self.targets()
         current = scanning.read_json(self.state_dir / scanning.STATUS_FILE)
-        current = {k: current.get(k) for k in ("target", "started", "finished", "outcome", "run_id")} if current else None
+        current = (
+            {k: current.get(k) for k in ("target", "started", "finished", "outcome", "run_id")} if current else None
+        )
         clone = None
         if current and targets and current.get("target") in targets.targets:
             clone = targets.clone_dir(targets.targets[current["target"]])
@@ -97,7 +111,12 @@ class ScanControl:
             "log": scanning.log_tail(self.state_dir, clone),
             "global_remaining": self.global_remaining(targets, requests) if targets else 0,
             "targets": [
-                {"name": t.name, "branch": t.branch, "enabled": t.enabled, "cooldown_remaining": self.cooldown_remaining(targets, t.name, requests)}
+                {
+                    "name": t.name,
+                    "branch": t.branch,
+                    "enabled": t.enabled,
+                    "cooldown_remaining": self.cooldown_remaining(targets, t.name, requests),
+                }
                 for t in (targets.targets.values() if targets else [])
             ],
             "triggers": read_triggers(),
@@ -105,13 +124,17 @@ class ScanControl:
 
     # ------------------------------------------------------------ starting a scan
 
-    def start(self, name: object, read_triggers, trigger: str = "dashboard", run_id: int | None = None) -> tuple[int, dict]:
+    def start(
+        self, name: object, read_triggers, trigger: str = "dashboard", run_id: int | None = None
+    ) -> tuple[int, dict]:
         """Validate the request and spawn the worker. Returns an HTTP status and a JSON body.
 
         `trigger` is "dashboard" (a fresh scan), "rescan" (the branch's tip
         again) or "rescan-commit" (the commit of `run_id`, which the caller has
         checked belongs to this repository)."""
-        if trigger not in ("dashboard", "rescan", "rescan-commit") or (trigger == "rescan-commit") != (run_id is not None):
+        if trigger not in ("dashboard", "rescan", "rescan-commit") or (trigger == "rescan-commit") != (
+            run_id is not None
+        ):
             return 400, {"error": "invalid scan request"}
         if not scanning.valid_name(name):
             return 400, {"error": "invalid target name"}
@@ -131,10 +154,19 @@ class ScanControl:
             requests = self._requests()
             wait = self.cooldown_remaining(targets, name, requests)
             if wait:
-                return 429, {"error": f"this target was scanned recently; try again in {wait} seconds", "retry_after": wait}
+                return 429, {
+                    "error": f"this target was scanned recently; try again in {wait} seconds",
+                    "retry_after": wait,
+                }
             wait = self.global_remaining(targets, requests)
             if wait:
-                return 429, {"error": f"the hourly limit of {targets.max_scans_per_hour} scans is reached; try again in {wait} seconds", "retry_after": wait}
+                return 429, {
+                    "error": (
+                        f"the hourly limit of {targets.max_scans_per_hour} scans is reached; try again in {wait} "
+                        "seconds"
+                    ),
+                    "retry_after": wait,
+                }
             self._spawn(target.name, trigger, run_id)
             now = time.time()
             requests["targets"][target.name] = now
@@ -148,13 +180,31 @@ class ScanControl:
         # The worker imports this same Shoalscan, wherever it is installed.
         env["PYTHONPATH"] = str(Path(shoalscan.__file__).resolve().parents[1])
         # -P and a neutral working directory: nothing in the state directory can be imported as a module.
-        argv = [sys.executable, "-P", "-m", "shoalscan.scanjob", "--state-dir", str(self.state_dir), "--trigger", trigger, f"--target={name}"]
+        argv = [
+            sys.executable,
+            "-P",
+            "-m",
+            "shoalscan.scanjob",
+            "--state-dir",
+            str(self.state_dir),
+            "--trigger",
+            trigger,
+            f"--target={name}",
+        ]
         if run_id is not None:
             argv.append(f"--run-id={int(run_id)}")
         log_path = self.state_dir / scanning.LOG_FILE
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         try:
-            self._worker = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fd, stderr=fd, env=env, cwd="/",
-                                            start_new_session=True, close_fds=True)
+            self._worker = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=fd,
+                stderr=fd,
+                env=env,
+                cwd="/",
+                start_new_session=True,
+                close_fds=True,
+            )
         finally:
             os.close(fd)

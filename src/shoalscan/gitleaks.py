@@ -64,22 +64,34 @@ def rule_ids(config: Path) -> list[str]:
     return sorted(rule_name(i) for i in ids)
 
 
-def build_command(binary: Path, target: Path, config: Path, ignore_dir: Path, report: Path, limits: Limits) -> list[str]:
+def build_command(
+    binary: Path, target: Path, config: Path, ignore_dir: Path, report: Path, limits: Limits
+) -> list[str]:
     return [
-        str(binary), "dir", str(target),
+        str(binary),
+        "dir",
+        str(target),
         # The pinned rules, never the repository's own .gitleaks.toml.
-        "--config", str(config),
+        "--config",
+        str(config),
         # An empty directory: the repository's .gitleaksignore is never read.
-        "--gitleaks-ignore-path", str(ignore_dir),
+        "--gitleaks-ignore-path",
+        str(ignore_dir),
         # gitleaks:allow comments do not silence findings.
         "--ignore-gitleaks-allow",
-        "--report-format", "json",
-        "--report-path", str(report),
-        "--exit-code", str(LEAKS_EXIT),
-        "--max-target-megabytes", str(max(1, math.ceil(limits.max_target_bytes / 1_000_000))),
-        "--no-banner", "--no-color",
-        "--log-level", "error",
-    ]  # fmt: skip
+        "--report-format",
+        "json",
+        "--report-path",
+        str(report),
+        "--exit-code",
+        str(LEAKS_EXIT),
+        "--max-target-megabytes",
+        str(max(1, math.ceil(limits.max_target_bytes / 1_000_000))),
+        "--no-banner",
+        "--no-color",
+        "--log-level",
+        "error",
+    ]
 
 
 def execute(cmd: list[str], cwd: Path, report: Path, timeout: int) -> list:
@@ -132,7 +144,12 @@ def normalise(report: list, root: Path, components: dict[str, str], excludes: tu
     for entry in report:
         if not isinstance(entry, dict):
             raise ScanError("the gitleaks report has an entry that is not an object")
-        rule_id, start, end, col = entry.get("RuleID"), entry.get("StartLine"), entry.get("EndLine"), entry.get("StartColumn")
+        rule_id, start, end, col = (
+            entry.get("RuleID"),
+            entry.get("StartLine"),
+            entry.get("EndLine"),
+            entry.get("StartColumn"),
+        )
         if not isinstance(rule_id, str) or not _RULE_ID.match(rule_id):
             raise ScanError(f"the gitleaks report has a malformed rule id: {str(rule_id)[:100]!r}")
         if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in (start, end, col)):
@@ -182,13 +199,31 @@ def normalise(report: list, root: Path, components: dict[str, str], excludes: tu
 def rule_metadata(findings: list[Finding]) -> dict[str, dict]:
     """The same shape as `opengrep.rule_metadata`, for the work list."""
     return {
-        f.rule: {"file": None, "cwe": [CWE], "owasp": [], "fix": FIX, "references": [], "confidence": None, "likelihood": None, "impact": None}
+        f.rule: {
+            "file": None,
+            "cwe": [CWE],
+            "owasp": [],
+            "fix": FIX,
+            "references": [],
+            "confidence": None,
+            "likelihood": None,
+            "impact": None,
+        }
         for f in findings
     }
 
 
-def run(binary: Path, binary_sha256: str, config: Path, config_sha256: str, root: Path, stage: Path, limits: Limits,
-        components: dict[str, str], excludes: tuple[str, ...]) -> tuple[list[Finding], list[str]]:  # fmt: skip
+def run(
+    binary: Path,
+    binary_sha256: str,
+    config: Path,
+    config_sha256: str,
+    root: Path,
+    stage: Path,
+    limits: Limits,
+    components: dict[str, str],
+    excludes: tuple[str, ...],
+) -> tuple[list[Finding], list[str]]:
     """Scan `root`. Returns the findings and the rule names that ran."""
     if not binary.is_file():
         raise SetupError(f"gitleaks is not installed: {binary} (run `shoalscan install`)")

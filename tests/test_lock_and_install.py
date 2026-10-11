@@ -1,7 +1,7 @@
 import copy
-import json
 import hashlib
 import io
+import json
 import os
 import tarfile
 import tempfile
@@ -125,7 +125,11 @@ class LockTests(unittest.TestCase):
         for plat in ("darwin-x86_64", "darwin-arm64", "linux-x86_64", "linux-arm64"):
             self.assertIn(plat, lock.opengrep)
             self.assertIn(plat, lock.cosign)
-        self.assertTrue(lock.opengrep_signature.certificate_identity.startswith("https://github.com/opengrep/opengrep/.github/workflows/"))
+        self.assertTrue(
+            lock.opengrep_signature.certificate_identity.startswith(
+                "https://github.com/opengrep/opengrep/.github/workflows/"
+            )
+        )
         self.assertEqual(lock.opengrep_signature.certificate_oidc_issuer, "https://token.actions.githubusercontent.com")
 
     def test_lock_rejects_bad_entries(self):
@@ -188,7 +192,9 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(binary.read_bytes(), b"opengrep-binary")
         self.assertEqual(os.stat(binary).st_mode & 0o777, 0o755)
         self.assertEqual(os.stat(self.dir / "cosign").st_mode & 0o777, 0o755)
-        self.assertEqual(self.signature_checks, [("cosign", b"opengrep-binary", self.lock.opengrep_signature.certificate_identity)])
+        self.assertEqual(
+            self.signature_checks, [("cosign", b"opengrep-binary", self.lock.opengrep_signature.certificate_identity)]
+        )
         rules = inst.community_rules_path(self.dir)
         files = sorted(p.relative_to(rules).as_posix() for p in rules.rglob("*") if p.is_file())
         self.assertEqual(files, ["LICENSE", "python/lang/eval.yaml"])
@@ -294,13 +300,18 @@ class InstallTests(unittest.TestCase):
             inst.verify_rules_dir(rules, self.lock)
 
     def test_extracted_rules_must_match_the_pinned_digest(self):
-        data = tomllib.loads(LOCK_PATH.read_text(encoding="utf-8"))
         lock = make_lock(self.assets, rules_tarball())
         object.__setattr__(lock.rules, "files_sha256", "0" * 64)
         with self.assertRaises(VerificationError):
             with redirect_stderr(io.StringIO()):
-                inst.install(self.dir, lock, fetch=self.assets.fetch, plat=PLAT, verify_signature=self.accept_signature,
-                             verify_bundle=self.accept_bundle)
+                inst.install(
+                    self.dir,
+                    lock,
+                    fetch=self.assets.fetch,
+                    plat=PLAT,
+                    verify_signature=self.accept_signature,
+                    verify_bundle=self.accept_bundle,
+                )
         self.assertFalse(inst.community_rules_path(self.dir).exists())
 
     def test_archive_path_escape_is_refused(self):

@@ -14,22 +14,50 @@ SECRET_LINE = 'token = "ghp_' + 'R2xq7Wd9TbKz4LmN8pQs3VhY6cJf1aEu5oGi"'
 
 def opengrep_sarif(root: Path) -> dict:
     region = {"startLine": 3, "startColumn": 9, "snippet": {"text": SECRET_LINE}}
-    location = {"physicalLocation": {"artifactLocation": {"uri": f"file://{root}/src/app.py"}, "region": region,
-                                     "contextRegion": {"startLine": 2, "endLine": 4, "snippet": {"text": SECRET_LINE}}}}  # fmt: skip
+    location = {
+        "physicalLocation": {
+            "artifactLocation": {"uri": f"file://{root}/src/app.py"},
+            "region": region,
+            "contextRegion": {"startLine": 2, "endLine": 4, "snippet": {"text": SECRET_LINE}},
+        }
+    }
     return {
         "version": "2.1.0",
-        "runs": [{
-            "tool": {"driver": {"name": "Opengrep OSS", "rules": [{"id": "r", "help": {"text": "Do not hard-code tokens."}}]}},
-            "invocations": [{"commandLine": "opengrep scan /tmp/secret-path", "executionSuccessful": True}],
-            "results": [{
-                "ruleId": "r",
-                "message": {"text": "A token is hard-coded."},
-                "locations": [location],
-                "relatedLocations": [{"physicalLocation": {"region": {"snippet": {"text": SECRET_LINE}}}}],
-                "codeFlows": [{"threadFlows": [{"locations": [{"location": {"physicalLocation": {"region": {"snippet": {"text": SECRET_LINE}}}}}]}]}],
-            }],
-        }],
-    }  # fmt: skip
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "Opengrep OSS",
+                        "rules": [{"id": "r", "help": {"text": "Do not hard-code tokens."}}],
+                    }
+                },
+                "invocations": [{"commandLine": "opengrep scan /tmp/secret-path", "executionSuccessful": True}],
+                "results": [
+                    {
+                        "ruleId": "r",
+                        "message": {"text": "A token is hard-coded."},
+                        "locations": [location],
+                        "relatedLocations": [{"physicalLocation": {"region": {"snippet": {"text": SECRET_LINE}}}}],
+                        "codeFlows": [
+                            {
+                                "threadFlows": [
+                                    {
+                                        "locations": [
+                                            {
+                                                "location": {
+                                                    "physicalLocation": {"region": {"snippet": {"text": SECRET_LINE}}}
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
 
 
 class RewriteTests(unittest.TestCase):

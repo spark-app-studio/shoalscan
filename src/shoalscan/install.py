@@ -113,11 +113,15 @@ def _place(src: Path, dest: Path, mode: int) -> None:
 
 def _identity_args(identity: OpengrepSignature) -> list[str]:
     return [
-        "--certificate-identity", identity.certificate_identity,
-        "--certificate-oidc-issuer", identity.certificate_oidc_issuer,
-        "--certificate-github-workflow-repository", identity.github_workflow_repository,
-        "--certificate-github-workflow-sha", identity.github_workflow_sha,
-    ]  # fmt: skip
+        "--certificate-identity",
+        identity.certificate_identity,
+        "--certificate-oidc-issuer",
+        identity.certificate_oidc_issuer,
+        "--certificate-github-workflow-repository",
+        identity.github_workflow_repository,
+        "--certificate-github-workflow-sha",
+        identity.github_workflow_sha,
+    ]
 
 
 def _verify_blob(cosign: Path, blob: Path, args: list[str]) -> None:
@@ -136,7 +140,9 @@ def _verify_blob(cosign: Path, blob: Path, args: list[str]) -> None:
 
 def run_cosign(cosign: Path, blob: Path, signature: Path, certificate: Path, identity: OpengrepSignature) -> None:
     """Verify `blob` against a detached signature and certificate, and the pinned workflow identity."""
-    _verify_blob(cosign, blob, ["--certificate", str(certificate), "--signature", str(signature), *_identity_args(identity)])
+    _verify_blob(
+        cosign, blob, ["--certificate", str(certificate), "--signature", str(signature), *_identity_args(identity)]
+    )
 
 
 def run_cosign_bundle(cosign: Path, blob: Path, bundle: Path, identity: OpengrepSignature) -> None:
@@ -247,9 +253,18 @@ def extract_member(archive: Path, member: str, dest: Path) -> None:
         raise VerificationError(f"{archive.name} has no {member}")
 
 
-def install_pinned_tool(tools_dir: Path, tool: PinnedTool, plat: str, fetch: Fetch, tmp: Path,
-                        cosign: Path | None = None, verify_bundle: Callable[..., None] = run_cosign_bundle) -> None:
-    """Install a scanner pinned by SHA-256 and its extra files. Files already in place are verified, not downloaded again.
+def install_pinned_tool(
+    tools_dir: Path,
+    tool: PinnedTool,
+    plat: str,
+    fetch: Fetch,
+    tmp: Path,
+    cosign: Path | None = None,
+    verify_bundle: Callable[..., None] = run_cosign_bundle,
+) -> None:
+    """Install a scanner pinned by SHA-256 and its extra files.
+
+    Files already in place are verified, not downloaded again.
 
     For a tool whose lock entry has a signature, the download's Sigstore
     bundle is checked with cosign before anything is extracted; without
@@ -273,7 +288,10 @@ def install_pinned_tool(tools_dir: Path, tool: PinnedTool, plat: str, fetch: Fet
     _fetch_verified(fetch, entry.download.url, entry.download.sha256, download_path)
     if tool.signature is not None and entry.bundle is not None:
         if cosign is None:
-            _log(f"WARNING: --skip-signature-check: the {tool.name} signature is NOT verified; only its SHA-256 pins protect it.")
+            _log(
+                f"WARNING: --skip-signature-check: the {tool.name} signature is NOT verified; only its SHA-256 pins "
+                "protect it."
+            )
         else:
             bundle = tmp / f"{tool.name}.sigstore.json"
             _fetch_verified(fetch, entry.bundle.url, entry.bundle.sha256, bundle)
@@ -459,4 +477,3 @@ def install(
         for name, tool in sorted(lock.tools.items()):
             install_pinned_tool(tools_dir, tool, plat, fetch, tmp, cosign, verify_bundle)
     _log(f"tools are ready in {tools_dir}")
-

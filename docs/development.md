@@ -16,6 +16,18 @@ The end-to-end tests run the real Opengrep, so install the tools first with `sho
 
 Shoalscan's own rules have Opengrep tests next to them; [Rules](rules.md#shoalscans-own-rules) shows how to run them.
 
+## Code style
+
+The code follows PEP 8 with 120-character lines, formatted and checked by Ruff, pinned by hash in `requirements-dev.txt`:
+
+```sh
+python3 -m pip install --require-hashes -r requirements-dev.txt
+ruff format src tests scripts
+ruff check src tests scripts
+```
+
+CI runs both checks. The test modules import `helpers` before `shoalscan` (it puts `src/` on the import path), and the import order in `pyproject.toml` keeps it that way.
+
 ## Deliberately insecure fixtures
 
 `rules/` holds each rule's Opengrep tests, and `tests/data/` the sample repository the end-to-end tests scan. Both contain insecure code on purpose, so that Shoalscan has something to find. They are never run or shipped, and both Shoalscan's own scan (`.shoalscan.toml`) and CodeQL (`.github/codeql/codeql-config.yml`) leave them out. CodeQL alerts raised on them before that were dismissed as false positives, with the reason recorded.

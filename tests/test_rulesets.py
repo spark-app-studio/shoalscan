@@ -71,7 +71,13 @@ class SplitTests(unittest.TestCase):
         self.assertEqual([(r.rule_id, r.category) for r in rules], [("one", "security"), ("two", "correctness")])
 
     def test_unexpected_shapes_fail(self):
-        for text in ("other: 1\nrules:\n- id: x\n", "rules: []\n", "rules:\n  id: x\n", "no rules here\n", "rules:\n- id: a\nextra: 1\n"):
+        for text in (
+            "other: 1\nrules:\n- id: x\n",
+            "rules: []\n",
+            "rules:\n  id: x\n",
+            "no rules here\n",
+            "rules:\n- id: a\nextra: 1\n",
+        ):
             with self.subTest(text=text), self.assertRaises(SetupError):
                 split_rules(text, "bad.yaml")
 
@@ -93,17 +99,17 @@ class SplitTests(unittest.TestCase):
     def test_category_misreads_are_refused(self):
         for text in (
             "rules:\n- id: one\n  metadata:\n    category: security\n    category: performance\n",
-            "rules:\n- id: one\n  metadata:\n    category: \"security\n      more\"\n",
+            'rules:\n- id: one\n  metadata:\n    category: "security\n      more"\n',
             "rules:\n- id: one\n  metadata:\n    category: 'security\n",
             "rules:\n- id: one\n  metadata:\n    category: best\n      practice\n",
             "rules:\n- id: one\n    two\n  pattern: x\n",
-            "rules:\n- id: \"one\n  pattern: x\n",
-            "rules:\n- id: \"o\\u006ee\"\n  pattern: x\n",
-            "rules:\n- id: one\n  metadata:\n    category: \"sec\\x75rity\"\n",
+            'rules:\n- id: "one\n  pattern: x\n',
+            'rules:\n- id: "o\\u006ee"\n  pattern: x\n',
+            'rules:\n- id: one\n  metadata:\n    category: "sec\\x75rity"\n',
         ):
             with self.subTest(text=text), self.assertRaises(SetupError):
                 split_rules(text, "misread.yaml")
-        ok = split_rules('rules:\n- id: "a # b"\n  metadata:\n    category: \'security\'  # note\n', "ok.yaml")
+        ok = split_rules("rules:\n- id: \"a # b\"\n  metadata:\n    category: 'security'  # note\n", "ok.yaml")
         self.assertEqual([(r.rule_id, r.category) for r in ok], [("a # b", "security")])
 
     def test_select(self):
@@ -118,7 +124,13 @@ class SplitTests(unittest.TestCase):
         text, kept, dropped = select(MIXED, "m", "community.python", None, none)
         self.assertEqual((text, kept, dropped), (MIXED, 3, 0))
 
-        text, kept, dropped = select(MIXED, "m", "community.python", frozenset({"security", UNCATEGORISED}), RuleIdFilter(["community.python.eval-use"]))
+        text, kept, dropped = select(
+            MIXED,
+            "m",
+            "community.python",
+            frozenset({"security", UNCATEGORISED}),
+            RuleIdFilter(["community.python.eval-use"]),
+        )
         self.assertEqual([r.rule_id for r in split_rules(text, "out")], ["no-metadata"])
 
         self.assertEqual(select(MIXED, "m", "community.python", frozenset({"performance"}), none)[0], None)
@@ -173,7 +185,8 @@ class ConfigKeyTests(unittest.TestCase):
         self.assertEqual(cfg.opengrep.exclude_rules, ())
         self.assertEqual(cfg.non_blocking_paths, ())
         cfg = self.parse(
-            'non_blocking_paths = ["demo/", "examples"]\n[opengrep]\ncategories = ["security", "correctness", "uncategorised"]\n'
+            'non_blocking_paths = ["demo/", "examples"]\n[opengrep]\ncategories = ["security", "correctness", '
+            '"uncategorised"]\n'
             'exclude_rules = ["community.typescript.react.*", "community.python.lang.x"]\n'
         )
         self.assertEqual(cfg.non_blocking_paths, ("demo", "examples"))

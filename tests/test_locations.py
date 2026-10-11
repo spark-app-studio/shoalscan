@@ -47,7 +47,11 @@ class LocationTests(unittest.TestCase):
                 ["check", "--repo", str(repo), "--out", str(repo / ".shoalscan-out")],
             ):
                 err = io.StringIO()
-                with self.subTest(args=args), contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                with (
+                    self.subTest(args=args),
+                    contextlib.redirect_stderr(err),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
                     self.assertEqual(main(args), 2)
                 self.assertIn("inside the repository", err.getvalue())
 

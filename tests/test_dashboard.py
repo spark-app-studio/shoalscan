@@ -163,8 +163,16 @@ class DashboardServerTests(unittest.TestCase):
 
     def test_every_private_endpoint_needs_a_session(self):
         private = [p for p, (_, _, public) in server.ROUTES.items() if not public]
-        api = ["/api/session", "/api/repos", "/api/about", "/api/overview?repo=acme/app", "/api/findings?repo=acme/app",
-               "/api/rule?repo=acme/app&rule=x", "/api/runs?repo=acme/app", "/api/unknown"]
+        api = [
+            "/api/session",
+            "/api/repos",
+            "/api/about",
+            "/api/overview?repo=acme/app",
+            "/api/findings?repo=acme/app",
+            "/api/rule?repo=acme/app&rule=x",
+            "/api/runs?repo=acme/app",
+            "/api/unknown",
+        ]
         for path in private + api:
             for cookie in (None, "forged-session-id"):
                 with self.subTest(path=path, cookie=cookie):
@@ -206,7 +214,9 @@ class DashboardServerTests(unittest.TestCase):
                 self.assertNotIn("Set-Cookie", headers)
         status, _, _ = self.login(origin=False)
         self.assertEqual(status, 403)
-        status, _, _ = self.request("POST", "/login", "token=" + self.token, {"Origin": self.origin, "Content-Type": "text/plain"})
+        status, _, _ = self.request(
+            "POST", "/login", "token=" + self.token, {"Origin": self.origin, "Content-Type": "text/plain"}
+        )
         self.assertEqual(status, 415)
         self.httpd.app.limiter = auth.LoginLimiter()
 
@@ -228,8 +238,15 @@ class DashboardServerTests(unittest.TestCase):
             with self.subTest(headers=headers):
                 self.assertEqual(self.request("POST", "/logout", headers=headers, cookie=cookie)[0], 403)
         # The right CSRF token from another origin is still refused.
-        self.assertEqual(self.request("POST", "/logout", headers={"Origin": "https://evil.example", "X-CSRF-Token": csrf}, cookie=cookie)[0], 403)
-        status, headers, _ = self.request("POST", "/logout", headers={"Origin": self.origin, "X-CSRF-Token": csrf}, cookie=cookie)
+        self.assertEqual(
+            self.request(
+                "POST", "/logout", headers={"Origin": "https://evil.example", "X-CSRF-Token": csrf}, cookie=cookie
+            )[0],
+            403,
+        )
+        status, headers, _ = self.request(
+            "POST", "/logout", headers={"Origin": self.origin, "X-CSRF-Token": csrf}, cookie=cookie
+        )
         self.assertEqual(status, 204)
         self.assertIn("Max-Age=0", headers["Set-Cookie"])
         self.assertEqual(self.request("GET", "/api/repos", cookie=cookie)[0], 401)
@@ -253,14 +270,27 @@ class DashboardServerTests(unittest.TestCase):
             with self.subTest(host=host):
                 self.assertEqual(self.request("GET", "/api/repos", headers={"Host": host}, cookie=cookie)[0], 421)
                 self.assertEqual(self.request("GET", "/login", headers={"Host": host})[0], 421)
-                status, _, _ = self.request("POST", "/login", urlencode({"token": self.token}),
-                                            {"Host": host, "Origin": f"https://{host}", "Content-Type": "application/x-www-form-urlencoded"})
+                status, _, _ = self.request(
+                    "POST",
+                    "/login",
+                    urlencode({"token": self.token}),
+                    {"Host": host, "Origin": f"https://{host}", "Content-Type": "application/x-www-form-urlencoded"},
+                )
                 self.assertEqual(status, 421)
 
     def test_no_path_traversal_on_static_files(self):
         cookie = self.session()
-        for path in ("/static/../server.py", "/static/%2e%2e/server.py", "/static/app.js/../../auth.py", "/static/", "//etc/passwd",
-                     "/static/..%2fserver.py", "/static/app.js%00", "/../../../../etc/passwd", "/static/index.html"):
+        for path in (
+            "/static/../server.py",
+            "/static/%2e%2e/server.py",
+            "/static/app.js/../../auth.py",
+            "/static/",
+            "//etc/passwd",
+            "/static/..%2fserver.py",
+            "/static/app.js%00",
+            "/../../../../etc/passwd",
+            "/static/index.html",
+        ):
             with self.subTest(path=path):
                 status, _, body = self.request("GET", path, cookie=cookie)
                 self.assertEqual(status, 404)
@@ -270,8 +300,12 @@ class DashboardServerTests(unittest.TestCase):
     def test_bounded_requests_and_methods(self):
         cookie = self.session()
         self.assertEqual(self.request("GET", "/api/repos?" + "a" * 5000, cookie=cookie)[0], 414)
-        status, _, _ = self.request("POST", "/login", "token=" + "x" * 5000,
-                                    {"Origin": self.origin, "Content-Type": "application/x-www-form-urlencoded"})
+        status, _, _ = self.request(
+            "POST",
+            "/login",
+            "token=" + "x" * 5000,
+            {"Origin": self.origin, "Content-Type": "application/x-www-form-urlencoded"},
+        )
         self.assertEqual(status, 413)
         for method in ("PUT", "DELETE", "PATCH", "OPTIONS"):
             with self.subTest(method=method):
@@ -285,7 +319,9 @@ class DashboardServerTests(unittest.TestCase):
         self.get_json("/api/findings?repo=acme/app&limit=ten", cookie, 400)
         self.get_json("/api/findings?repo=acme/app&run=-1", cookie, 400)
         self.get_json("/api/rule?repo=acme/app", cookie, 400)
-        self.assertEqual(self.get_json("/api/findings?repo=acme/app&limit=ten", cookie, 400), {"error": "invalid query parameter"})
+        self.assertEqual(
+            self.get_json("/api/findings?repo=acme/app&limit=ten", cookie, 400), {"error": "invalid query parameter"}
+        )
         self.get_json("/api/unknown", cookie, 404)
         self.get_json("/api/unknown?repo=acme/app", cookie, 404)
         other = self.get_json("/api/runs?repo=acme/other", cookie)["runs"][0]["id"]
@@ -308,10 +344,12 @@ class DashboardServerTests(unittest.TestCase):
                 return b"".join(chunks)
 
     def test_errors_from_the_http_parser_carry_the_security_headers(self):
-        for request, code in ((b"FOO / HTTP/1.1\r\nHost: x\r\n\r\n", b"501"),
-                              (b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n", b"414"),
-                              (b"GET / HTTP/9.9\r\n\r\n", b"505"),
-                              (b"GARBAGE\r\n\r\n", b"400")):
+        for request, code in (
+            (b"FOO / HTTP/1.1\r\nHost: x\r\n\r\n", b"501"),
+            (b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n", b"414"),
+            (b"GET / HTTP/9.9\r\n\r\n", b"505"),
+            (b"GARBAGE\r\n\r\n", b"400"),
+        ):
             with self.subTest(code=code):
                 reply = self.raw_tls(request)
                 head, _, body = reply.partition(b"\r\n\r\n")
@@ -372,26 +410,98 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(set(repos[0]), {"name", "runs", "latest"})
 
         o = self.get_json("/api/overview?repo=acme/app", cookie)
-        self.assertEqual(set(o), {"repo", "trend_kind", "latest_run", "latest_trend_run", "series", "weekly", "time_to_fix",
-                                  "age_buckets", "by_component", "blocking", "reviews"})
-        self.assertEqual(set(o["series"][0]), {"run", "scanned_at", "commit", "open", "baseline_size", "suppressions",
-                                               "suppressed_findings", "unscanned_skipped", "unscanned_errored", "blocking", "lists"})
+        self.assertEqual(
+            set(o),
+            {
+                "repo",
+                "trend_kind",
+                "latest_run",
+                "latest_trend_run",
+                "series",
+                "weekly",
+                "time_to_fix",
+                "age_buckets",
+                "by_component",
+                "blocking",
+                "reviews",
+            },
+        )
+        self.assertEqual(
+            set(o["series"][0]),
+            {
+                "run",
+                "scanned_at",
+                "commit",
+                "open",
+                "baseline_size",
+                "suppressions",
+                "suppressed_findings",
+                "unscanned_skipped",
+                "unscanned_errored",
+                "blocking",
+                "lists",
+            },
+        )
         self.assertEqual(set(o["blocking"]), {"run", "known", "total", "new", "baselined", "top"})
         self.assertEqual(set(o["weekly"][0]), {"week", "new", "fixed"})
         self.assertEqual(set(o["time_to_fix"]), {"fixed", "mean_days", "median_days"})
         self.assertEqual(set(o["by_component"]), {"run", "severities", "max_cell", "rows"})
-        self.assertEqual(set(o["by_component"]["rows"][0]), {"component", "cells", "levels", "new", "new_blocking", "score"})
-        run_keys = {"id", "kind", "ref", "commit", "scanned_at", "recorded_at", "result", "outcome", "check_exit", "status", "lists",
-                    "findings", "by_severity", "by_severity_non_blocking_paths", "new", "new_blocking", "new_in_non_blocking_paths",
-                    "stale", "baseline_size", "baseline_additions", "suppressions", "unscanned", "policy_ref", "shoalscan_version",
-                    "duration_seconds", "blocking_class", "rescanned"}
+        self.assertEqual(
+            set(o["by_component"]["rows"][0]), {"component", "cells", "levels", "new", "new_blocking", "score"}
+        )
+        run_keys = {
+            "id",
+            "kind",
+            "ref",
+            "commit",
+            "scanned_at",
+            "recorded_at",
+            "result",
+            "outcome",
+            "check_exit",
+            "status",
+            "lists",
+            "findings",
+            "by_severity",
+            "by_severity_non_blocking_paths",
+            "new",
+            "new_blocking",
+            "new_in_non_blocking_paths",
+            "stale",
+            "baseline_size",
+            "baseline_additions",
+            "suppressions",
+            "unscanned",
+            "policy_ref",
+            "shoalscan_version",
+            "duration_seconds",
+            "blocking_class",
+            "rescanned",
+        }
         self.assertEqual(set(o["latest_run"]), run_keys)
 
         f = self.get_json("/api/findings?repo=acme/app", cookie)
         self.assertEqual(set(f), {"repo", "run", "total", "limit", "offset", "sort", "facets", "findings"})
         self.assertEqual(set(f["facets"]), {"severities", "rules", "components"})
-        self.assertEqual(set(f["findings"][0]), {"severity", "tool", "rule", "path", "line", "fingerprint", "component", "message",
-                                                 "first_seen", "new", "new_blocking", "blocking_class", "key", "review"})
+        self.assertEqual(
+            set(f["findings"][0]),
+            {
+                "severity",
+                "tool",
+                "rule",
+                "path",
+                "line",
+                "fingerprint",
+                "component",
+                "message",
+                "first_seen",
+                "new",
+                "new_blocking",
+                "blocking_class",
+                "key",
+                "review",
+            },
+        )
 
         r = self.get_json("/api/rule?" + urlencode({"repo": "acme/app", "rule": "shoalscan.secret-in-log"}), cookie)
         self.assertEqual(set(r), {"repo", "run", "rule", "total", "messages", "locations"})
@@ -406,7 +516,9 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(set(about), {"shoalscan", "scanners", "rule_sources", "scanners_in_use"})
         self.assertEqual(about["scanners"][0]["name"], "Opengrep")
         self.assertRegex(about["scanners"][0]["version"], r"^\d+\.\d+\.\d+$")
-        self.assertEqual([s["name"] for s in about["scanners"]], ["Opengrep", "cosign", "Gitleaks", "Hadolint", "zizmor", "Trivy"])
+        self.assertEqual(
+            [s["name"] for s in about["scanners"]], ["Opengrep", "cosign", "Gitleaks", "Hadolint", "zizmor", "Trivy"]
+        )
         self.assertEqual(about["scanners"][2]["licence"], "MIT")
         self.assertIn("Commons Clause", about["rule_sources"][0]["licence"])
         self.assertEqual(self.get_json("/api/session", cookie).keys(), {"csrf"})
@@ -418,23 +530,34 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(last["status"]["label"], "Blocked: 2 new blocking findings")
         run = self.get_json(f"/api/run?repo=acme/app&run={last['id']}", cookie)["run"]
         self.assertEqual(run["id"], last["id"])
-        self.assertEqual(self.get_json(f"/api/findings?repo=acme/app&run={last['id']}&new_blocking=1", cookie)["total"], 2)
+        self.assertEqual(
+            self.get_json(f"/api/findings?repo=acme/app&run={last['id']}&new_blocking=1", cookie)["total"], 2
+        )
         self.assertEqual(self.get_json(f"/api/findings?repo=acme/app&run={last['id']}&age=0", cookie)["total"], 1)
         self.assertEqual(self.get_json(f"/api/stale?repo=acme/app&run={last['id']}", cookie)["total"], 1)
         self.assertEqual(self.get_json(f"/api/files?repo=acme/app&run={last['id']}&kind=skipped", cookie)["total"], 2)
         self.assertEqual(self.get_json(f"/api/suppressions?repo=acme/app&run={last['id']}", cookie)["total"], 1)
         changes = self.get_json("/api/changes?repo=acme/app&week=2026-09-14&change=fixed", cookie)
         self.assertEqual([f["path"] for f in changes["findings"]], ["src/a.py"])
-        for bad in ("/api/files?repo=acme/app&kind=../x", "/api/changes?repo=acme/app&week=x&change=new",
-                    "/api/changes?repo=acme/app&week=2026-09-14&change=gone", "/api/findings?repo=acme/app&new=yes",
-                    "/api/findings?repo=acme/app&age=x"):
+        for bad in (
+            "/api/files?repo=acme/app&kind=../x",
+            "/api/changes?repo=acme/app&week=x&change=new",
+            "/api/changes?repo=acme/app&week=2026-09-14&change=gone",
+            "/api/findings?repo=acme/app&new=yes",
+            "/api/findings?repo=acme/app&age=x",
+        ):
             with self.subTest(bad=bad):
                 self.assertEqual(self.get_json(bad, cookie, 400), {"error": "invalid query parameter"})
         for bad in ("99", "5", "-1", "1.5"):
             with self.subTest(age=bad):
-                self.assertEqual(self.get_json(f"/api/findings?repo=acme/app&age={bad}", cookie, 400), {"error": "invalid query parameter"})
+                self.assertEqual(
+                    self.get_json(f"/api/findings?repo=acme/app&age={bad}", cookie, 400),
+                    {"error": "invalid query parameter"},
+                )
         older = [r for r in runs if r["kind"] == "scheduled"][1]["id"]
-        self.assertIn("latest trend run", self.get_json(f"/api/findings?repo=acme/app&run={older}&age=0", cookie, 400)["error"])
+        self.assertIn(
+            "latest trend run", self.get_json(f"/api/findings?repo=acme/app&run={older}&age=0", cookie, 400)["error"]
+        )
 
     def test_blocking_filter_and_priority_sort(self):
         cookie = self.session()
@@ -445,7 +568,11 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(self.get_json("/api/findings?repo=acme/app&blocking=1&baselined=1", cookie)["total"], 0)
         self.assertIsNone(self.get_json("/api/findings?repo=acme/app", cookie)["sort"])
         self.assertEqual(self.get_json("/api/findings?repo=acme/app&sort=priority", cookie)["sort"], "priority")
-        for bad in ("/api/findings?repo=acme/app&sort=path", "/api/findings?repo=acme/app&blocking=2", "/api/findings?repo=acme/app&baselined=x"):
+        for bad in (
+            "/api/findings?repo=acme/app&sort=path",
+            "/api/findings?repo=acme/app&blocking=2",
+            "/api/findings?repo=acme/app&baselined=x",
+        ):
             with self.subTest(bad=bad):
                 self.get_json(bad, cookie, 400)
         panel = self.get_json("/api/overview?repo=acme/app", cookie)["blocking"]
@@ -490,7 +617,12 @@ class DashboardServerTests(unittest.TestCase):
         findings = self.get_json("/api/findings?repo=acme/app&severity=ERROR", cookie)["findings"]
         key = findings[0]["key"]
         self.assertEqual(findings[0]["review"]["status"], "open")
-        good = {"repo": "acme/app", "finding_key": key, "status": "false_positive", "description": "Constant input; never user controlled."}
+        good = {
+            "repo": "acme/app",
+            "finding_key": key,
+            "status": "false_positive",
+            "description": "Constant input; never user controlled.",
+        }
         # Session, CSRF and the exact Origin.
         self.assertEqual(self.post_json(good)[0], 401)
         self.assertEqual(self.post_json(good, cookie)[0], 403)
@@ -498,16 +630,33 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(self.post_json(good, cookie, csrf, origin="https://evil.example")[0], 403)
         self.assertEqual(self.post_json(good, cookie, csrf, origin=None)[0], 403)
         # What may not be set.
-        for change in ({"status": "verified_fixed"}, {"status": "regression"}, {"status": "closed"}, {"description": "short"},
-                       {"description": ""}, {"description": None}, {"finding_key": ["a", "b"]}, {"finding_key": "x"},
-                       {"run_id": "1"}, {"repo": "../x"}, {"surprise": 1}):
+        for change in (
+            {"status": "verified_fixed"},
+            {"status": "regression"},
+            {"status": "closed"},
+            {"description": "short"},
+            {"description": ""},
+            {"description": None},
+            {"finding_key": ["a", "b"]},
+            {"finding_key": "x"},
+            {"run_id": "1"},
+            {"repo": "../x"},
+            {"surprise": 1},
+        ):
             with self.subTest(change=change):
                 self.assertEqual(self.post_json({**good, **change}, cookie, csrf)[0], 400)
         no_description = dict(good)
         del no_description["description"]
         self.assertEqual(self.post_json(no_description, cookie, csrf)[0], 400)
-        self.assertEqual(self.post_json({**good, "finding_key": ["opengrep", "r", "nope.py", "x:0"]}, cookie, csrf)[0], 404)
-        bulk = {"repo": "acme/app", "finding_keys": [key] * 501, "status": "fixed", "description": "Bulk fix of the eval calls."}
+        self.assertEqual(
+            self.post_json({**good, "finding_key": ["opengrep", "r", "nope.py", "x:0"]}, cookie, csrf)[0], 404
+        )
+        bulk = {
+            "repo": "acme/app",
+            "finding_keys": [key] * 501,
+            "status": "fixed",
+            "description": "Bulk fix of the eval calls.",
+        }
         self.assertEqual(self.post_json(bulk, cookie, csrf)[0], 400)
         self.assertEqual(self.post_json({**bulk, "finding_keys": [key, key]}, cookie, csrf)[0], 400)
         # A hostile description is stored as text and only ever sent as JSON.
@@ -545,15 +694,21 @@ def _openssl_binaries() -> list[str]:
     """Every openssl on this machine: OpenSSL 3 and LibreSSL behave differently."""
     found = []
     for candidate in (OPENSSL, "/usr/bin/openssl", "/opt/homebrew/bin/openssl", "/usr/local/bin/openssl"):
-        if candidate and os.path.exists(candidate) and os.path.realpath(candidate) not in {os.path.realpath(f) for f in found}:
+        if (
+            candidate
+            and os.path.exists(candidate)
+            and os.path.realpath(candidate) not in {os.path.realpath(f) for f in found}
+        ):
             found.append(candidate)
     return found
 
 
 FOREIGN = (
-    "[foreign_dns]\nbasicConstraints = critical,CA:FALSE\nextendedKeyUsage = serverAuth\nsubjectAltName = DNS:evil.example\n"
+    "[foreign_dns]\nbasicConstraints = critical,CA:FALSE\nextendedKeyUsage = serverAuth\nsubjectAltName = "
+    "DNS:evil.example\n"
     "[foreign_ip]\nbasicConstraints = critical,CA:FALSE\nextendedKeyUsage = serverAuth\nsubjectAltName = IP:10.9.8.7\n"
-    "[foreign_ip6]\nbasicConstraints = critical,CA:FALSE\nextendedKeyUsage = serverAuth\nsubjectAltName = IP:2001:db8::7\n"
+    "[foreign_ip6]\nbasicConstraints = critical,CA:FALSE\nextendedKeyUsage = serverAuth\nsubjectAltName = "
+    "IP:2001:db8::7\n"
 )
 
 
@@ -580,7 +735,9 @@ class NameConstraintTests(unittest.TestCase):
     """The CA must refuse every name it was not made for, whatever types were given."""
 
     def verify(self, openssl: str, work: Path, cert: str) -> bool:
-        proc = subprocess.run([openssl, "verify", "-CAfile", "ca.pem", cert], cwd=work, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(
+            [openssl, "verify", "-CAfile", "ca.pem", cert], cwd=work, capture_output=True, text=True, timeout=60
+        )
         return proc.returncode == 0 and ": OK" in proc.stdout
 
     def test_foreign_names_fail_for_every_kind_of_name_list(self):
@@ -595,8 +752,14 @@ class NameConstraintTests(unittest.TestCase):
                 with self.subTest(openssl=openssl, case=label), tempfile.TemporaryDirectory() as tmp:
                     work = Path(tmp)
                     tlsgen.make_ca(openssl, work, ips, names)
-                    text = subprocess.run([openssl, "x509", "-in", "ca.pem", "-noout", "-text"], cwd=work,
-                                          capture_output=True, text=True, timeout=60, check=True).stdout
+                    text = subprocess.run(
+                        [openssl, "x509", "-in", "ca.pem", "-noout", "-text"],
+                        cwd=work,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        check=True,
+                    ).stdout
                     self.assertRegex(text, r"Name Constraints: critical")
                     self.assertIn("Permitted", text)
                     self.assertIn("DNS:" + (names[0] if names else tlsgen.NO_DNS_NAME), text)
@@ -606,7 +769,9 @@ class NameConstraintTests(unittest.TestCase):
                     if not any(":" not in v for v in ips):
                         self.assertIn("IP:0.0.0.0/0.0.0.0", text)  # no IPv4 given: IPv4 excluded
                     tlsgen.sign_leaf(openssl, work, "ok.key", "ok.pem")
-                    self.assertTrue(self.verify(openssl, work, "ok.pem"), "the certificate for the given names must verify")
+                    self.assertTrue(
+                        self.verify(openssl, work, "ok.pem"), "the certificate for the given names must verify"
+                    )
                     (work / "foreign.cnf").write_text(FOREIGN, encoding="ascii")
                     for section in ("foreign_dns", "foreign_ip", "foreign_ip6"):
                         tlsgen.sign_leaf(openssl, work, f"{section}.key", f"{section}.pem", "foreign.cnf", section)

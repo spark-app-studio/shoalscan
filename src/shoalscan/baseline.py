@@ -53,9 +53,7 @@ def parse_baseline(data: dict, source: str = "baseline") -> list[Entry]:
         keys = set(item)
         if keys != set(ENTRY_KEYS):
             extra, missing = keys - set(ENTRY_KEYS), set(ENTRY_KEYS) - keys
-            raise SetupError(
-                f"{source}: finding {n} has unknown keys {sorted(extra)} or is missing {sorted(missing)}"
-            )
+            raise SetupError(f"{source}: finding {n} has unknown keys {sorted(extra)} or is missing {sorted(missing)}")
         for k in ENTRY_KEYS:
             if not isinstance(item[k], str) or not item[k].strip():
                 raise SetupError(f"{source}: finding {n}: {k} must be a non-empty string")

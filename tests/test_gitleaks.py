@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 
 import helpers
+from test_lock_and_install import GITLEAKS_BINARY, PLAT, Assets, sha, tool_tarball
 
 from shoalscan import gitleaks
 from shoalscan import install as inst
@@ -20,7 +21,6 @@ from shoalscan.cli import main
 from shoalscan.config import Limits, parse_config
 from shoalscan.errors import ScanError, SetupError, VerificationError
 from shoalscan.lockfile import load_lock, parse_lock, sha256_file
-from test_lock_and_install import GITLEAKS_BINARY, PLAT, Assets, sha, tool_tarball
 
 LOCK_PATH = helpers.ROOT / "tools.lock"
 TOOLS = helpers.tools_dir()
@@ -34,7 +34,10 @@ def gitleaks_ready() -> bool:
     tool = lock.tools["gitleaks"]
     binary, config = inst.tool_path(TOOLS, "gitleaks"), inst.tool_file_path(TOOLS, "gitleaks", "config")
     try:
-        return sha256_file(binary) == tool.platforms[inst.current_platform()].binary_sha256 and sha256_file(config) == tool.files["config"].sha256
+        return (
+            sha256_file(binary) == tool.platforms[inst.current_platform()].binary_sha256
+            and sha256_file(config) == tool.files["config"].sha256
+        )
     except (OSError, KeyError):
         return False
 
@@ -133,7 +136,14 @@ class InstallTests(unittest.TestCase):
 
 class CommandTests(unittest.TestCase):
     def test_repository_controlled_silencing_is_turned_off(self):
-        cmd = gitleaks.build_command(Path("/t/gitleaks"), Path("/repo"), Path("/t/cfg"), Path("/s/ign"), Path("/s/r.json"), Limits(max_target_bytes=2_500_000))
+        cmd = gitleaks.build_command(
+            Path("/t/gitleaks"),
+            Path("/repo"),
+            Path("/t/cfg"),
+            Path("/s/ign"),
+            Path("/s/r.json"),
+            Limits(max_target_bytes=2_500_000),
+        )
         joined = " ".join(cmd)
         self.assertIn("--config /t/cfg", joined)
         self.assertIn("--gitleaks-ignore-path /s/ign", joined)
@@ -177,7 +187,15 @@ class ExecuteTests(unittest.TestCase):
         self.assertEqual(len(self.run_standin('[{"RuleID": "x"}]', gitleaks.LEAKS_EXIT)), 1)
 
     def test_anything_else_fails_the_scan(self):
-        cases = [("[]", 1), ("[]", 2), (None, 0), ("{}", 0), ("not json", 0), ("[]", gitleaks.LEAKS_EXIT), ('[{"RuleID": "x"}]', 0)]
+        cases = [
+            ("[]", 1),
+            ("[]", 2),
+            (None, 0),
+            ("{}", 0),
+            ("not json", 0),
+            ("[]", gitleaks.LEAKS_EXIT),
+            ('[{"RuleID": "x"}]', 0),
+        ]
         for report, code in cases:
             self.report.unlink(missing_ok=True)
             with self.subTest(report=report, code=code), self.assertRaises(ScanError):
@@ -191,25 +209,45 @@ class NormaliseTests(unittest.TestCase):
         (self.root / "src").mkdir()
         (self.root / "vendor").mkdir()
         (self.root / ".git").mkdir()
-        (self.root / "src" / "app.py").write_text(f'class Client:\n    def connect(self):\n        token = "{SECRET}"\n        other = "{SECRET}"\n')
+        (self.root / "src" / "app.py").write_text(
+            f'class Client:\n    def connect(self):\n        token = "{SECRET}"\n        other = "{SECRET}"\n'
+        )
         (self.root / "vendor" / "lib.py").write_text(f'key = "{AWS}"\n')
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def entry(self, path, line, secret=SECRET, rule="github-pat", col=17):
-        return {"RuleID": rule, "File": str(self.root / path), "StartLine": line, "EndLine": line, "StartColumn": col,
-                "EndColumn": col + len(secret), "Secret": secret, "Match": f'token = "{secret}"', "Description": "Found a GitHub token."}  # fmt: skip
+        return {
+            "RuleID": rule,
+            "File": str(self.root / path),
+            "StartLine": line,
+            "EndLine": line,
+            "StartColumn": col,
+            "EndColumn": col + len(secret),
+            "Secret": secret,
+            "Match": f'token = "{secret}"',
+            "Description": "Found a GitHub token.",
+        }
 
     def normalise(self, report, excludes=("vendor",)):
         return gitleaks.normalise(report, self.root, {"src/": "app"}, excludes)
 
     def test_findings_hold_no_secret_and_skip_excluded_paths(self):
-        report = [self.entry("src/app.py", 3), self.entry("src/app.py", 4), self.entry("vendor/lib.py", 1, AWS, "aws-access-token"),
-                  self.entry(".git/config", 1)]  # fmt: skip
+        report = [
+            self.entry("src/app.py", 3),
+            self.entry("src/app.py", 4),
+            self.entry("vendor/lib.py", 1, AWS, "aws-access-token"),
+            self.entry(".git/config", 1),
+        ]
         found = self.normalise(report)
-        self.assertEqual([(f.rule, f.path, f.line, f.component, f.severity) for f in found],
-                         [("gitleaks.github-pat", "src/app.py", 3, "app", "ERROR"), ("gitleaks.github-pat", "src/app.py", 4, "app", "ERROR")])  # fmt: skip
+        self.assertEqual(
+            [(f.rule, f.path, f.line, f.component, f.severity) for f in found],
+            [
+                ("gitleaks.github-pat", "src/app.py", 3, "app", "ERROR"),
+                ("gitleaks.github-pat", "src/app.py", 4, "app", "ERROR"),
+            ],
+        )
         dumped = json.dumps([f.__dict__ for f in found])
         self.assertNotIn(SECRET, dumped)
         self.assertNotIn(SECRET[4:20], dumped)
@@ -219,7 +257,9 @@ class NormaliseTests(unittest.TestCase):
         first = self.normalise([self.entry("src/app.py", 3)])[0]
         # A rotated secret on the same line is the same leak; a moved line keeps its fingerprint.
         rotated = SECRET[:-4] + "ZZZZ"
-        (self.root / "src" / "app.py").write_text(f'class Client:\n\n    def connect(self):\n        token = "{rotated}"\n')
+        (self.root / "src" / "app.py").write_text(
+            f'class Client:\n\n    def connect(self):\n        token = "{rotated}"\n'
+        )
         moved = self.normalise([self.entry("src/app.py", 4, rotated)])[0]
         self.assertEqual(first.fingerprint, moved.fingerprint)
         other_rule = self.normalise([self.entry("src/app.py", 4, rotated, "generic-api-key")])[0]
@@ -251,11 +291,18 @@ class ConfigTests(unittest.TestCase):
 
 
 def git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args],
-                   cwd=repo, check=True, capture_output=True, timeout=60)  # fmt: skip
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
 
 
-@unittest.skipUnless(shutil.which("git") and gitleaks_ready(), f"gitleaks is not installed in {TOOLS}; run `shoalscan install`")
+@unittest.skipUnless(
+    shutil.which("git") and gitleaks_ready(), f"gitleaks is not installed in {TOOLS}; run `shoalscan install`"
+)
 class EndToEndTests(unittest.TestCase):
     def test_a_hostile_repository_cannot_hide_its_secrets(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -273,7 +320,9 @@ class EndToEndTests(unittest.TestCase):
                 code = main(["scan", "--repo", str(repo), "--out", str(out), "--tools-dir", str(TOOLS)])
             self.assertEqual(code, 0, err.getvalue())
             doc = json.loads((out / "findings.json").read_text())
-            self.assertEqual(sorted(f["rule"] for f in doc["findings"]), ["gitleaks.aws-access-token", "gitleaks.github-pat"])
+            self.assertEqual(
+                sorted(f["rule"] for f in doc["findings"]), ["gitleaks.aws-access-token", "gitleaks.github-pat"]
+            )
             self.assertEqual(doc["scanners"]["gitleaks"]["version"], "8.30.1")
             self.assertIn("gitleaks.github-pat", doc["rule_ids"])
             for name in ("findings.json", "findings.sarif"):

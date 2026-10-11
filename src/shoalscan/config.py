@@ -141,11 +141,14 @@ def _exclude_pattern(value: str) -> str:
     """An exclude must name something: a pattern such as ** or *e* would turn the scan off."""
     if any(c in value for c in "[]{}"):
         raise SetupError(
-            f"{CONFIG_NAME}: the exclude {value!r} uses [ ] or {{ }}; character classes and alternatives are not allowed, "
+            f"{CONFIG_NAME}: the exclude {value!r} uses [ ] or {{ }}; character classes and alternatives are not "
+            "allowed, "
             "because patterns such as [a-z]* or [!0]* match almost everything. List each pattern explicitly instead"
         )
     if ".." in value.split("/"):
-        raise SetupError(f"{CONFIG_NAME}: the exclude {value!r} has a .. segment; excludes are paths inside the repository")
+        raise SetupError(
+            f"{CONFIG_NAME}: the exclude {value!r} has a .. segment; excludes are paths inside the repository"
+        )
     segments = [s for s in value.strip().strip("/").split("/") if s]
     if not any(_anchors(s) for s in segments):
         raise SetupError(
@@ -176,7 +179,20 @@ def _parse_glob(value: str) -> str:
 def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
     _check_keys(
         data,
-        {"scanners", "excludes", "blocking", "baseline", "non_blocking_paths", "parse_warn_only", "components", "opengrep", "hadolint", "zizmor", "trivy", "limits"},
+        {
+            "scanners",
+            "excludes",
+            "blocking",
+            "baseline",
+            "non_blocking_paths",
+            "parse_warn_only",
+            "components",
+            "opengrep",
+            "hadolint",
+            "zizmor",
+            "trivy",
+            "limits",
+        },
         "the top level",
     )
     defaults = Config()
@@ -223,7 +239,9 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
     og_raw = data.get("opengrep", {})
     if not isinstance(og_raw, dict):
         raise SetupError(f"{CONFIG_NAME}: [opengrep] must be a table")
-    _check_keys(og_raw, {"community_rules", "shoalscan_rules", "rule_dirs", "categories", "exclude_rules"}, "[opengrep]")
+    _check_keys(
+        og_raw, {"community_rules", "shoalscan_rules", "rule_dirs", "categories", "exclude_rules"}, "[opengrep]"
+    )
     categories = _str_list(og_raw.get("categories", list(OpengrepSettings().categories)), "opengrep.categories")
     for cat in categories:
         if not _CATEGORY_RE.match(cat):
@@ -235,7 +253,8 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
                 f"{CONFIG_NAME}: opengrep.exclude_rules entries must be a rule id or `prefix.*`: {pattern!r}"
             )
     rule_dirs = tuple(
-        relative_repo_path(d, "opengrep.rule_dirs") for d in _str_list(og_raw.get("rule_dirs", []), "opengrep.rule_dirs")
+        relative_repo_path(d, "opengrep.rule_dirs")
+        for d in _str_list(og_raw.get("rule_dirs", []), "opengrep.rule_dirs")
     )
     opengrep = OpengrepSettings(
         community_rules=_bool(og_raw.get("community_rules", True), "opengrep.community_rules"),
@@ -256,7 +275,9 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
     ignore = _str_list(ha_raw.get("ignore", []), "hadolint.ignore")
     for code in ignore:
         if not _HADOLINT_RULE_RE.match(code):
-            raise SetupError(f"{CONFIG_NAME}: hadolint.ignore entries must be rule codes such as DL3008 or SC2086: {code!r}")
+            raise SetupError(
+                f"{CONFIG_NAME}: hadolint.ignore entries must be rule codes such as DL3008 or SC2086: {code!r}"
+            )
     hadolint = HadolintSettings(ignore=tuple(sorted(set(ignore))))
 
     zi_raw = data.get("zizmor", {})
@@ -276,7 +297,9 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
     checks = _str_list(tr_raw.get("ignore", []), "trivy.ignore")
     for check in checks:
         if not _TRIVY_CHECK_RE.match(check):
-            raise SetupError(f"{CONFIG_NAME}: trivy.ignore entries must be check ids such as AWS-0089 or KSV-0011: {check!r}")
+            raise SetupError(
+                f"{CONFIG_NAME}: trivy.ignore entries must be check ids such as AWS-0089 or KSV-0011: {check!r}"
+            )
     trivy = TrivySettings(ignore=tuple(sorted(set(checks))))
 
     lim_raw = data.get("limits", {})
@@ -285,11 +308,23 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
     _check_keys(lim_raw, {"scan_timeout_seconds", "rule_timeout_seconds", "max_target_bytes", "jobs"}, "[limits]")
     lim_default = Limits()
     limits = Limits(
-        scan_timeout_seconds=_int(lim_raw.get("scan_timeout_seconds", lim_default.scan_timeout_seconds), "limits.scan_timeout_seconds", 10, 86_400),
-        rule_timeout_seconds=_int(lim_raw.get("rule_timeout_seconds", lim_default.rule_timeout_seconds), "limits.rule_timeout_seconds", 1, 3_600),
-        max_target_bytes=_int(lim_raw.get("max_target_bytes", lim_default.max_target_bytes), "limits.max_target_bytes", 1_000, 100_000_000),
+        scan_timeout_seconds=_int(
+            lim_raw.get("scan_timeout_seconds", lim_default.scan_timeout_seconds),
+            "limits.scan_timeout_seconds",
+            10,
+            86_400,
+        ),
+        rule_timeout_seconds=_int(
+            lim_raw.get("rule_timeout_seconds", lim_default.rule_timeout_seconds),
+            "limits.rule_timeout_seconds",
+            1,
+            3_600,
+        ),
+        max_target_bytes=_int(
+            lim_raw.get("max_target_bytes", lim_default.max_target_bytes), "limits.max_target_bytes", 1_000, 100_000_000
+        ),
         jobs=_int(lim_raw.get("jobs", lim_default.jobs), "limits.jobs", 1, 64),
-    )  # fmt: skip
+    )
 
     return Config(
         scanners=scanners,

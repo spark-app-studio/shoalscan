@@ -6,12 +6,12 @@ import json
 import tempfile
 import unittest
 from datetime import date
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 import helpers  # noqa: F401 - puts src/ on the import path
-
 from history_fixtures import MALICIOUS, finding, record, sample_history
+
 from shoalscan import history, report
 from shoalscan.baseline import Entry
 from shoalscan.cli import main
@@ -43,8 +43,14 @@ class PeriodTests(unittest.TestCase):
             report.period("2025-09-30", "2026-10-01", self.TODAY)
 
     def test_refuses_bad_periods(self):
-        for since, until in (("2026-9-5", None), ("2026-02-30", None), ("yesterday", None), ("2026-10-01", "2026-09-01"),
-                             ("2010-01-01", "2026-01-01"), (None, "2026-09-30T00:00:00Z")):  # fmt: skip
+        for since, until in (
+            ("2026-9-5", None),
+            ("2026-02-30", None),
+            ("yesterday", None),
+            ("2026-10-01", "2026-09-01"),
+            ("2010-01-01", "2026-01-01"),
+            (None, "2026-09-30T00:00:00Z"),
+        ):
             with self.assertRaises(SetupError, msg=(since, until)):
                 report.period(since, until, self.TODAY)
 
@@ -79,8 +85,19 @@ class HistoryCase(unittest.TestCase):
 class BuildTests(HistoryCase):
     def prepare(self, conn):
         # One review inside the period and one after it.
-        history._change_review(conn, "acme/app", B_KEY, "false_positive", "Only an example URL in docs", "alice", None, "2026-09-20T10:00:00Z")
-        history._change_review(conn, "acme/app", B_KEY, "accepted_risk", "Changed our mind later on", "bob", None, "2026-10-05T10:00:00Z")
+        history._change_review(
+            conn,
+            "acme/app",
+            B_KEY,
+            "false_positive",
+            "Only an example URL in docs",
+            "alice",
+            None,
+            "2026-09-20T10:00:00Z",
+        )
+        history._change_review(
+            conn, "acme/app", B_KEY, "accepted_risk", "Changed our mind later on", "bob", None, "2026-10-05T10:00:00Z"
+        )
 
     def test_start_end_and_changes(self):
         doc = self.build()
@@ -92,7 +109,9 @@ class BuildTests(HistoryCase):
         self.assertEqual([f["path"] for f in ch["fixed"]["findings"]], ["src/d.py", "src/a.py"])
         # A was open 14 days (09-01 to 09-15), D 7 days (09-01 to 09-08); D's return on 09-22 is a new episode.
         self.assertEqual(ch["time_to_fix"], {"fixed": 2, "mean_days": 10.5, "median_days": 10.5})
-        self.assertEqual([w["week"] for w in ch["weekly"]], ["2026-08-31", "2026-09-07", "2026-09-14", "2026-09-21", "2026-09-28"])
+        self.assertEqual(
+            [w["week"] for w in ch["weekly"]], ["2026-08-31", "2026-09-07", "2026-09-14", "2026-09-21", "2026-09-28"]
+        )
         self.assertEqual(sum(w["new"] for w in ch["weekly"]), 2)
 
     def test_a_period_after_the_first_run_counts_fixes_from_the_real_start(self):
@@ -183,8 +202,18 @@ class BaselineKindsTests(HistoryCase):
 class HostileTextTests(HistoryCase):
     def prepare(self, conn):
         bad = finding("shoalscan.x", "src/<img src=x>.py", "hhhh:0", "ERROR", MALICIOUS[:60])
-        record(conn, self.dir, "acme/app", "8" * 40, 25, [bad], baseline=[Entry(bad.tool, bad.rule, bad.path, bad.fingerprint, "#6", MALICIOUS + "\n# heading")])
-        history._change_review(conn, "acme/app", B_KEY, "wont_fix", MALICIOUS + "\n## injected", MALICIOUS, None, "2026-09-26T00:00:00Z")
+        record(
+            conn,
+            self.dir,
+            "acme/app",
+            "8" * 40,
+            25,
+            [bad],
+            baseline=[Entry(bad.tool, bad.rule, bad.path, bad.fingerprint, "#6", MALICIOUS + "\n# heading")],
+        )
+        history._change_review(
+            conn, "acme/app", B_KEY, "wont_fix", MALICIOUS + "\n## injected", MALICIOUS, None, "2026-09-26T00:00:00Z"
+        )
 
     def test_values_from_the_repository_stay_text(self):
         out = report.render_markdown(self.build())
@@ -203,15 +232,36 @@ class HostileTextTests(HistoryCase):
 
 class CommandTests(HistoryCase):
     def cli(self, *extra):
-        return quiet(["report", "--db", str(self.db), "--repo-name", "acme/app", "--since", "2026-09-05", "--until", "2026-09-30", *extra])
+        return quiet(
+            [
+                "report",
+                "--db",
+                str(self.db),
+                "--repo-name",
+                "acme/app",
+                "--since",
+                "2026-09-05",
+                "--until",
+                "2026-09-30",
+                *extra,
+            ]
+        )
 
     def test_markdown_report(self):
         code, out, err = self.cli()
         self.assertEqual(code, 0, err)
         self.assertTrue(out.startswith("# Security report: acme/app\n"))
         self.assertIn("**Period:** 2026-09-05 to 2026-09-30 (UTC).", out)
-        for heading in ("## Summary", "## Trend", "## Fixed in the period (2)", "## New in the period (2)",
-                        "## Accepted risks and false positives", "## Components", "## Coverage", "## Limits"):  # fmt: skip
+        for heading in (
+            "## Summary",
+            "## Trend",
+            "## Fixed in the period (2)",
+            "## New in the period (2)",
+            "## Accepted risks and false positives",
+            "## Components",
+            "## Coverage",
+            "## Limits",
+        ):
             self.assertIn(heading, out)
         self.assertIn("| ERROR | 2 | 1 | −1 |", out)
 

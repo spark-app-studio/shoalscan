@@ -31,7 +31,9 @@ def tools_ready() -> bool:
     return entry is not None and sha256_file(binary) == entry.binary.sha256
 
 
-@unittest.skipUnless(tools_ready(), f"Opengrep is not installed in {TOOLS}; run `shoalscan install` to enable the end-to-end tests")
+@unittest.skipUnless(
+    tools_ready(), f"Opengrep is not installed in {TOOLS}; run `shoalscan install` to enable the end-to-end tests"
+)
 class EndToEndTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -71,7 +73,12 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(doc["suppressions"], {"total": 1, "invalid": 0, "suppressed_findings": 1})
         self.assertTrue(all(f["component"] == "app" for f in doc["findings"]))
         sarif = json.loads((self.out / "findings.sarif").read_text(encoding="utf-8"))
-        uris = {loc["physicalLocation"]["artifactLocation"]["uri"] for run in sarif["runs"] for r in run["results"] for loc in r["locations"]}
+        uris = {
+            loc["physicalLocation"]["artifactLocation"]["uri"]
+            for run in sarif["runs"]
+            for r in run["results"]
+            for loc in r["locations"]
+        }
         self.assertTrue(uris <= {"src/client.py", "src/server.js"}, uris)
 
         code, summary, _ = self.check()
@@ -79,9 +86,19 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(summary["new_blocking"], len(doc["findings"]))
 
         code, out, err = self.cli(
-            "baseline", "init", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out),
-            "--issue", "#1", "--reason", "initial baseline",
-        )  # fmt: skip
+            "baseline",
+            "init",
+            "--repo",
+            str(self.repo),
+            "--tools-dir",
+            str(TOOLS),
+            "--out",
+            str(self.out),
+            "--issue",
+            "#1",
+            "--reason",
+            "initial baseline",
+        )
         self.assertEqual(code, 0, err)
         first = (self.repo / "baseline.toml").read_text(encoding="utf-8")
         code, summary, _ = self.check()
@@ -89,9 +106,19 @@ class EndToEndTests(unittest.TestCase):
 
         # Refuses to overwrite without --force.
         code, _, err = self.cli(
-            "baseline", "init", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out),
-            "--issue", "#1", "--reason", "again",
-        )  # fmt: skip
+            "baseline",
+            "init",
+            "--repo",
+            str(self.repo),
+            "--tools-dir",
+            str(TOOLS),
+            "--out",
+            str(self.out),
+            "--issue",
+            "#1",
+            "--reason",
+            "again",
+        )
         self.assertEqual(code, 2)
         self.assertIn("--force", err)
 
@@ -112,7 +139,9 @@ class EndToEndTests(unittest.TestCase):
 
         # Fixing a finding makes its baseline entry stale, which fails.
         server = self.repo / "src" / "server.js"
-        server.write_text(server.read_text(encoding="utf-8").replace("rejectUnauthorized: false", "ca: privateCa"), encoding="utf-8")
+        server.write_text(
+            server.read_text(encoding="utf-8").replace("rejectUnauthorized: false", "ca: privateCa"), encoding="utf-8"
+        )
         self.scan()
         code, summary, out = self.check()
         self.assertEqual((code, summary["stale"]), (1, 1))
@@ -121,18 +150,39 @@ class EndToEndTests(unittest.TestCase):
         # Deterministic baseline: the same scan writes the same file.
         server.write_text((SAMPLE / "src" / "server.js").read_text(encoding="utf-8"), encoding="utf-8")
         code, _, err = self.cli(
-            "baseline", "init", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out),
-            "--issue", "#1", "--reason", "initial baseline", "--force",
-        )  # fmt: skip
+            "baseline",
+            "init",
+            "--repo",
+            str(self.repo),
+            "--tools-dir",
+            str(TOOLS),
+            "--out",
+            str(self.out),
+            "--issue",
+            "#1",
+            "--reason",
+            "initial baseline",
+            "--force",
+        )
         self.assertEqual(code, 0, err)
         self.assertEqual((self.repo / "baseline.toml").read_text(encoding="utf-8"), first)
 
     def test_rename_path_follows_a_moved_file(self):
         self.scan()
         code, _, err = self.cli(
-            "baseline", "init", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out),
-            "--issue", "#1", "--reason", "initial",
-        )  # fmt: skip
+            "baseline",
+            "init",
+            "--repo",
+            str(self.repo),
+            "--tools-dir",
+            str(TOOLS),
+            "--out",
+            str(self.out),
+            "--issue",
+            "#1",
+            "--reason",
+            "initial",
+        )
         self.assertEqual(code, 0, err)
         (self.repo / "lib").mkdir()
         (self.repo / "src" / "client.py").rename(self.repo / "lib" / "client.py")
@@ -148,11 +198,22 @@ class EndToEndTests(unittest.TestCase):
     def test_new_finding_and_bad_suppression_fail(self):
         self.scan()
         self.cli(
-            "baseline", "init", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out),
-            "--issue", "https://tracker.example.org/issues/1", "--reason", "initial",
-        )  # fmt: skip
+            "baseline",
+            "init",
+            "--repo",
+            str(self.repo),
+            "--tools-dir",
+            str(TOOLS),
+            "--out",
+            str(self.out),
+            "--issue",
+            "https://tracker.example.org/issues/1",
+            "--reason",
+            "initial",
+        )
         (self.repo / "src" / "new.py").write_text(
-            'import requests\nrequests.get("https://example.com", verify=False)  # ' + "no" + "semgrep\n", encoding="utf-8"
+            'import requests\nrequests.get("https://example.com", verify=False)  # ' + "no" + "semgrep\n",
+            encoding="utf-8",
         )
         doc = self.scan()
         self.assertEqual(doc["suppressions"]["invalid"], 1)
@@ -166,19 +227,35 @@ class EndToEndTests(unittest.TestCase):
         self.assertIn("shoalscan.python-tls-verification-disabled", doc["rule_ids"])
         self.assertTrue({f["rule"] for f in doc["findings"] if f["tool"] == "opengrep"} <= set(doc["rule_ids"]))
         (listed,) = doc["suppression_list"]
-        self.assertEqual((listed["path"], listed["line"], listed["issue"], listed["valid"]), ("src/client.py", 15, "#42", True))
+        self.assertEqual(
+            (listed["path"], listed["line"], listed["issue"], listed["valid"]), ("src/client.py", 15, "#42", True)
+        )
         self.assertEqual(listed["rules"][0], "shoalscan.plain-http-url")
         self.cli(
-            "baseline", "init", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out),
-            "--issue", "#1", "--reason", "initial",
-        )  # fmt: skip
-        (self.repo / "src" / "new.py").write_text('import requests\nrequests.get("https://example.com", verify=False)\n', encoding="utf-8")
+            "baseline",
+            "init",
+            "--repo",
+            str(self.repo),
+            "--tools-dir",
+            str(TOOLS),
+            "--out",
+            str(self.out),
+            "--issue",
+            "#1",
+            "--reason",
+            "initial",
+        )
+        (self.repo / "src" / "new.py").write_text(
+            'import requests\nrequests.get("https://example.com", verify=False)\n', encoding="utf-8"
+        )
         (self.repo / "src" / "client.py").unlink()  # its baseline entries go stale
         self.scan()
         code, summary, _ = self.check()
         self.assertEqual(code, 1)
         details = json.loads((self.out / "check.json").read_text(encoding="utf-8"))
-        self.assertEqual(details["findings_sha256"], hashlib.sha256((self.out / "findings.json").read_bytes()).hexdigest())
+        self.assertEqual(
+            details["findings_sha256"], hashlib.sha256((self.out / "findings.json").read_bytes()).hexdigest()
+        )
         self.assertEqual(details["summary"], summary)
         self.assertEqual(len(details["new_blocking"]), summary["new_blocking"])
         self.assertEqual([k[2] for k in details["new_blocking"]], ["src/new.py"])
@@ -190,7 +267,8 @@ class EndToEndTests(unittest.TestCase):
 
     def write_config(self, extra_top: str = "", opengrep: str = "") -> None:
         (self.repo / ".shoalscan.toml").write_text(
-            f'{extra_top}\nbaseline = "baseline.toml"\n[opengrep]\n{opengrep}\n[limits]\nscan_timeout_seconds = 600\njobs = 2\n',
+            f'{extra_top}\nbaseline = "baseline.toml"\n[opengrep]\n{opengrep}\n[limits]\nscan_timeout_seconds = '
+            "600\njobs = 2\n",
             encoding="utf-8",
         )
 
@@ -230,9 +308,12 @@ class EndToEndTests(unittest.TestCase):
         marker = "no" + "semgrep"
         (self.repo / "src" / "spaced.py").write_text(
             "import requests\n"
-            f'requests.get("https://a.vendor.io", verify=False)  # {marker} : shoalscan.python-tls-verification-disabled #1\n'
-            f'requests.get("https://b.vendor.io", verify=False)  # {marker}:  shoalscan.python-tls-verification-disabled #1\n'
-            f'requests.get("https://c.vendor.io", verify=False)  # {marker}: shoalscan.python-tls-verification-disabled #1\n',
+            f'requests.get("https://a.vendor.io", verify=False)  # {marker} : '
+            "shoalscan.python-tls-verification-disabled #1\n"
+            f'requests.get("https://b.vendor.io", verify=False)  # {marker}:  '
+            "shoalscan.python-tls-verification-disabled #1\n"
+            f'requests.get("https://c.vendor.io", verify=False)  # {marker}: '
+            "shoalscan.python-tls-verification-disabled #1\n",
             encoding="utf-8",
         )
         doc = self.scan()
@@ -257,7 +338,9 @@ class EndToEndTests(unittest.TestCase):
         # Opengrep treats both as bare suppressions ...
         self.assertFalse([f for f in found if f["rule"] == "shoalscan.python-tls-verification-disabled"])
         # ... and so does the lint.
-        self.assertEqual(sorted(f["line"] for f in found if f["rule"] == "shoalscan.suppression-without-rule-and-issue"), [2, 3])
+        self.assertEqual(
+            sorted(f["line"] for f in found if f["rule"] == "shoalscan.suppression-without-rule-and-issue"), [2, 3]
+        )
 
     def test_long_s_marker_against_the_real_binary(self):
         marker = ("no" + "semgrep").replace("s", "\u017f")

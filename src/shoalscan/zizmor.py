@@ -60,7 +60,9 @@ def discover(root: Path, excludes: tuple[str, ...], max_bytes: int) -> tuple[lis
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         rel_dir = Path(dirpath).relative_to(root).as_posix()
         rel_dir = "" if rel_dir == "." else rel_dir
-        dirnames[:] = sorted(d for d in dirnames if d != ".git" and not matcher.excluded(f"{rel_dir}/{d}" if rel_dir else d))
+        dirnames[:] = sorted(
+            d for d in dirnames if d != ".git" and not matcher.excluded(f"{rel_dir}/{d}" if rel_dir else d)
+        )
         for name in sorted(filenames):
             rel = f"{rel_dir}/{name}" if rel_dir else name
             path = Path(dirpath) / name
@@ -79,13 +81,20 @@ def build_command(binary: Path, files: list[Path]) -> list[str]:
     return [
         str(binary),
         # No network, no repository configuration, no ignore comments.
-        "--offline", "--no-config", "--no-ignores",
+        "--offline",
+        "--no-config",
+        "--no-ignores",
         "--strict-collection",
-        "--persona", "regular",
-        "--no-exit-codes", "--no-progress", "--color", "never",
-        "--format", "json",
+        "--persona",
+        "regular",
+        "--no-exit-codes",
+        "--no-progress",
+        "--color",
+        "never",
+        "--format",
+        "json",
         *[str(f) for f in files],
-    ]  # fmt: skip
+    ]
 
 
 def execute(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, list | None, str]:
@@ -108,12 +117,18 @@ def _primary(result: dict) -> dict:
     locations = result.get("locations")
     if isinstance(locations, list):
         for loc in locations:
-            if isinstance(loc, dict) and isinstance(loc.get("symbolic"), dict) and loc["symbolic"].get("kind") == "Primary":
+            if (
+                isinstance(loc, dict)
+                and isinstance(loc.get("symbolic"), dict)
+                and loc["symbolic"].get("kind") == "Primary"
+            ):
                 return loc
     raise ScanError(f"a zizmor finding has no primary location: {str(result)[:300]}")
 
 
-def normalise(results: list, root: Path, scanned: set[str], components: dict[str, str], ignore: tuple[str, ...]) -> list[Finding]:
+def normalise(
+    results: list, root: Path, scanned: set[str], components: dict[str, str], ignore: tuple[str, ...]
+) -> list[Finding]:
     items = []
     for r in results:
         if not isinstance(r, dict):
@@ -127,7 +142,11 @@ def normalise(results: list, root: Path, scanned: set[str], components: dict[str
             continue
         loc = _primary(r)
         key = loc["symbolic"].get("key")
-        path = key.get("Local", {}).get("verbatim_path") if isinstance(key, dict) and isinstance(key.get("Local"), dict) else None
+        path = (
+            key.get("Local", {}).get("verbatim_path")
+            if isinstance(key, dict) and isinstance(key.get("Local"), dict)
+            else None
+        )
         if not isinstance(path, str) or not Path(path).is_absolute():
             raise ScanError(f"zizmor reported a location that is not a local absolute path: {str(key)[:300]}")
         try:
@@ -137,7 +156,9 @@ def normalise(results: list, root: Path, scanned: set[str], components: dict[str
         if rel not in scanned:
             raise ScanError(f"zizmor reported a file it was not given: {rel[:300]}")
         concrete = loc.get("concrete") if isinstance(loc.get("concrete"), dict) else {}
-        start = concrete.get("location", {}).get("start_point", {}) if isinstance(concrete.get("location"), dict) else {}
+        start = (
+            concrete.get("location", {}).get("start_point", {}) if isinstance(concrete.get("location"), dict) else {}
+        )
         row, col = start.get("row"), start.get("column")
         if not isinstance(row, int) or isinstance(row, bool) or row < 0:
             raise ScanError("zizmor output has a malformed location")
@@ -161,8 +182,16 @@ def normalise(results: list, root: Path, scanned: set[str], components: dict[str
         )
     prints = assign_fingerprints(items)
     return [
-        Finding(tool=TOOL, rule=it["rule"], severity=it["severity"], path=it["path"], line=it["line"], fingerprint=fp,
-                component=component_for(it["path"], components), message=it["message"])  # fmt: skip
+        Finding(
+            tool=TOOL,
+            rule=it["rule"],
+            severity=it["severity"],
+            path=it["path"],
+            line=it["line"],
+            fingerprint=fp,
+            component=component_for(it["path"], components),
+            message=it["message"],
+        )
         for it, fp in zip(items, prints)
     ]
 
@@ -174,12 +203,29 @@ def rule_metadata(findings: list[Finding], results: list) -> dict[str, dict]:
     for f in findings:
         url = urls.get(f.rule)
         refs = [url] if isinstance(url, str) and url.startswith(_DOCS) and " " not in url else []
-        out[f.rule] = {"file": None, "cwe": [], "owasp": [], "fix": None, "references": refs, "confidence": None, "likelihood": None, "impact": None}
+        out[f.rule] = {
+            "file": None,
+            "cwe": [],
+            "owasp": [],
+            "fix": None,
+            "references": refs,
+            "confidence": None,
+            "likelihood": None,
+            "impact": None,
+        }
     return out
 
 
-def run(binary: Path, binary_sha256: str, root: Path, stage: Path, limits: Limits, components: dict[str, str],
-        excludes: tuple[str, ...], ignore: tuple[str, ...]) -> tuple[list[Finding], dict, int, dict]:  # fmt: skip
+def run(
+    binary: Path,
+    binary_sha256: str,
+    root: Path,
+    stage: Path,
+    limits: Limits,
+    components: dict[str, str],
+    excludes: tuple[str, ...],
+    ignore: tuple[str, ...],
+) -> tuple[list[Finding], dict, int, dict]:
     """Audit the repository's GitHub Actions files.
 
     Returns the findings, the unscanned files, how many files were audited
