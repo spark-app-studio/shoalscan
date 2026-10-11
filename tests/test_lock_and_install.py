@@ -103,6 +103,9 @@ def make_lock(assets: Assets, tarball: bytes, binary=b"opengrep-binary", cosign=
     gl["platforms"][PLAT]["sha256"], gl["platforms"][PLAT]["binary_sha256"] = sha(archive), sha(GITLEAKS_BINARY)
     blobs[gl["config"]["url"]] = GITLEAKS_CONFIG
     gl["config"]["sha256"] = sha(GITLEAKS_CONFIG)
+    hl = data["hadolint"]["platforms"][PLAT]
+    blobs[hl["url"]] = b"hadolint-binary"
+    hl["sha256"] = hl["binary_sha256"] = sha(b"hadolint-binary")
     assets.files.update(blobs)
     return parse_lock(data)
 

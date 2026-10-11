@@ -49,7 +49,7 @@ class LockTests(unittest.TestCase):
     def test_a_lock_without_gitleaks_is_still_valid(self):
         data = tomllib.loads(LOCK_PATH.read_text(encoding="utf-8"))
         del data["gitleaks"]
-        self.assertEqual(parse_lock(data).tools, {})
+        self.assertNotIn("gitleaks", parse_lock(data).tools)
 
     def test_bad_entries_are_refused(self):
         base = tomllib.loads(LOCK_PATH.read_text(encoding="utf-8"))

@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shoalscan import __version__, gitleaks, opengrep
+from shoalscan import __version__, gitleaks, hadolint, opengrep
 from shoalscan.check import CHECK_JSON
 from shoalscan.config import Config
 from shoalscan.errors import ScanError, SetupError
@@ -218,6 +218,24 @@ def run_scan(
                 "config_sha256": config_sha256,
                 "rules": len(leak_rules),
                 "findings": len(leaks),
+            }
+        if "hadolint" in config.scanners:
+            pin = tools.pinned.get("hadolint")
+            if pin is None:
+                raise SetupError("hadolint is enabled but tools.lock pins no hadolint")
+            lints, missed, linted = hadolint.run(
+                pin.path, pin.sha256, root, stage, config.limits, config.components, config.excludes, config.hadolint.ignore
+            )
+            findings += lints
+            extra_runs.append((hadolint.TOOL, pin.version, lints))
+            unscanned = {kind: [*unscanned.get(kind, []), *missed[kind]] for kind in ("skipped", "errors")}
+            meta.setdefault("rules", {}).update(hadolint.rule_metadata(lints))
+            meta["scanners"]["hadolint"] = {
+                "version": pin.version,
+                "verification": "sha256",
+                "files_scanned": linted,
+                "ignore": list(config.hadolint.ignore),
+                "findings": len(lints),
             }
         sarif_text = build_sarif(sarif_source, root, sarif_index, own_findings, extra_runs)
     finally:

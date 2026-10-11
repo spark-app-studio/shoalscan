@@ -10,13 +10,19 @@ All notable changes to Shoalscan are recorded here.
 - `shoalscan report` writes a dated security report on one repository from the run history, for a period of up to 366 whole UTC days (`--since`, `--until`; the last 30 days by default): the posture at the end of the period and its change since the start, blocking and untriaged findings, the weekly new and fixed findings with the lists behind them, the time to fix, what the baseline accepts grouped by issue and reason, dashboard review changes with who made them, components, coverage (runs by outcome, deleted runs, unscanned files, suppressions, scanner versions and signature checks) and the limits of static analysis. Markdown by default, or `--format json`.
 - `shoalscan scan` records each reporting rule's metadata (CWE, OWASP, confidence, likelihood, impact, fix hint, references and rule file) under `rules` in `findings.json`. Values are bounded and only http(s) links are kept.
 - Gitleaks 8.30.1 as a second scanner, for secrets: add `"gitleaks"` to `scanners`. `shoalscan install` pins and verifies its release archive, the binary in it and its default rules by SHA-256 (the project publishes no signature), and `scan` checks the binary and rules again before every run. Findings are ERRORs named `gitleaks.<rule>` under CWE-798, and appear in `findings.json`, the SARIF file (a run of their own), the check, the triage work list and the dashboard like any other. The About page lists Gitleaks.
+- Hadolint 2.15.1 as a third scanner, for Dockerfiles: add `"hadolint"` to `scanners`. Shoalscan finds the Dockerfiles itself (outside `.git` and the excludes, no links, not over the size limit) and pins the binary by SHA-256. Findings are named `hadolint.<code>`; `error` becomes ERROR, `warning` WARNING, `info` and `style` INFO. A Dockerfile that does not parse is listed as not fully scanned. `[hadolint] ignore` in `.shoalscan.toml` leaves rules out, as policy. The About page lists Hadolint.
 - A finding missing from a scheduled run verifies a "fixed" review only if the run used the finding's scanner, so turning a scanner off never marks its findings as fixed.
 - `tools.lock` can pin a scanner in its own table, with the download, the binary in it and its extra files. A lock without such a table stays valid.
+
+### Fixed
+
+- `shoalscan scan` no longer warns about Opengrep's signature when Opengrep is not among the scanners.
 
 ### Security
 
 - `findings.sarif` no longer copies the scanned code: the `snippet` of every Opengrep result (its region, context region, related locations and code flows) is removed. A snippet held the whole matched line, so a rule that finds hard-coded secrets put the secret itself into a file that CI uploads or keeps as an artifact. Locations, messages and fingerprints are unchanged.
 - Nothing in a scanned repository can silence Gitleaks: its `.gitleaks.toml`, `.gitleaksignore` and `gitleaks:allow` comments are ignored, and the configuration environment variables are not passed. False positives go into the baseline.
+- Nothing in a scanned repository can silence Hadolint: its `.hadolint.yaml` (and one in the home directory) and `# hadolint ignore=` pragmas are ignored, and `HADOLINT_*` variables are not passed.
 - The secrets Gitleaks finds never reach the findings, the SARIF file, `check.json` or the history: the report stays in the scan's private temporary directory, and fingerprints hash the matched line with the secret masked.
 - Text from the scanned repository (paths, messages, rule metadata, baseline reasons, component names, review descriptions) is escaped in the work list and the report, so it cannot add links, images, HTML or headings.
 
