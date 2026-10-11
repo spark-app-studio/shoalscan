@@ -5,13 +5,15 @@
   stops DNS-rebinding pages from talking to the dashboard.
 - Only the login page, its script, the stylesheet and the icon answer without
   a session. Everything else needs the `__Host-` session cookie.
-- Login is a form POST of a user name and token (never in a URL), same-origin
-  only, rate limited, compared in constant time; the shared token of earlier
-  versions works until the first named user joins. Logout needs the
-  session's CSRF token.
-- Admins manage users, the Configuration page and scans; members read
+- Sign-in goes through an OpenID Connect provider (see `oidc`): the code
+  flow with PKCE, state and nonce, and an RS256-checked ID token. Until it is
+  configured, the dashboard serves only a setup wizard, which needs a
+  one-time code printed on the server's console. Logout needs the session's
+  CSRF token.
+- Admins (the provider's admin claim) manage who may sign in, the
+  Configuration page and scans; members (allowed by an admin) read
   everything and review findings. Roles are checked on the server for every
-  request.
+  request, and sessions against the users database.
 - Static files come from a fixed table loaded at start-up; no request path
   is ever joined to a filesystem path.
 - The database is opened read-only for every request.
@@ -24,6 +26,7 @@ import hmac
 import ipaddress
 import json
 import re
+import secrets
 import socket
 import socketserver
 import ssl
@@ -38,7 +41,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from shoalscan import PROJECT_URL, __version__, embeddings, history
-from shoalscan.dashboard import auth, scanning, users
+from shoalscan.dashboard import auth, oidc, scanning, users
 from shoalscan.dashboard.configedit import ConfigEditor
 from shoalscan.dashboard.data import AGE_BUCKETS, FILE_KINDS, REVIEW_FILTERS, SEVERITIES, SORTS, Data
 from shoalscan.dashboard.scancontrol import ScanControl
@@ -54,11 +57,11 @@ HTML = "text/html; charset=utf-8"
 ROUTES: dict[str, tuple[str, str, bool]] = {
     "/": ("index.html", HTML, False),
     "/login": ("login.html", HTML, True),
-    "/invite": ("invite.html", HTML, True),
+    "/setup": ("setup.html", HTML, True),
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8", False),
     "/static/model.js": ("model.js", "text/javascript; charset=utf-8", False),
     "/static/login.js": ("login.js", "text/javascript; charset=utf-8", True),
-    "/static/invite.js": ("invite.js", "text/javascript; charset=utf-8", True),
+    "/static/setup.js": ("setup.js", "text/javascript; charset=utf-8", True),
     "/static/app.css": ("app.css", "text/css; charset=utf-8", True),
     "/static/shoalscan-icon.svg": ("icon", "image/svg+xml", True),
     "/favicon.ico": ("icon", "image/svg+xml", True),
@@ -67,8 +70,18 @@ ROUTES: dict[str, tuple[str, str, bool]] = {
 MAX_URL = 4096
 MAX_BODY = 2048
 MAX_CONFIG_BODY = 64 * 1024  # a target with its policy text
+MAX_SETUP_BODY = 80 * 1024  # the sign-in settings with a pasted CA certificate
 CONFIG_POSTS = ("/api/config/target", "/api/config/enable", "/api/config/remove")
-USER_POSTS = ("/api/users/invite", "/api/users/change")
+USER_POSTS = ("/api/users/allow", "/api/users/change")
+SETUP_POSTS = ("/setup/test", "/setup/save")
+SETUP_PATHS = frozenset({"/setup", "/static/setup.js"})
+LOGIN_COOKIE = "__Host-shoalscan-login"
+# Sent after a successful sign-in: a same-origin refresh, so the browser sends the new
+# SameSite=Strict session cookie (a redirect chain begun at the provider would not).
+SIGNED_IN_PAGE = (
+    b'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/">'
+    b'<title>Signed in</title></head><body><p>Signed in. <a href="/">Continue to the dashboard</a>.</p></body></html>'
+)
 # GET endpoints only an admin may read.
 ADMIN_GETS = frozenset({"/api/config", "/api/config/baseline", "/api/users", "/api/scan/status"})
 MAX_REVIEW_BODY = 512 * 1024  # up to 500 finding keys and a description
@@ -136,7 +149,7 @@ class ServeConfig:
     db: Path
     cert: Path
     key: Path
-    token_hash: Path
+    auth_dir: Path  # oidc.toml and users.sqlite3
     bind: str
     port: int
     hosts: tuple[str, ...]
@@ -283,9 +296,13 @@ class App:
     def __init__(self, config: ServeConfig):
         self.config = config
         self.allowed_hosts = allowed_host_headers(config.hosts, config.port)
-        self.tokens = auth.TokenCheck(config.token_hash)
-        # Users live next to the shared token's hash, in the state directory.
-        self.auth_dir = config.token_hash.parent
+        self.auth_dir = config.auth_dir
+        # None until the setup wizard (or a hand-written oidc.toml) configures sign-in.
+        self.oidc = oidc.load(self.auth_dir)
+        self.setup_code = secrets.token_urlsafe(18) if self.oidc is None else None
+        self.provider: oidc.Provider | None = None
+        self._provider_lock = threading.Lock()
+        self.logins = oidc.Logins()
         self.sessions = auth.Sessions(self.session_valid)
         self.limiter = auth.LoginLimiter()
         icon = data_path("assets/shoalscan-icon.svg").read_bytes()
@@ -305,24 +322,21 @@ class App:
         return users.open_users(self.auth_dir)
 
     def session_valid(self, session: auth.Session) -> bool:
-        """Does a session still hold? Its user must still be active with the same credentials;
-        a shared-token session holds while that token is unchanged and nobody has joined."""
+        """Does a session still hold? Its person must not be disabled or changed since."""
+        if session.user is None:
+            return False
         conn = self.users()
         try:
-            if session.user is None:
-                stored = self.tokens.stored()
-                return (
-                    bool(stored)
-                    and hmac.compare_digest(session.token_hash, stored)
-                    and not users.has_active_users(conn)
-                )
-            user = users.current(conn, session.user, session.credential_version)
+            return users.current(conn, session.user, session.role, session.credential_version)
         finally:
             conn.close()
-        if user is None:
-            return False
-        session.role = user.role
-        return True
+
+    def provider_now(self) -> oidc.Provider:
+        """The provider's endpoints and keys, read at the first sign-in and again every hour."""
+        with self._provider_lock:
+            if self.provider is None or time.monotonic() - self.provider.fetched_at > 3600:
+                self.provider = oidc.discover(self.oidc)
+            return self.provider
 
     def config_enabled(self) -> bool:
         """The Configuration page exists once scan_targets.toml does, or with serve --allow-config."""
@@ -577,7 +591,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         for name, value in (extra or {}).items():
-            self.send_header(name, value)
+            # A list sends the header once per value (two Set-Cookie headers, say).
+            for one in value if isinstance(value, list) else [value]:
+                self.send_header(name, one)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -620,8 +636,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error_json(421, "this dashboard does not answer to that host name")
         url = urlsplit(self.path)
         route = ROUTES.get(url.path)
+        if self.app.oidc is None:
+            # Setup mode: the wizard and what it needs, and nothing else.
+            if route and route[2] and url.path not in ("/", "/login"):
+                return self.send(200, self.app.static[url.path], route[1])
+            if url.path.startswith("/api/"):
+                return self.send_error_json(503, "sign-in is not set up yet; open /setup")
+            return self.send(303, b"", "text/plain", {"Location": "/setup"})
+        if url.path in SETUP_PATHS:
+            return self.send(303, b"", "text/plain", {"Location": "/login"})
         if route and route[2]:
             return self.send(200, self.app.static[url.path], route[1])
+        if url.path == "/oidc/start":
+            return self.oidc_start()
+        if url.path == "/oidc/callback":
+            return self.oidc_callback(parse_qs(url.query, max_num_fields=10))
         _, session = self._session()
         if session is None:
             if url.path == "/":
@@ -658,6 +687,8 @@ class Handler(BaseHTTPRequestHandler):
         limit = (
             MAX_CONFIG_BODY
             if post_path in CONFIG_POSTS
+            else MAX_SETUP_BODY
+            if post_path in SETUP_POSTS
             else (MAX_REVIEW_BODY if post_path == "/api/review" else MAX_BODY)
         )
         if not length.isdigit() or int(length) > limit:
@@ -669,10 +700,10 @@ class Handler(BaseHTTPRequestHandler):
         ):
             return self.send_error_json(403, "cross-origin request refused")
         path = urlsplit(self.path).path
-        if path == "/login":
-            return self.login(body)
-        if path == "/invite":
-            return self.join(body)
+        if path in SETUP_POSTS:
+            return self.setup_sign_in(path, body) if self.app.oidc is None else self.send_error_json(404, "not found")
+        if self.app.oidc is None:
+            return self.send_error_json(503, "sign-in is not set up yet; open /setup")
         sid, session = self._session()
         if session is None:
             return self.send_error_json(401, "log in first")
@@ -684,7 +715,7 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/api/scan", *CONFIG_POSTS, *USER_POSTS) and session.role != "admin":
             return self.send_error_json(403, "this needs an admin")
         if path == "/api/scan":
-            return self.start_scan(body)
+            return self.start_scan(body, session)
         if path in CONFIG_POSTS:
             return self.change_config(path, body, session)
         if path in USER_POSTS:
@@ -755,64 +786,70 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json(status, result)
 
     def change_users(self, path: str, body: bytes, session: auth.Session) -> None:
-        """POST /api/users/invite {name, role}, or /api/users/change {name, action[, role]}.
-        An invite's code is in the link the response carries, once; only its hash is kept."""
+        """POST /api/users/allow {email}, or /api/users/change {email, action}: disallow, disable or enable.
+        Admins come from the provider's admin claim; here an admin lets members in and out."""
         request = self._json_body(body)
         if request is None:
             return None
         conn = self.app.users()
         try:
-            if path == "/api/users/invite":
-                if set(request) != {"name", "role"}:
-                    return self.send_error_json(400, "send exactly {name, role}")
-                code, expires = users.add_user(conn, request["name"], request["role"], session.who)
-                return self.send_json(
-                    200, {"name": request["name"], "invite_path": f"/invite#{code}", "expires_at": expires}
-                )
+            if path == "/api/users/allow":
+                if set(request) != {"email"}:
+                    return self.send_error_json(400, "send exactly {email}")
+                users.allow(conn, request["email"], session.who)
+                return self.send_json(200, {"email": users.normalise_email(request["email"]), "done": "allow"})
             action = request.get("action")
-            if not set(request) <= {"name", "action", "role"} or action not in (
-                "disable",
-                "enable",
-                "reinvite",
-                "role",
-            ):
-                return self.send_error_json(400, "send {name, action}: disable, enable, reinvite, or role with a role")
-            if request.get("name") == session.user and action in ("disable", "reinvite", "role"):
-                return self.send_error_json(400, "ask another admin to change your own account")
-            if action == "reinvite":
-                code, expires = users.reinvite(conn, request.get("name"), session.who)
-                return self.send_json(
-                    200, {"name": request["name"], "invite_path": f"/invite#{code}", "expires_at": expires}
-                )
-            if action == "role":
-                users.set_role(conn, request.get("name"), request.get("role"), session.who)
+            if set(request) != {"email", "action"} or action not in ("disallow", "disable", "enable"):
+                return self.send_error_json(400, "send {email, action}: disallow, disable or enable")
+            if action == "disallow":
+                users.disallow(conn, request["email"], session.who)
             else:
-                users.set_disabled(conn, request.get("name"), action == "disable", session.who)
-            return self.send_json(200, {"name": request["name"], "done": action})
+                users.set_disabled(conn, request["email"], action == "disable", session.who)
+            return self.send_json(200, {"email": users.normalise_email(request["email"]), "done": action})
         except SetupError as exc:
             return self.send_error_json(400, str(exc)[:300])
         finally:
             conn.close()
 
-    def join(self, body: bytes) -> None:
-        """POST /invite {invite}: use an invite and answer with the new user's token, once."""
+    def setup_sign_in(self, path: str, body: bytes) -> None:
+        """POST /setup/test or /setup/save: check (and save) the provider settings from the wizard.
+        Both need the one-time setup code printed on the server's console."""
         address = self.client_address[0]
         if not self.app.limiter.allowed(address):
-            return self.send_error_json(429, "too many failed attempts; wait 15 minutes")
+            return self.send_error_json(429, "too many wrong setup codes; wait 15 minutes")
         request = self._json_body(body)
         if request is None:
             return None
-        conn = self.app.users()
-        try:
-            joined = users.redeem(conn, request.get("invite")) if set(request) == {"invite"} else None
-        finally:
-            conn.close()
-        if joined is None:
+        code = request.pop("setup_code", None)
+        if not isinstance(code, str) or not hmac.compare_digest(code.strip(), self.app.setup_code or "\0"):
             self.app.limiter.failed(address)
-            return self.send_error_json(404, "this invite is not valid: it was used, it expired, or it was replaced")
+            return self.send_error_json(403, "that is not the setup code printed on the server's console")
+        request["redirect_uri"] = f"https://{self.headers.get('Host')}/oidc/callback"
+        if "ca_file" in request:
+            # No file paths from a browser: the CA comes as the certificate itself.
+            return self.send_json(400, {"ok": False, "error": "send the CA certificate itself (ca_pem), not a path"})
+        try:
+            pem = request.pop("ca_pem", None)
+            ca_file = None
+            if pem:
+                ca_path = self.app.auth_dir / oidc.CA_FILE
+                auth.write_private_file(ca_path, oidc.check_ca_pem(pem))
+                ca_file = str(ca_path)
+            config = oidc.validate(request, ca_file=ca_file)
+            provider = oidc.discover(config)
+            checks = [*provider.checks, oidc.check_client(provider, config)]
+        except SetupError as exc:
+            return self.send_json(400, {"ok": False, "error": str(exc)[:500]})
+        except oidc.OidcError as exc:
+            return self.send_json(400, {"ok": False, "error": str(exc)[:500]})
+        if path == "/setup/test":
+            return self.send_json(200, {"ok": True, "checks": checks, "redirect_uri": config.redirect_uri})
+        oidc.save(self.app.auth_dir, config)
+        with self.app._provider_lock:
+            self.app.provider = provider
+        self.app.oidc, self.app.setup_code = config, None
         self.app.limiter.succeeded(address)
-        # Every response is already Cache-Control: no-store, so the token is never cached.
-        return self.send_json(200, {"name": joined[0], "token": joined[1]})
+        return self.send_json(200, {"ok": True, "checks": checks, "redirect": "/login"})
 
     def _json_body(self, body: bytes) -> dict | None:
         """Actions take a JSON object, from a page of this dashboard (an exact Origin header)."""
@@ -832,7 +869,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return value
 
-    def start_scan(self, body: bytes) -> None:
+    def start_scan(self, body: bytes, session: auth.Session) -> None:
         scans = self.app.scans
         if scans is None or scans.targets() is None:
             return self.send_error_json(404, "not found")
@@ -864,7 +901,7 @@ class Handler(BaseHTTPRequestHandler):
                 if run["kind"] != "scheduled":
                     return self.send_error_json(409, "only scheduled runs can be rescanned by commit")
             trigger = "rescan-commit" if run_id is not None else ("rescan" if request.get("rescan") else "dashboard")
-            status, result = scans.start(request["target"], data.scan_triggers, trigger, run_id)
+            status, result = scans.start(request["target"], data.scan_triggers, trigger, run_id, session.who)
         finally:
             data.conn.close()
         return self.send_json(status, result)
@@ -877,33 +914,57 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ routes
 
-    def login(self, body: bytes) -> None:
-        address = self.client_address[0]
-        if not self.app.limiter.allowed(address):
-            return self.send(303, b"", "text/plain", {"Location": "/login?error=limit", "Retry-After": "900"})
-        if self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/x-www-form-urlencoded":
-            return self.send_error_json(415, "expected a form post")
+    def _to_login(self, error: str, extra: dict | None = None) -> None:
+        self.send(303, b"", "text/plain", {"Location": f"/login?error={error}", **(extra or {})})
+
+    def oidc_start(self) -> None:
+        """GET /oidc/start: send the browser to the provider, with a fresh state, nonce and PKCE challenge."""
         try:
-            form = parse_qs(body.decode("ascii"), max_num_fields=4, strict_parsing=False)
-        except (UnicodeDecodeError, ValueError):
-            return self.send_error_json(400, "bad form")
-        name = (form.get("name") or [""])[0].strip()
-        token = (form.get("token") or [""])[0].strip()
+            provider = self.app.provider_now()
+        except oidc.OidcError:
+            return self._to_login("provider")
+        state, pending = self.app.logins.start()
+        cookie = f"{LOGIN_COOKIE}={state}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={oidc.LOGIN_SECONDS}"
+        location = oidc.authorization_url(provider, self.app.oidc, state, pending)
+        return self.send(303, b"", "text/plain", {"Location": location, "Set-Cookie": cookie})
+
+    def oidc_callback(self, query: dict) -> None:
+        """GET /oidc/callback: check the state, swap the code for an ID token, check it, and decide."""
+        address = self.client_address[0]
+        clear = {"Set-Cookie": f"{LOGIN_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0"}
+        if not self.app.limiter.allowed(address):
+            return self._to_login("limit", clear)
+        state = _one(query, "state", 100)
+        cookie = None
+        for part in (self.headers.get("Cookie") or "")[:8192].split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == LOGIN_COOKIE:
+                cookie = value
+        # The state must come back to the browser that started the login, and be used once.
+        if not state or not cookie or not hmac.compare_digest(state, cookie):
+            self.app.limiter.failed(address)
+            return self._to_login("state", clear)
+        pending = self.app.logins.finish(state)
+        if pending is None:
+            return self._to_login("state", clear)
+        if _one(query, "error", 100):
+            return self._to_login("denied", clear)
+        try:
+            provider = self.app.provider_now()
+            claims = oidc.exchange(provider, self.app.oidc, _one(query, "code", 2000) or "", pending)
+        except oidc.OidcError:
+            self.app.limiter.failed(address)
+            return self._to_login("provider", clear)
         conn = self.app.users()
         try:
-            named = users.has_active_users(conn)
-            user = users.check(conn, name, token) if named else None
+            user = users.sign_in(conn, claims, oidc.is_admin(self.app.oidc, claims))
+        except users.SignInRefusedError as exc:
+            return self._to_login(exc.code, clear)
         finally:
             conn.close()
-        if named and user is None or not named and not self.app.tokens.matches(token):
-            self.app.limiter.failed(address)
-            return self.send(303, b"", "text/plain", {"Location": "/login?error=token"})
         self.app.limiter.succeeded(address)
-        if user is not None:
-            sid = self.app.sessions.create(user.name, user.role, user.credential_version)
-        else:
-            sid = self.app.sessions.create(token_hash=self.app.tokens.stored())
-        self.send(303, b"", "text/plain", {"Location": "/", "Set-Cookie": auth.session_cookie(sid)})
+        sid = self.app.sessions.create(user.email, user.role, user.version)
+        return self.send(200, SIGNED_IN_PAGE, HTML, {"Set-Cookie": [auth.session_cookie(sid), clear["Set-Cookie"]]})
 
     def api(self, path: str, query: dict, session: auth.Session) -> None:
         if path not in API_PATHS:
@@ -920,7 +981,12 @@ class Handler(BaseHTTPRequestHandler):
                     {
                         "users": users.list_users(conn),
                         "events": users.events(conn),
-                        "shared_token": not users.has_active_users(conn),
+                        "provider": {
+                            "name": self.app.oidc.display_name,
+                            "issuer": self.app.oidc.issuer,
+                            "admin_claim": self.app.oidc.admin_claim,
+                            "admin_value": self.app.oidc.admin_value,
+                        },
                     },
                 )
             finally:
@@ -1054,10 +1120,6 @@ class Handler(BaseHTTPRequestHandler):
 def build_server(config: ServeConfig) -> DashboardServer:
     if not config.hosts:
         raise SetupError("name at least one host name or address the dashboard is reached at (--host)")
-    if not config.token_hash.is_file() and not (config.token_hash.parent / users.USERS_FILE).is_file():
-        raise SetupError(
-            "nobody can sign in yet: run `shoalscan serve user add NAME --admin` first, and open the invite it prints"
-        )
     app = App(config)
     ctx = tls_context(config.cert, config.key)
     server = DashboardServer((config.bind, config.port), app, ctx)
@@ -1071,6 +1133,13 @@ def serve(config: ServeConfig) -> None:
     port = server.server_address[1]
     hosts = ", ".join(f"https://{h}" for h in sorted(allowed_host_headers(config.hosts, port)))
     print(f"shoalscan serve: HTTPS only on {config.bind}:{port}; open {hosts}", flush=True)
+    if server.app.setup_code:
+        print(
+            "shoalscan serve: sign-in is not set up yet. Open /setup on the dashboard and enter this one-time "
+            f"setup code:\n\n    {server.app.setup_code}\n\n"
+            "It works only while the dashboard runs; a restart prints a new one.",
+            flush=True,
+        )
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:

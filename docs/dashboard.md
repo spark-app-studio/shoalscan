@@ -43,13 +43,7 @@ Without `--yes` it only says what it would delete. It deletes the run with its f
 
 ## Serving the dashboard
 
-The dashboard serves HTTPS only and needs three things: a first user, a TLS certificate and its key, and the history database. Add yourself as the first admin:
-
-```sh
-shoalscan serve user add alice --admin --url https://127.0.0.1:8443
-```
-
-It prints an invite link, once. Open it after starting the dashboard (below) and choose **Get my token**: the page shows your user name and your own 256-bit token, once, and **Save and sign in** lets your password manager store them. See [Users](#users) for the rest.
+The dashboard serves HTTPS only and needs three things: an OpenID Connect provider for sign-in (such as Dex, Keycloak, Okta or Microsoft Entra ID), a TLS certificate and its key, and the history database. Sign-in is set up in the browser, the first time the dashboard starts (see [Signing in](#signing-in)).
 
 Then make a certificate. `init-tls` needs the `openssl` command:
 
@@ -65,31 +59,47 @@ Start the dashboard:
 shoalscan serve
 ```
 
-It listens on `127.0.0.1:8443` by default. Open the invite link, or `https://127.0.0.1:8443` to sign in with your user name and token. To serve other machines, bind to an address they can reach and name the host names and addresses they use:
+It listens on `127.0.0.1:8443` by default. Open `https://127.0.0.1:8443`: the first time, it takes you to the setup wizard. To serve other machines, bind to an address they can reach and name the host names and addresses they use:
 
 ```sh
 shoalscan serve init-tls --dns scans.example.internal --ip 192.0.2.10
 shoalscan serve --bind 0.0.0.0 --host scans.example.internal --host 192.0.2.10
 ```
 
-The dashboard answers only to requests whose `Host` header is one of those names with the port. With a wildcard `--bind`, `--host` is required. Put `--state-dir` after `user`, `token` or `init-tls` when you use those subcommands.
+The dashboard answers only to requests whose `Host` header is one of those names with the port. With a wildcard `--bind`, `--host` is required. Put `--state-dir` after `user`, `oidc` or `init-tls` when you use those subcommands.
 
-### Users
+### Signing in
 
-Everyone signs in with a user name and their own 256-bit token. There are two roles:
+People sign in through your organisation's OpenID Connect provider. Shoalscan never sees a password.
 
-- **admin:** everything a member can do, and manages users, the Configuration page and scans;
-- **member:** reads every page and reviews findings.
+**Setting it up.** The first time `shoalscan serve` starts, it has no sign-in settings, so it serves only a setup wizard and prints a one-time setup code on its console:
 
-An admin adds a user, on the **Users** page or with `shoalscan serve user add NAME [--admin]`, and sends them the invite link it shows. The link works once and expires after 24 hours. Opening it gives the user their token, shown only to them, once; nobody else ever sees it, and only its SHA-256 is stored. A user who loses their token gets a new invite (**Invite again**, or `shoalscan serve user reset NAME`), which also ends the old token and its sessions at once. **Disable** stops a user from signing in and ends their sessions; **Enable** lets them back. Role changes take effect on the user's next request. The last active admin cannot be disabled, made a member or invited again, and nobody can change their own account on the page.
+```text
+shoalscan serve: sign-in is not set up yet. Open /setup on the dashboard and enter this one-time setup code:
 
-`shoalscan serve user list` lists the users; `serve user role NAME admin|member`, `disable` and `enable` do from the command line what the page does. Whoever can run commands as the dashboard's account can always add an admin, so losing every token never locks you out.
+    6dW1n8kq...
+```
 
-Reviews, configuration changes and scans are recorded under the user's name. Every change to a user is recorded too, with who made it and when, and the **Users** page shows it.
+The wizard needs that code, so only someone who can see the server's console can set up sign-in; a stranger who reaches the port first cannot. A restart prints a new code. In the wizard:
 
-Users are kept in `users.sqlite3` in the dashboard's state directory (mode 0600), not in the history database: `shoalscan record` writes the history, often from CI, and nothing that can write it should be able to make someone an admin.
+1. Register Shoalscan at your provider as a confidential client, with the redirect URI the wizard shows (`https://<the dashboard's address>/oidc/callback`) and a client secret. For Dex, the wizard shows the `staticClients` entry to add.
+2. Enter the setup code, the issuer URL, the client id and secret, and, if the provider's certificate comes from a private CA, paste that CA's certificate (PEM). The dashboard keeps it as `oidc-ca.pem` in its state directory; it never takes a file path from the browser.
+3. Choose who is an admin: by default, anyone whose ID token's `groups` claim holds `shoal-admin`. Any claim works: a group, a role, or a claim that is `true`.
+4. **Test the connection.** The wizard reads the provider's discovery document and signing keys, checks that ID tokens are signed with RS256, that PKCE and the scopes are supported, and that the provider accepts the client id and secret. Then **Save and go to sign-in**.
 
-**From the shared token.** Dashboards set up before users existed signed in with one shared token from `shoalscan serve token`. It keeps working, as an admin, until the first user joins; from then on it no longer signs in, and its sessions end. To move over, add yourself with `shoalscan serve user add NAME --admin`, open the invite, and invite everyone else.
+The settings are kept in `oidc.toml` in the state directory, mode 0600, since it holds the client secret. `shoalscan serve oidc show [--test]` prints them (never the secret) and checks the provider again; `shoalscan serve oidc reset` removes them, so the next start runs the wizard again.
+
+**Who gets in.**
+
+- **Admins** are the people whose ID token carries the admin claim. That is decided at the provider, at every sign-in: take someone out of the group there, and their next sign-in is no longer an admin's. Admins manage who may sign in, the Configuration page and scans.
+- **Members** are people an admin has allowed, by email address, on the **Users** page or with `shoalscan serve user allow EMAIL`. They read every page and review findings.
+- **Everyone else is refused**, even with a valid account at the provider, and is told to ask an admin.
+
+Only email addresses the provider marks as verified count. A person's first sign-in ties their address to their account at the provider, so another account that later uses the same address is refused. An admin can take back a member's access, or disable anyone but themselves, admins included; either ends the person's sessions at once. `shoalscan serve user list|allow|disallow|disable|enable` does the same from the command line. Every change, and every first sign-in, is recorded with who and when, and the **Users** page shows it.
+
+The people list is kept in `users.sqlite3` in the state directory (mode 0600), not in the history database: `shoalscan record` writes the history, often from CI, and nothing that can write it should be able to let someone in.
+
+**How sign-in works.** **Sign in** sends you to the provider with the authorization code flow, PKCE (S256), a `state` tied to a short-lived cookie and a `nonce`. When you come back, Shoalscan swaps the code for an ID token at the provider's token endpoint, using the client secret over TLS, and checks the token's RS256 signature against the provider's published keys, its issuer, audience, expiry and nonce. The provider must be reached over https (plain http only on the loopback interface), with its certificate checked; proxy settings are ignored.
 
 [Security model](security-model.md#the-dashboard) describes how the dashboard protects itself: TLS settings, login, sessions, headers and limits.
 

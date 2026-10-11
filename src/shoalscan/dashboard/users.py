@@ -1,50 +1,42 @@
-"""Named dashboard users: personal tokens, single-use invites, two roles, and an audit.
+"""Who may use the dashboard: people who sign in through the OpenID Connect provider.
 
-Users live in their own SQLite database in the dashboard's state directory
-(`users.sqlite3`, mode 0600), next to the TLS key, and not in the history
-database: `shoalscan record` writes the history, often from CI, and whoever
-can write it must not be able to make themselves an admin.
+The provider proves who someone is; this database decides what they may do.
 
-- A user is made by an admin, on the command line or the dashboard, and
-  gets a single-use invite that expires after 24 hours. The invite code is
-  256 bits; only its SHA-256 is stored.
-- Opening the invite gives the user their own 256-bit token, shown once to
-  them and never to the admin. Only its SHA-256 is stored. A lost token
-  means a new invite.
-- Roles: an admin manages users, the Configuration page and scans; a member
-  reads everything and reviews findings.
-- Disabling a user, inviting them again or changing their role takes
-  effect on their next request: sessions carry a credential version and are
-  checked against this database every time.
-- There is always at least one active admin: the last one cannot be
-  disabled or made a member. The command line can always add an admin, so
-  losing every token is never a lock-out.
-- Every change is kept in `user_events`, with who made it and when.
+- An admin is anyone whose ID token carries the admin claim (by default the
+  `shoal-admin` group). The role comes from the provider at every sign-in:
+  remove someone from the group there and their next sign-in is a member's,
+  or is refused.
+- Anyone else is refused unless an admin has allowed their email address;
+  they are then a member, who reads everything and reviews findings.
+- Only verified email addresses count. On someone's first sign-in their
+  address is bound to the provider's subject for them, so a later account
+  that reuses the address is refused.
+- An admin can disable anyone but themselves, admins included; a disabled
+  person is refused even with the admin claim. Sessions are checked against
+  this database on every request, so a change takes effect at once.
+- Every change, and every first sign-in, is kept in `user_events`.
+
+The database is `users.sqlite3` in the dashboard's state directory (mode
+0600), apart from the history database, which `shoalscan record` writes,
+often from CI: nothing that can write the history can let someone in.
 """
 
 from __future__ import annotations
 
-import hmac
 import os
 import re
-import secrets
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
-from shoalscan.dashboard.auth import MAX_SECRET_CHARS, sha256_hex
 from shoalscan.errors import SetupError
 
 USERS_FILE = "users.sqlite3"
-ROLES = ("admin", "member")
-INVITE_HOURS = 24
-_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-# Compared against when a name is unknown, so a miss takes as long as a wrong token.
-_DUMMY = sha256_hex("no such user")
+_EMAIL = re.compile(r"^[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.?[A-Za-z0-9-]*$")
 
 MIGRATIONS: tuple[str, ...] = (
-    # 1: users and the record of every change to them.
+    # 1: personal tokens and invites (an unreleased build; replaced by 2).
     """
     CREATE TABLE users (
         name TEXT PRIMARY KEY,
@@ -66,35 +58,57 @@ MIGRATIONS: tuple[str, ...] = (
         detail TEXT NOT NULL DEFAULT ''
     );
     """,
+    # 2: sign-in through an OpenID Connect provider. People are kept by verified email.
+    """
+    DROP TABLE users;
+    DROP TABLE user_events;
+    CREATE TABLE users (
+        email TEXT PRIMARY KEY,
+        allowed INTEGER NOT NULL DEFAULT 0 CHECK (allowed IN (0, 1)),
+        disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),
+        subject TEXT,
+        last_role TEXT CHECK (last_role IN ('admin', 'member')),
+        last_login_at TEXT,
+        added_at TEXT NOT NULL,
+        added_by TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 0
+    ) WITHOUT ROWID;
+    CREATE TABLE user_events (
+        id INTEGER PRIMARY KEY,
+        at TEXT NOT NULL,
+        who TEXT NOT NULL,
+        user TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('allow', 'disallow', 'disable', 'enable', 'first-login')),
+        detail TEXT NOT NULL DEFAULT ''
+    );
+    """,
 )
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
 @dataclass(frozen=True)
 class User:
-    name: str
+    email: str
     role: str
-    credential_version: int
+    version: int
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(microsecond=0)
+class SignInRefusedError(Exception):
+    """Someone signed in at the provider but may not use the dashboard. `code` names why, for the login page."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
-def _stamp(moment: datetime) -> str:
-    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+def _now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def validate_name(name: object) -> str:
-    if not isinstance(name, str) or not _NAME.match(name):
-        raise SetupError("a user name is 1 to 64 lowercase letters, digits, dots, dashes or underscores")
-    return name
-
-
-def validate_role(role: object) -> str:
-    if role not in ROLES:
-        raise SetupError(f"the role must be one of {', '.join(ROLES)}")
-    return role
+def normalise_email(email: object) -> str:
+    if not isinstance(email, str) or not _EMAIL.match(email.strip()) or len(email) > 254:
+        raise SetupError(f"not an email address: {str(email)[:80]!r}")
+    return email.strip().lower()
 
 
 def open_users(state_dir: Path) -> sqlite3.Connection:
@@ -125,202 +139,161 @@ def open_users(state_dir: Path) -> sqlite3.Connection:
 def _event(conn: sqlite3.Connection, who: str, user: str, action: str, detail: str = "") -> None:
     conn.execute(
         "INSERT INTO user_events (at, who, user, action, detail) VALUES (?, ?, ?, ?, ?)",
-        (_stamp(_now()), who[:100], user, action, detail[:300]),
+        (_now(), who[:254], user, action, detail[:300]),
     )
 
 
-def _new_invite(conn: sqlite3.Connection, name: str) -> tuple[str, str]:
-    code = secrets.token_urlsafe(32)
-    expires = _stamp(_now() + timedelta(hours=INVITE_HOURS))
-    conn.execute(
-        "UPDATE users SET invite_sha256 = ?, invite_expires_at = ? WHERE name = ?", (sha256_hex(code), expires, name)
-    )
-    return code, expires
-
-
-def _active_admins(conn: sqlite3.Connection) -> int:
-    return conn.execute(
-        "SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0 AND token_sha256 IS NOT NULL"
-    ).fetchone()[0]
-
-
-def has_active_users(conn: sqlite3.Connection) -> bool:
-    """True once anyone has joined. From then on, the shared legacy token no longer signs in."""
-    return (
-        conn.execute("SELECT 1 FROM users WHERE disabled = 0 AND token_sha256 IS NOT NULL LIMIT 1").fetchone()
-        is not None
-    )
-
-
-# ------------------------------------------------------------------ changes
-
-
-def add_user(conn: sqlite3.Connection, name: str, role: str, who: str) -> tuple[str, str]:
-    """Make a user who has not joined yet. Returns their invite code and when it expires."""
-    name, role = validate_name(name), validate_role(role)
+def _transaction(conn: sqlite3.Connection, work):
     conn.execute("BEGIN IMMEDIATE")
     try:
-        if conn.execute("SELECT 1 FROM users WHERE name = ?", (name,)).fetchone():
-            raise SetupError(f"there is already a user named {name}")
-        conn.execute(
-            "INSERT INTO users (name, role, created_at, created_by) VALUES (?, ?, ?, ?)",
-            (name, role, _stamp(_now()), who[:100]),
-        )
-        code, expires = _new_invite(conn, name)
-        _event(conn, who, name, "invite", f"role {role}")
+        result = work()
         conn.execute("COMMIT")
+        return result
     except BaseException:
         conn.execute("ROLLBACK")
         raise
-    return code, expires
 
 
-def reinvite(conn: sqlite3.Connection, name: str, who: str) -> tuple[str, str]:
-    """A new invite. The user's token stops working at once, and so do their sessions."""
-    name = validate_name(name)
-    conn.execute("BEGIN IMMEDIATE")
+# ------------------------------------------------------------------ signing in
+
+
+def sign_in(conn: sqlite3.Connection, claims: dict, admin: bool) -> User:
+    """Decide whether the person behind checked ID token claims may use the dashboard, and as what."""
+    email, subject = claims.get("email"), claims.get("sub")
+    if claims.get("email_verified") is not True:
+        raise SignInRefusedError("unverified", "your identity provider did not confirm your email address")
     try:
-        row = conn.execute("SELECT role, disabled FROM users WHERE name = ?", (name,)).fetchone()
+        email = normalise_email(email)
+    except SetupError:
+        raise SignInRefusedError("no_email", "your identity provider sent no usable email address") from None
+
+    def work() -> User:
+        row = conn.execute("SELECT allowed, disabled, subject, version FROM users WHERE email = ?", (email,)).fetchone()
+        if row is not None and row[1]:
+            raise SignInRefusedError("disabled", f"{email} is disabled on this dashboard")
+        if row is not None and row[2] is not None and row[2] != subject:
+            raise SignInRefusedError("other_account", f"{email} belongs to another account at your identity provider")
+        if not admin and (row is None or not row[0]):
+            raise SignInRefusedError(
+                "not_allowed", f"{email} has not been given access to this dashboard; ask an admin"
+            )
+        role = "admin" if admin else "member"
         if row is None:
-            raise SetupError(f"there is no user named {name}")
-        if row[0] == "admin" and not row[1] and _active_admins(conn) == 1 and _has_token(conn, name):
-            raise SetupError(f"{name} is the only active admin; add another admin first")
-        conn.execute(
-            "UPDATE users SET token_sha256 = NULL, credential_version = credential_version + 1 WHERE name = ?", (name,)
-        )
-        code, expires = _new_invite(conn, name)
-        _event(conn, who, name, "reinvite")
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    return code, expires
+            conn.execute(
+                "INSERT INTO users (email, subject, last_role, last_login_at, added_at, added_by) VALUES (?, ?, ?, ?, "
+                "?, ?)",
+                (email, subject, role, _now(), _now(), "identity provider"),
+            )
+            _event(conn, email, email, "first-login", f"as {role}")
+            version = 0
+        else:
+            if row[2] is None:
+                _event(conn, email, email, "first-login", f"as {role}")
+            conn.execute(
+                "UPDATE users SET subject = ?, last_role = ?, last_login_at = ? WHERE email = ?",
+                (subject, role, _now(), email),
+            )
+            version = row[3]
+        return User(email, role, version)
+
+    return _transaction(conn, work)
 
 
-def _has_token(conn: sqlite3.Connection, name: str) -> bool:
-    return conn.execute("SELECT token_sha256 IS NOT NULL FROM users WHERE name = ?", (name,)).fetchone()[0] == 1
+def current(conn: sqlite3.Connection, email: str, role: str, version: int) -> bool:
+    """Does a session still hold? Its person must not be disabled or changed since,
+    and a member must still be allowed."""
+    row = conn.execute("SELECT allowed, disabled, version FROM users WHERE email = ?", (email,)).fetchone()
+    return row is not None and not row[1] and row[2] == version and (role == "admin" or bool(row[0]))
 
 
-def redeem(conn: sqlite3.Connection, code: str) -> tuple[str, str] | None:
-    """Use an invite: returns (name, the user's new token), or None for an unknown, used or expired code."""
-    if not isinstance(code, str) or not code or len(code) > MAX_SECRET_CHARS:
-        return None
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        row = conn.execute(
-            "SELECT name, invite_sha256, invite_expires_at, disabled FROM users WHERE invite_sha256 = ?",
-            (sha256_hex(code),),
-        ).fetchone()
-        if row is None or not hmac.compare_digest(row[1], sha256_hex(code)) or row[3] or row[2] < _stamp(_now()):
-            conn.execute("ROLLBACK")
-            return None
-        token = secrets.token_urlsafe(32)
-        conn.execute(
-            "UPDATE users SET token_sha256 = ?, invite_sha256 = NULL, invite_expires_at = NULL, "
-            "credential_version = credential_version + 1 WHERE name = ?",
-            (sha256_hex(token), row[0]),
-        )
-        _event(conn, row[0], row[0], "join")
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    return row[0], token
+def has_admin(conn: sqlite3.Connection) -> bool:
+    return conn.execute("SELECT 1 FROM users WHERE last_role = 'admin' AND disabled = 0 LIMIT 1").fetchone() is not None
 
 
-def set_disabled(conn: sqlite3.Connection, name: str, disabled: bool, who: str) -> None:
-    name = validate_name(name)
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        row = conn.execute("SELECT role, disabled FROM users WHERE name = ?", (name,)).fetchone()
+# ------------------------------------------------------------------ changes by admins
+
+
+def allow(conn: sqlite3.Connection, email: str, who: str) -> None:
+    """Let someone in as a member. Their first sign-in binds the address to their account at the provider."""
+    email = normalise_email(email)
+
+    def work() -> None:
+        row = conn.execute("SELECT allowed FROM users WHERE email = ?", (email,)).fetchone()
+        if row is not None and row[0]:
+            raise SetupError(f"{email} is already allowed")
         if row is None:
-            raise SetupError(f"there is no user named {name}")
-        if disabled and row[0] == "admin" and not row[1] and _active_admins(conn) == 1 and _has_token(conn, name):
-            raise SetupError(f"{name} is the only active admin; add another admin first")
-        conn.execute(
-            "UPDATE users SET disabled = ?, credential_version = credential_version + 1 WHERE name = ?",
-            (1 if disabled else 0, name),
-        )
-        _event(conn, who, name, "disable" if disabled else "enable")
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
+            conn.execute(
+                "INSERT INTO users (email, allowed, added_at, added_by) VALUES (?, 1, ?, ?)", (email, _now(), who[:254])
+            )
+        else:
+            conn.execute("UPDATE users SET allowed = 1, version = version + 1 WHERE email = ?", (email,))
+        _event(conn, who, email, "allow")
+
+    _transaction(conn, work)
 
 
-def set_role(conn: sqlite3.Connection, name: str, role: str, who: str) -> None:
-    name, role = validate_name(name), validate_role(role)
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        row = conn.execute("SELECT role, disabled FROM users WHERE name = ?", (name,)).fetchone()
-        if row is None:
-            raise SetupError(f"there is no user named {name}")
+def disallow(conn: sqlite3.Connection, email: str, who: str) -> None:
+    """Take back a member's access. (An admin's comes from the provider; disable them instead.)"""
+    email = normalise_email(email)
+
+    def work() -> None:
         if (
-            row[0] == "admin"
-            and role != "admin"
-            and not row[1]
-            and _active_admins(conn) == 1
-            and _has_token(conn, name)
+            conn.execute(
+                "UPDATE users SET allowed = 0, version = version + 1 WHERE email = ? AND allowed = 1", (email,)
+            ).rowcount
+            == 0
         ):
-            raise SetupError(f"{name} is the only active admin; add another admin first")
-        conn.execute("UPDATE users SET role = ? WHERE name = ?", (role, name))
-        _event(conn, who, name, "role", f"{row[0]} to {role}")
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
+            raise SetupError(f"{email} is not on the list of allowed people")
+        _event(conn, who, email, "disallow")
+
+    _transaction(conn, work)
+
+
+def set_disabled(conn: sqlite3.Connection, email: str, disabled: bool, who: str) -> None:
+    email = normalise_email(email)
+    if disabled and email == who:
+        raise SetupError("ask another admin to disable your own account")
+
+    def work() -> None:
+        if (
+            conn.execute(
+                "UPDATE users SET disabled = ?, version = version + 1 WHERE email = ?", (1 if disabled else 0, email)
+            ).rowcount
+            == 0
+        ):
+            raise SetupError(f"there is no one with the address {email}")
+        _event(conn, who, email, "disable" if disabled else "enable")
+
+    _transaction(conn, work)
 
 
 # ------------------------------------------------------------------ reading
 
 
-def check(conn: sqlite3.Connection, name: str, token: str) -> User | None:
-    """The user with this name and token, if they are active. Takes as long for an unknown name."""
-    if not isinstance(name, str) or not isinstance(token, str) or not token or len(token) > MAX_SECRET_CHARS:
-        return None
-    row = conn.execute(
-        "SELECT name, role, token_sha256, disabled, credential_version FROM users WHERE name = ?", (name,)
-    ).fetchone()
-    stored = row[2] if row is not None and row[2] else _DUMMY
-    ok = hmac.compare_digest(sha256_hex(token), stored)
-    if not ok or row is None or row[3] or not row[2]:
-        return None
-    return User(row[0], row[1], row[4])
-
-
-def current(conn: sqlite3.Connection, name: str, credential_version: int) -> User | None:
-    """The user a session belongs to, if it is still valid: active, and with the same credentials."""
-    row = conn.execute(
-        "SELECT name, role, disabled, credential_version, token_sha256 FROM users WHERE name = ?", (name,)
-    ).fetchone()
-    if row is None or row[2] or row[3] != credential_version or not row[4]:
-        return None
-    return User(row[0], row[1], row[3])
-
-
 def list_users(conn: sqlite3.Connection) -> list[dict]:
-    now = _stamp(_now())
     out = []
-    for name, role, token, invite_expires, disabled, created_at, created_by in conn.execute(
-        "SELECT name, role, token_sha256 IS NOT NULL, invite_expires_at, disabled, created_at, created_by FROM users "
-        "ORDER BY name"
+    for email, allowed, disabled, subject, role, last_login, added_at, added_by in conn.execute(
+        "SELECT email, allowed, disabled, subject, last_role, last_login_at, added_at, added_by FROM users ORDER BY "
+        "email"
     ):
         if disabled:
             status = "disabled"
-        elif token:
-            status = "active"
-        elif invite_expires and invite_expires >= now:
-            status = "invited"
+        elif role == "admin":
+            status = "admin (from the identity provider)"
+        elif allowed:
+            status = "allowed" if subject else "allowed, not signed in yet"
         else:
-            status = "invite expired"
+            status = "no access"
         out.append(
             {
-                "name": name,
+                "email": email,
+                "allowed": bool(allowed),
+                "disabled": bool(disabled),
                 "role": role,
                 "status": status,
-                "invite_expires_at": invite_expires if status == "invited" else None,
-                "created_at": created_at,
-                "created_by": created_by,
+                "last_login_at": last_login,
+                "added_at": added_at,
+                "added_by": added_by,
             }
         )
     return out

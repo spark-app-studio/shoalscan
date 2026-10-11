@@ -564,6 +564,7 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument("--state-dir", required=True, help="the dashboard's state directory, which holds scan_targets.toml")
     p.add_argument("--trigger", choices=tuple(WHO), default="cli", help=argparse.SUPPRESS)
+    p.add_argument("--who", help=argparse.SUPPRESS)  # the signed-in person's email, from the dashboard
     p.add_argument(
         "--run-id", type=int, help="scan again the exact commit of this run of the target (the new record replaces it)"
     )
@@ -597,9 +598,12 @@ def run(args: argparse.Namespace) -> int:
             raise SetupError("invalid target name")
         if args.run_id is not None and not 0 < args.run_id < 2**62:
             raise SetupError("invalid run id")
-        outcome = run_one(
-            state_dir, targets, args.target, WHO[args.trigger], sys.stdout, TRIGGER[args.trigger], args.run_id
-        )
+        who = WHO[args.trigger]
+        if args.who is not None and args.trigger in ("dashboard", "rescan", "rescan-commit"):
+            from shoalscan.dashboard.users import normalise_email
+
+            who = normalise_email(args.who)
+        outcome = run_one(state_dir, targets, args.target, who, sys.stdout, TRIGGER[args.trigger], args.run_id)
         print(f"shoalscan scanjob: {args.target}: {outcome}")
         return 0 if outcome in ("passed", "blocked") else 1
     except ShoalscanError as exc:

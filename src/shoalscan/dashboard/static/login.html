@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="same-origin">
-<title>Shoalscan: log in</title>
+<title>Shoalscan: sign in</title>
 <link rel="icon" href="/static/shoalscan-icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/login.js" defer></script>
@@ -13,16 +13,9 @@
 <main class="login-card">
   <img src="/static/shoalscan-icon.svg" alt="" width="96" height="96">
   <h1>Shoalscan</h1>
-  <p class="muted">Sign in with your user name and your personal token. An admin invites new users.</p>
+  <p class="muted">Sign in with your organisation's account.</p>
   <p id="login-error" class="error" role="alert" hidden></p>
-  <form method="post" action="/login">
-    <label for="name">User name</label>
-    <input id="name" name="name" type="text" maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false">
-    <label for="token">Token</label>
-    <input id="token" name="token" type="password" required maxlength="128" autocomplete="current-password" spellcheck="false">
-    <button type="submit">Log in</button>
-  </form>
-  <p class="muted small">Before anyone has joined, leave the user name empty and use the shared token from <code>shoalscan serve token</code>.</p>
+  <p><a class="button" href="/oidc/start">Sign in</a></p>
 </main>
 </body>
 </html>

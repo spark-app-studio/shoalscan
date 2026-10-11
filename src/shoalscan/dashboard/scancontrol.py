@@ -20,7 +20,7 @@ from pathlib import Path
 
 import shoalscan
 from shoalscan import history
-from shoalscan.dashboard import scanning
+from shoalscan.dashboard import scanning, users
 from shoalscan.errors import SetupError
 
 ENV_ALLOW = (
@@ -125,7 +125,7 @@ class ScanControl:
     # ------------------------------------------------------------ starting a scan
 
     def start(
-        self, name: object, read_triggers, trigger: str = "dashboard", run_id: int | None = None
+        self, name: object, read_triggers, trigger: str = "dashboard", run_id: int | None = None, who: str | None = None
     ) -> tuple[int, dict]:
         """Validate the request and spawn the worker. Returns an HTTP status and a JSON body.
 
@@ -167,14 +167,14 @@ class ScanControl:
                     ),
                     "retry_after": wait,
                 }
-            self._spawn(target.name, trigger, run_id)
+            self._spawn(target.name, trigger, run_id, who)
             now = time.time()
             requests["targets"][target.name] = now
             requests["recent"].append(now)
             scanning.write_private(self.state_dir / scanning.REQUESTS_FILE, json.dumps(requests))
         return 202, {"started": target.name, "status": self.status(read_triggers)}
 
-    def _spawn(self, name: str, trigger: str = "dashboard", run_id: int | None = None) -> None:
+    def _spawn(self, name: str, trigger: str = "dashboard", run_id: int | None = None, who: str | None = None) -> None:
         env = {k: os.environ[k] for k in ENV_ALLOW if k in os.environ}
         env.setdefault("PATH", "/usr/bin:/bin")
         # The worker imports this same Shoalscan, wherever it is installed.
@@ -193,6 +193,9 @@ class ScanControl:
         ]
         if run_id is not None:
             argv.append(f"--run-id={int(run_id)}")
+        if who is not None:
+            # The person who asked, for the audit; checked again by the worker.
+            argv.append(f"--who={users.normalise_email(who)}")
         log_path = self.state_dir / scanning.LOG_FILE
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         try:

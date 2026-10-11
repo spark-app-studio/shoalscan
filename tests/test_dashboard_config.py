@@ -266,7 +266,7 @@ class ConfigApiTests(unittest.TestCase):
         self.assertEqual(self.file()["target"][0]["enabled"], False)
         rows = self.audit()
         self.assertEqual([r[2] for r in rows], ["create", "update", "disable"])
-        self.assertTrue(rows[0][0].startswith("dashboard user (session "))
+        self.assertEqual(rows[0][0], "admin@example.com")  # changes name the person who signed in
         update_diff = json.loads(rows[1][3])
         self.assertEqual(update_diff["branch"], ["main", "develop"])
         self.assertEqual((rows[1][4], rows[1][5]), (None, scanning.policy_sha256(policy)))

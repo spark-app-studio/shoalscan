@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin">
+<title>Shoalscan: set up sign-in</title>
+<link rel="icon" href="/static/shoalscan-icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/setup.js" defer></script>
+</head>
+<body class="login-page">
+<main class="login-card setup-card">
+  <img src="/static/shoalscan-icon.svg" alt="" width="72" height="72">
+  <h1>Set up sign-in</h1>
+  <p class="muted">People sign in to this dashboard through your OpenID Connect provider, such as Dex. Fill this in once; the settings are saved on the server.</p>
+
+  <h2>1. Register Shoalscan at your provider</h2>
+  <p>Add a confidential client with this redirect URI, and a client secret you choose. For Dex, add to <code>staticClients</code>:</p>
+  <pre class="scan-log" id="setup-dex"></pre>
+
+  <h2>2. Tell Shoalscan about it</h2>
+  <form id="setup-form" autocomplete="off">
+    <label>Setup code, printed on the server's console when the dashboard started
+      <input name="setup_code" required maxlength="100" spellcheck="false" autocapitalize="none"></label>
+    <label>Provider name, shown on the sign-in button
+      <input name="display_name" maxlength="60" value="Dex"></label>
+    <label>Issuer URL
+      <input name="issuer" required maxlength="500" spellcheck="false" placeholder="https://localhost:5556/dex"></label>
+    <label>Client ID
+      <input name="client_id" required maxlength="200" spellcheck="false" value="shoalscan"></label>
+    <label>Client secret
+      <input name="client_secret" type="password" required maxlength="500" autocomplete="new-password"></label>
+    <label>CA certificate, if the provider's certificate comes from a private CA (optional; paste the PEM)
+      <textarea name="ca_pem" rows="4" maxlength="65536" spellcheck="false" placeholder="-----BEGIN CERTIFICATE-----"></textarea></label>
+    <fieldset>
+      <legend>Admins</legend>
+      <p class="muted small">People whose ID token carries this claim and value are admins. Everyone else needs an admin to let them in.</p>
+      <label>Claim <input name="admin_claim" maxlength="100" spellcheck="false" value="groups"></label>
+      <label>Value <input name="admin_value" maxlength="200" spellcheck="false" value="shoal-admin"></label>
+    </fieldset>
+    <p class="error" id="setup-error" role="alert" hidden></p>
+    <ul id="setup-checks" class="setup-checks" aria-live="polite"></ul>
+    <p>
+      <button type="button" id="setup-test" class="secondary">Test the connection</button>
+      <button type="submit" id="setup-save" disabled>Save and go to sign-in</button>
+    </p>
+  </form>
+</main>
+</body>
+</html>

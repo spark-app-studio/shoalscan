@@ -3,7 +3,6 @@
 import http.client
 import json
 import os
-import re
 import signal
 import ssl
 import tempfile
@@ -11,12 +10,12 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from urllib.parse import urlencode
 
 import helpers  # noqa: F401
+from fake_idp import FakeIdP, sign_in
 
 from shoalscan import history
-from shoalscan.dashboard import auth, scanning, server, tlsgen
+from shoalscan.dashboard import auth, oidc, scanning, server, tlsgen
 from shoalscan.errors import SetupError
 from test_scanjob import Fixture
 
@@ -26,14 +25,17 @@ class DashboardHarness:
 
     def __init__(self, base: Path, state: Path, db: Path, allow_config: bool = False):
         self.tls = tlsgen.generate(base / "tls", ["127.0.0.1"], [])
-        self.token = auth.create_token(base / "token.sha256")
+        self.idp = FakeIdP()
+        auth_dir = base / "auth"
+        auth_dir.mkdir(exist_ok=True)
+        oidc.save(auth_dir, self.idp.config())
         if not db.exists():
             history.open_for_write(db).close()
         config = server.ServeConfig(
             db=db,
             cert=self.tls["cert"],
             key=self.tls["key"],
-            token_hash=base / "token.sha256",
+            auth_dir=auth_dir,
             bind="127.0.0.1",
             port=0,
             hosts=("127.0.0.1",),
@@ -51,6 +53,7 @@ class DashboardHarness:
         self.httpd.shutdown()
         self.httpd.server_close()
         self.thread.join(timeout=10)
+        self.idp.close()
 
     def request(self, method, path, body=None, headers=None, cookie=None):
         conn = http.client.HTTPSConnection("127.0.0.1", self.port, context=self.ctx, timeout=20)
@@ -65,13 +68,8 @@ class DashboardHarness:
             conn.close()
 
     def login(self):
-        _, headers, _ = self.request(
-            "POST",
-            "/login",
-            urlencode({"token": self.token}),
-            {"Origin": self.origin, "Content-Type": "application/x-www-form-urlencoded"},
-        )
-        sid = re.match(rf"{auth.COOKIE_NAME}=([^;]+)", headers["Set-Cookie"]).group(1)
+        sid, where = sign_in(self.port, self.ctx, self.idp, "admin@example.com", groups=["shoal-admin"])
+        assert sid is not None, where
         status, _, body = self.request("GET", "/api/session", cookie=sid)
         return sid, json.loads(body)["csrf"]
 
@@ -261,7 +259,7 @@ class ScanEndpointTests(unittest.TestCase):
         self.assertEqual(body["current"]["outcome"], "passed", body)
         trigger = body["triggers"][0]
         self.assertEqual(
-            (trigger["target"], trigger["who"], trigger["outcome"]), ("acme/app", "dashboard user", "passed")
+            (trigger["target"], trigger["who"], trigger["outcome"]), ("acme/app", "admin@example.com", "passed")
         )
         self.assertEqual(trigger["run_id"], body["current"]["run_id"])
         self.assertGreater(body["targets"][0]["cooldown_remaining"], 500)

@@ -65,7 +65,7 @@ The scan runs in a separate worker, not in the web server. It fetches the clone,
 
 ### The scan audit
 
-Every scan started from the dashboard, the command line or the nightly job is audited in the history database with who started it, when, what kind of request it was, its outcome and the run it produced. The Runs page shows them. The dashboard has a single login token, so the person is recorded as "dashboard user".
+Every scan started from the dashboard, the command line or the nightly job is audited in the history database with who started it, when, what kind of request it was, its outcome and the run it produced. The Runs page shows them. A scan started from the dashboard is recorded under the email address of the person who signed in.
 
 ## The Configuration page
 
