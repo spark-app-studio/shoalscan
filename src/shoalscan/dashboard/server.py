@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from shoalscan import __version__, history
+from shoalscan import PROJECT_URL, __version__, history
 from shoalscan.dashboard import auth, scanning
 from shoalscan.dashboard.configedit import ConfigEditor
 from shoalscan.dashboard.scancontrol import ScanControl
@@ -40,7 +40,6 @@ from shoalscan.errors import SetupError
 from shoalscan.resources import data_path, default_lock_path
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-PROJECT_URL = "https://github.com/spark-app-studio/shoalscan"
 LICENSE_URL = "https://www.apache.org/licenses/LICENSE-2.0"
 
 HTML = "text/html; charset=utf-8"

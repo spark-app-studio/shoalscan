@@ -253,8 +253,17 @@ def add_commands(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--keep-pr-days", type=int, default=history.DEFAULT_KEEP_PR_DAYS, help=f"days of pull-request runs kept (default: {history.DEFAULT_KEEP_PR_DAYS})")
     p.set_defaults(func=cmd_record)
 
-    p = sub.add_parser("triage", help="turn dashboard reviews into baseline entries")
-    tsub = p.add_subparsers(dest="triage_command", required=True)
+    from shoalscan import triage
+
+    p = sub.add_parser(
+        "triage",
+        help="list the findings of the last scan as a prioritised work list, or export dashboard reviews",
+        description="Without a subcommand: print a prioritised work list of the last scan's findings, grouped by rule family "
+        "and component. `triage export` turns dashboard reviews into baseline entries.",
+    )
+    triage.add_arguments(p)
+    p.set_defaults(func=triage.run)
+    tsub = p.add_subparsers(dest="triage_command")
     t = tsub.add_parser("export", help="print baseline entries for findings reviewed as false positive, accepted risk or won't fix")
     t.add_argument("--repo", required=True, help="the repository's name on the dashboard, such as owner/project")
     t.add_argument("--issue", help="the issue every printed entry names: #123 or a URL (required)")

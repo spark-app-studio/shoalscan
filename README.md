@@ -77,17 +77,18 @@ shoalscan scan && shoalscan check
 5. [Rules](docs/rules.md): Shoalscan's own rules and the community rules snapshot.
 6. [The dashboard](docs/dashboard.md): recording runs, correcting the history, serving the dashboard and its pages.
 7. [Reviewing findings](docs/reviewing-findings.md): review statuses, automatic verification of fixes, and `triage export`.
-8. [Scheduled scans](docs/scheduled-scans.md): nightly scans of the default branch with the example script and units.
-9. [Scanning from the dashboard](docs/dashboard-scanning.md): registered repositories, Rescan, and the Configuration page.
-10. [Security model](docs/security-model.md): how the dashboard and the scan worker protect themselves.
-11. [Limits](docs/limits.md): what static analysis and Shoalscan's own safeguards cannot do.
-12. [Development](docs/development.md): running the tests.
+8. [The triage work list](docs/triage.md): `shoalscan triage`, a prioritised work list of the last scan's findings, grouped by rule family and component.
+9. [Scheduled scans](docs/scheduled-scans.md): nightly scans of the default branch with the example script and units.
+10. [Scanning from the dashboard](docs/dashboard-scanning.md): registered repositories, Rescan, and the Configuration page.
+11. [Security model](docs/security-model.md): how the dashboard and the scan worker protect themselves.
+12. [Limits](docs/limits.md): what static analysis and Shoalscan's own safeguards cannot do.
+13. [Development](docs/development.md): running the tests.
 
 **Design and contributing:** [docs/design.md](docs/design.md) describes the goals, principles and plan.
 
 ## Status
 
-Early development. Phase 1 (Opengrep install, scan, baseline and check) and phase 2 (the run history and the dashboard) are done. Triage work lists (`shoalscan triage`) and dated security reports (`shoalscan report`), and more scanners (gitleaks, zizmor, hadolint, trivy config and clippy's security lints), come in later phases. See [CHANGELOG.md](CHANGELOG.md) for changes.
+Early development. Phase 1 (Opengrep install, scan, baseline and check) and phase 2 (the run history and the dashboard) are done. Phase 3 has begun with triage work lists (`shoalscan triage`); dated security reports (`shoalscan report`) and more scanners (gitleaks, zizmor, hadolint, trivy config and clippy's security lints) come in later phases. See [CHANGELOG.md](CHANGELOG.md) for changes.
 
 ## Contributing and security
 
