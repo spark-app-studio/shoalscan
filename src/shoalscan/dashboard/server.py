@@ -830,11 +830,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(400, {"ok": False, "error": "send the CA certificate itself (ca_pem), not a path"})
         try:
             pem = request.pop("ca_pem", None)
+            ca_file = None
             if pem:
                 ca_path = self.app.auth_dir / oidc.CA_FILE
                 auth.write_private_file(ca_path, oidc.check_ca_pem(pem))
-                request["ca_file"] = str(ca_path)
-            config = oidc.validate(request)
+                ca_file = str(ca_path)
+            config = oidc.validate(request, ca_file=ca_file)
             provider = oidc.discover(config)
             checks = [*provider.checks, oidc.check_client(provider, config)]
         except SetupError as exc:

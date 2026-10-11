@@ -36,8 +36,6 @@ class ConfigTests(unittest.TestCase):
             {"client_secret": "short"},
             {"redirect_uri": "https://dash.example/other"},
             {"redirect_uri": "http://dash.example/oidc/callback"},
-            {"ca_file": "relative.pem"},
-            {"ca_file": "/no/such/file.pem"},
             {"admin_claim": "a b"},
             {"admin_value": ""},
             {"scopes": ["email"]},
@@ -46,6 +44,9 @@ class ConfigTests(unittest.TestCase):
         for change in bad:
             with self.subTest(change=change), self.assertRaises(SetupError):
                 oidc.validate(dict(self.BASE, **change))
+        for ca_file in ("relative.pem", "/no/such/file.pem"):
+            with self.subTest(ca_file=ca_file), self.assertRaises(SetupError):
+                oidc.validate(dict(self.BASE), ca_file=ca_file)
 
     def test_save_and_load_keep_it_private(self):
         import tempfile

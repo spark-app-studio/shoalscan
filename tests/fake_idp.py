@@ -190,7 +190,7 @@ class FakeIdP:
             "redirect_uri": "https://127.0.0.1/oidc/callback",
             **overrides,
         }
-        return oidc.validate(raw)
+        return oidc.validate(raw, ca_file=raw.get("ca_file"))
 
     def close(self) -> None:
         self.httpd.shutdown()

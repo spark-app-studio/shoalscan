@@ -106,7 +106,7 @@ def check_ca_pem(text: object) -> str:
     return text
 
 
-def validate(raw: dict) -> Config:
+def validate(raw: dict, ca_file: str | None = None) -> Config:
     """Check a configuration from the wizard or the file; anything unexpected is refused."""
     required = {"issuer", "client_id", "client_secret", "redirect_uri"}
     allowed = required | {"ca_file", "admin_claim", "admin_value", "scopes", "display_name"}
@@ -125,7 +125,9 @@ def validate(raw: dict) -> Config:
         raise SetupError("the client id must be a single word")
     if not isinstance(secret, str) or not 8 <= len(secret) <= 500:
         raise SetupError("the client secret must be 8 to 500 characters")
-    ca_file = raw.get("ca_file") or None
+    # The CA path never comes from `raw`: the caller passes the one it chose (the wizard's
+    # saved certificate) or the one in the owner's oidc.toml.
+    ca_file = ca_file or None
     if ca_file is not None:
         if not isinstance(ca_file, str) or not Path(ca_file).is_absolute() or not Path(ca_file).is_file():
             raise SetupError("the CA bundle must be the absolute path of a PEM file on this server")
@@ -178,7 +180,7 @@ def load(state_dir: Path) -> Config | None:
         raise SetupError(f"{path} is unreadable: {exc}") from None
     if path.stat().st_mode & 0o077:
         raise SetupError(f"{path} holds the client secret and must not be readable by others (chmod 600)")
-    return validate(raw)
+    return validate(raw, ca_file=raw.get("ca_file"))
 
 
 # ------------------------------------------------------------------ talking to the provider
