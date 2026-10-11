@@ -15,6 +15,10 @@ All notable changes to Shoalscan are recorded here.
 - `findings.sarif` no longer copies the scanned code: the `snippet` of every Opengrep result (its region, context region, related locations and code flows) is removed. A snippet held the whole matched line, so a rule that finds hard-coded secrets put the secret itself into a file that CI uploads or keeps as an artifact. Locations, messages and fingerprints are unchanged.
 - Text from the scanned repository (paths, messages, rule metadata, baseline reasons, component names, review descriptions) is escaped in the work list and the report, so it cannot add links, images, HTML or headings.
 
+### Project
+
+- CodeQL leaves out the deliberately insecure test fixtures in `rules/` and `tests/data/`, as Shoalscan's own scan does; the alerts raised on them were dismissed as false positives.
+
 ## 0.1.1 (2026-10-11)
 
 ### Fixed
