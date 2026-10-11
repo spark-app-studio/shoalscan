@@ -2,8 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   One nightly job for every repository registered in the dashboard's
-  scan_targets.toml with nightly = true (see the README, "Scanning from the
-  dashboard"). It scans them one after another with the same worker, lock
+  scan_targets.toml with nightly = true (see docs/scheduled-scans.md and
+  docs/dashboard-scanning.md). It scans them one after another with the same worker, lock
   and audit as the dashboard's Run a fresh scan.
 
   1. Replace /Users/you and the path to shoalscan below.

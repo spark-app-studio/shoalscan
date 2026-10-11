@@ -228,7 +228,7 @@ def cmd_serve_init_tls(args: argparse.Namespace) -> int:
     print(f"CA SHA-256 fingerprint: {made['ca_sha256']}")
     print("The CA's private key has been deleted: it signed this one certificate and can sign nothing else.")
     print("Its name constraints allow only these names, for both DNS names and IP addresses, and it may vouch only for TLS servers.")
-    print("Trust the CA certificate on the machines that open the dashboard (see the README, \"Trusting the certificate\").")
+    print("Trust the CA certificate on the machines that open the dashboard (see docs/dashboard.md, \"Trusting the certificate\").")
     return 0
 
 
