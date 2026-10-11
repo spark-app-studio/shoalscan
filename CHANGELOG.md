@@ -41,6 +41,8 @@ All notable changes to Shoalscan are recorded here.
 ### Project
 
 - The code follows PEP 8 with 120-character lines, formatted and checked by Ruff 0.14.0 (a development tool, pinned by hash in `requirements-dev.txt`, never a dependency). CI runs `ruff check` and `ruff format --check`. `CloneTooLarge` in the scan worker is now `CloneTooLargeError`.
+- Ruff also checks for likely bugs (its `B` rules, from flake8-bugbear): every `zip()` now says whether its inputs must be the same length, and they must everywhere in Shoalscan, so a mismatch is an error instead of silently dropped data.
+- A command and file reference, `docs/reference.md`: every command, the exit codes, and the files Shoalscan reads and writes. `SECURITY.md` names every scanner's upstream and describes the OpenID Connect sign-in.
 - Fuzzing: `fuzz/targets.py` holds fuzz targets for the parsers that read untrusted input (`.shoalscan.toml`, the baseline, suppression markers, the Markdown escaper, and ID tokens, both arbitrary and correctly signed with arbitrary claims), each checking a contract rather than only "no crash". The `fuzz` workflow runs each under Atheris (pinned by hash in `requirements-fuzz.txt`, never a dependency) for a minute on pull requests that change the code and ten minutes weekly; the unit tests run every target over its seeds and random edits of them.
 - CodeQL leaves out the deliberately insecure test fixtures in `rules/` and `tests/data/`, as Shoalscan's own scan does; the alerts raised on them were dismissed as false positives.
 

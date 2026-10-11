@@ -474,6 +474,6 @@ def install(
         install_opengrep(tools_dir, lock, plat, fetch, tmp, cosign, verify_signature)
         if with_rules:
             install_rules(tools_dir, lock, fetch, tmp)
-        for name, tool in sorted(lock.tools.items()):
+        for _name, tool in sorted(lock.tools.items()):
             install_pinned_tool(tools_dir, tool, plat, fetch, tmp, cosign, verify_bundle)
     _log(f"tools are ready in {tools_dir}")

@@ -192,7 +192,7 @@ def normalise(report: list, root: Path, components: dict[str, str], excludes: tu
             component=component_for(it["path"], components),
             message=it["message"],
         )
-        for it, fp in zip(items, prints)
+        for it, fp in zip(items, prints, strict=True)
     ]
 
 

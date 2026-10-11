@@ -90,7 +90,7 @@ class RouteTests(unittest.TestCase):
             "#/config?edit=x": ("config", {}),
         }
         results = call("return HASHES.map(h => M.parseRoute(h));", HASHES=list(cases))
-        for (hash_, (view, params)), got in zip(cases.items(), results):
+        for (hash_, (view, params)), got in zip(cases.items(), results, strict=True):
             with self.subTest(hash=hash_):
                 self.assertEqual(got, {"view": view, "params": params})
 
@@ -247,7 +247,7 @@ class ViewModelTests(unittest.TestCase):
         self.assertEqual(first["component"], HOSTILE)  # shown as text, never parsed
         self.assertEqual(query(first["href"]), {"repo": "acme/app", "run": "7", "component": HOSTILE})
         for row in model["rows"]:
-            for severity, cell in zip(by_component["severities"], row["cells"]):
+            for severity, cell in zip(by_component["severities"], row["cells"], strict=True):
                 with self.subTest(component=row["component"], severity=severity):
                     if cell["value"] == 0:
                         self.assertIsNone(cell["href"])

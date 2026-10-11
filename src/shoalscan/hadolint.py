@@ -205,7 +205,7 @@ def normalise(
             component=component_for(it["path"], components),
             message=it["message"],
         )
-        for it, fp in zip(items, prints)
+        for it, fp in zip(items, prints, strict=True)
     ]
     # A file that did not parse has no other results worth keeping.
     findings = [f for f in findings if f.path not in errors]

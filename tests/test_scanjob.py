@@ -180,7 +180,7 @@ class WorkerTests(WorkerTestCase):
         calls = f.calls()
         self.assertEqual([c[2] for c in calls], ["scan", "check", "record"])
         record = calls[2]
-        opts = dict(zip(record[3::2], record[4::2]))
+        opts = dict(zip(record[3::2], record[4::2], strict=True))
         head = subprocess.run(
             ["git", "-C", str(f.clone), "rev-parse", "refs/remotes/origin/main"],
             capture_output=True,
@@ -192,7 +192,7 @@ class WorkerTests(WorkerTestCase):
             ("acme/app", "main", head, "scheduled", "0", str(f.db)),
         )
         # The scan ran in a temporary worktree of the registered clone, which is gone again.
-        scan_repo = Path(dict(zip(calls[0][3::2], calls[0][4::2]))["--repo"])
+        scan_repo = Path(dict(zip(calls[0][3::2], calls[0][4::2], strict=True))["--repo"])
         self.assertFalse(scan_repo.exists())
         self.assertNotIn(str(f.clone), json.dumps(calls[0]))
         self.assertEqual(
@@ -279,7 +279,8 @@ class RescanTests(WorkerTestCase):
         self.assertIn("--commit-rescan", record)
         # The scan ran the old commit, not the branch tip.
         record = [c for c in f.calls() if c[2] == "record"][-1]
-        self.assertEqual(dict(zip(record[3::2], record[4::2]))["--commit"], first_commit)
+        # This record ends with a flag that takes no value, so the pairs are uneven.
+        self.assertEqual(dict(zip(record[3::2], record[4::2], strict=False))["--commit"], first_commit)
 
     def test_a_commit_that_is_gone_records_nothing(self):
         f = Fixture(self.base)
@@ -664,7 +665,7 @@ class NightlyTests(WorkerTestCase):
         self.assertEqual(results["acme/disabled"], "skipped: disabled")
         self.assertEqual(results["acme/daytime"], "skipped: not nightly")
         self.assertEqual(results["acme/mirrored"], "passed")
-        names = [dict(zip(c[3::2], c[4::2]))["--repo-name"] for c in f.calls() if c[2] == "record"]
+        names = [dict(zip(c[3::2], c[4::2], strict=True))["--repo-name"] for c in f.calls() if c[2] == "record"]
         self.assertEqual(names, ["acme/first", "acme/mirrored"])
         self.assertEqual(f.rows("SELECT who FROM scan_triggers"), [("nightly job",), ("nightly job",)])
 

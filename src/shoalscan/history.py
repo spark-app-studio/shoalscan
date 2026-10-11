@@ -1222,7 +1222,7 @@ def list_runs(conn: sqlite3.Connection, repo: str) -> list[dict]:
         (repo,),
     ).fetchall()
     keys = ("id", "scanned_at", "kind", "ref", "commit", "outcome", "findings")
-    return [dict(zip(keys, row)) for row in rows]
+    return [dict(zip(keys, row, strict=True)) for row in rows]
 
 
 def delete_run(conn: sqlite3.Connection, repo: str, run_id: int) -> dict:
@@ -1261,4 +1261,4 @@ def delete_run(conn: sqlite3.Connection, repo: str, run_id: int) -> dict:
         conn.execute("ROLLBACK")
         raise
     keys = ("id", "repo_id", "scanned_at", "kind", "ref", "commit", "outcome", "findings")
-    return {**dict(zip(keys, row)), "runs_left": left}
+    return {**dict(zip(keys, row, strict=True)), "runs_left": left}

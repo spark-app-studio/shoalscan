@@ -257,7 +257,7 @@ def normalise(doc: dict, root: Path, components: dict[str, str]) -> tuple[list[F
         )
     prints = assign_fingerprints(items)
     findings, index = [], {}
-    for it, fp in zip(items, prints):
+    for it, fp in zip(items, prints, strict=True):
         findings.append(
             Finding(
                 tool=TOOL,

@@ -85,7 +85,8 @@ shoalscan scan && shoalscan check
 12. [Scanning from the dashboard](docs/dashboard-scanning.md): registered repositories, Rescan, and the Configuration page.
 13. [Security model](docs/security-model.md): how the dashboard and the scan worker protect themselves.
 14. [Limits](docs/limits.md): what static analysis and Shoalscan's own safeguards cannot do.
-15. [Development](docs/development.md): running the tests.
+15. [Development](docs/development.md): running the tests, the code style and fuzzing.
+16. [Command and file reference](docs/reference.md): every command, the exit codes, and the files Shoalscan reads and writes.
 
 **Design and contributing:** [docs/design.md](docs/design.md) describes the goals, principles and plan.
 
