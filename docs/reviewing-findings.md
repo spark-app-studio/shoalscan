@@ -18,6 +18,8 @@ Every change needs a description of 10 to 2000 characters, and is kept in the fi
 
 Automatic changes are made by "shoalscan" with a description such as "No longer found in the scheduled run of 2026-10-10T02:00:00Z at 3f2a1b4c5d6e.". Only the newest scheduled run moves reviews; pull-request runs never do. [Scheduled scans](scheduled-scans.md) sets up the regular scan this needs.
 
+A finding that is missing from a run counts as fixed only when that run could have seen it: its scanner ran (a scanner can be turned off in `scanners`), for Opengrep and Gitleaks its rule was among the rules that ran, its file was not excluded, skipped or unreadable, and no parse gap covered its line.
+
 ## How reviews follow a finding
 
 Reviews follow a finding by its repository's name and its identity (tool, rule, path and fingerprint), not by run. They stay when runs are deleted, even all of a repository's runs, and apply again if the repository is recorded under the same name. A moved file starts without its reviews.

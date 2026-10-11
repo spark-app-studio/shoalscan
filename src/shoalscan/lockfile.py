@@ -6,7 +6,7 @@ import hashlib
 import platform
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from shoalscan.errors import SetupError, VerificationError
@@ -49,6 +49,39 @@ class RulesSnapshot:
 
 
 @dataclass(frozen=True)
+class ToolPlatform:
+    """One platform's download, and the SHA-256 of the binary in it.
+
+    For a download that is an archive, `binary_sha256` is the hash of the
+    one member that is installed; for a bare binary it equals the download's.
+    """
+
+    download: Asset
+    binary_sha256: str
+
+
+@dataclass(frozen=True)
+class PinnedTool:
+    """A scanner other than Opengrep, pinned by SHA-256.
+
+    `member` names the binary inside a .tar.gz download, or is None when the
+    download is the binary itself. `files` are other pinned files the tool
+    needs, such as its default configuration, by name.
+    """
+
+    name: str
+    version: str
+    license: str
+    member: str | None
+    platforms: dict[str, ToolPlatform]
+    files: dict[str, Asset]
+
+
+# Scanners pinned in their own [<name>] table, and the extra files each needs.
+PINNED_TOOLS: dict[str, tuple[str, ...]] = {"gitleaks": ("config",)}
+
+
+@dataclass(frozen=True)
 class Lock:
     opengrep_version: str
     opengrep_signature: OpengrepSignature
@@ -56,6 +89,7 @@ class Lock:
     cosign_version: str
     cosign: dict[str, Asset]
     rules: RulesSnapshot
+    tools: dict[str, PinnedTool] = field(default_factory=dict)
 
 
 def current_platform() -> str:
@@ -127,8 +161,40 @@ def _platforms(data: object, where: str) -> dict:
     return data
 
 
+_MEMBER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*(/[A-Za-z0-9_][A-Za-z0-9_.\-]*)*$")
+
+
+def _pinned_tool(name: str, data: object, extra_files: tuple[str, ...]) -> PinnedTool:
+    where = f"[{name}]"
+    keys = {"version", "source", "license", "verification", "platforms", *extra_files}
+    # `member` is there only when the download is an archive.
+    if isinstance(data, dict) and "member" in data:
+        keys.add("member")
+    tool = _table(data, where, keys)
+    member = tool.get("member")
+    if member is not None and (not isinstance(member, str) or not _MEMBER_RE.match(member) or ".." in member.split("/")):
+        raise SetupError(f"tools.lock: {name}.member must be a relative path inside the archive")
+    _url(tool, "source", name)
+    _str(tool, "verification", name)
+    platforms = {}
+    for plat, entry in _platforms(tool["platforms"], f"[{name}.platforms]").items():
+        pwhere = f"{name}.platforms.{plat}"
+        entry = _table(entry, f"[{pwhere}]", {"url", "sha256", "binary_sha256"})
+        platforms[plat] = ToolPlatform(Asset(_url(entry, "url", pwhere), _sha(entry, "sha256", pwhere)), _sha(entry, "binary_sha256", pwhere))
+        if not member and platforms[plat].binary_sha256 != platforms[plat].download.sha256:
+            raise SetupError(f"tools.lock: {pwhere}.binary_sha256 must equal sha256 when the download is the binary itself")
+    files = {}
+    for extra in extra_files:
+        entry = _table(tool[extra], f"[{name}.{extra}]", {"url", "sha256"})
+        files[extra] = Asset(_url(entry, "url", f"{name}.{extra}"), _sha(entry, "sha256", f"{name}.{extra}"))
+    return PinnedTool(name, _str(tool, "version", name), _str(tool, "license", name), member, platforms, files)
+
+
 def parse_lock(data: dict) -> Lock:
-    top = _table(data, "the top level", {"lock_version", "opengrep", "cosign", "rules"})
+    if not isinstance(data, dict):
+        raise SetupError("tools.lock: the top level must be a table")
+    optional = {name for name in PINNED_TOOLS if name in data}
+    top = _table(data, "the top level", {"lock_version", "opengrep", "cosign", "rules", *optional})
     if top["lock_version"] != 1:
         raise SetupError("tools.lock: unsupported lock_version (expected 1)")
 
@@ -198,6 +264,7 @@ def parse_lock(data: dict) -> Lock:
         cosign_version=_str(co, "version", "cosign"),
         cosign=cosign,
         rules=rules,
+        tools={name: _pinned_tool(name, top[name], PINNED_TOOLS[name]) for name in sorted(optional)},
     )
 
 

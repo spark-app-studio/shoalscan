@@ -7,10 +7,12 @@ On a pull request run with `--policy-ref`, this file is read from the base branc
 ## Every key
 
 ```toml
-scanners = ["opengrep"]
+# Which scanners run (see Scanners). Default: ["opengrep"].
+scanners = ["opengrep", "gitleaks"]
 
 # Paths every scanner skips, in gitignore style. Opengrep receives them as
 # --exclude patterns; the repository's own .semgrepignore files are ignored.
+# Gitleaks findings under them are dropped.
 excludes = ["target", "node_modules", "vendor", "**/fixtures/**"]
 # A pattern that could match every file (such as **, * or *e*) is refused:
 # each must name a directory or file, or have a literal prefix, suffix or

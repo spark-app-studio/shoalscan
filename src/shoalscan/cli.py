@@ -17,11 +17,11 @@ from shoalscan.config import CONFIG_NAME, Config, config_from_bytes, load_config
 from shoalscan.dashboard.commands import add_commands as add_dashboard_commands
 from shoalscan.errors import ScanError, SetupError, ShoalscanError
 from shoalscan.findings import load_findings
-from shoalscan.install import community_rules_path, install, opengrep_path, signature_verified, verify_rules_dir
+from shoalscan.install import community_rules_path, install, opengrep_path, signature_verified, tool_file_path, tool_path, verify_rules_dir
 from shoalscan.locations import default_out_dir, default_tools_dir, refuse_inside_repo
 from shoalscan.lockfile import Lock, current_platform, load_lock
 from shoalscan.resources import default_lock_path, shoalscan_rules_dir
-from shoalscan.scan import FINDINGS_JSON, Tools, run_scan, write_atomic
+from shoalscan.scan import FINDINGS_JSON, PinnedBinary, Tools, run_scan, write_atomic
 
 TOOLS_HELP = "installed tools (default: $XDG_CACHE_HOME/shoalscan/tools or ~/.cache/shoalscan/tools)"
 OUT_HELP = "output directory, outside the repository (default: a private directory under the system temp directory)"
@@ -112,7 +112,22 @@ def _tools(args: argparse.Namespace, config: Config, lock: Lock) -> Tools:
     own = None
     if config.opengrep.shoalscan_rules:
         own = shoalscan_rules_dir()
+    pinned = {}
+    for name in config.scanners:
+        tool = lock.tools.get(name)
+        if name == "opengrep" or tool is None:
+            continue
+        platform_pin = tool.platforms.get(plat)
+        if platform_pin is None:
+            raise SetupError(f"tools.lock pins no {name} binary for {plat}")
+        pinned[name] = PinnedBinary(
+            version=tool.version,
+            path=tool_path(tools_dir, name).absolute(),
+            sha256=platform_pin.binary_sha256,
+            files={extra: (tool_file_path(tools_dir, name, extra).absolute(), asset.sha256) for extra, asset in tool.files.items()},
+        )
     return Tools(
+        pinned=pinned,
         signature_verified=signature_verified(tools_dir, lock, plat),
         opengrep=opengrep_path(tools_dir).absolute(),
         opengrep_sha256=entry.binary.sha256,

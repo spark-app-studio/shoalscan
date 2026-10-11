@@ -11,11 +11,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import signal
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
+from shoalscan import process
 from shoalscan.config import Limits, component_for
 from shoalscan.errors import ScanError, SetupError
 from shoalscan.findings import Finding, assign_fingerprints, enclosing_context, normalise_severity, split_lines
@@ -135,59 +134,27 @@ def build_command(
     return cmd
 
 
-_ENV_ALLOWED = ("PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "USER", "LOGNAME", "TZ")
-
-
-def _scanner_env() -> dict[str, str]:
-    """An allowlisted environment: nothing else reaches the scanner.
-
-    Variables such as SEMGREP_RULES or proxy settings could change the rules,
-    the output or the network behaviour, so only these pass: PATH, HOME,
-    temporary directories, locale (LANG, LC_*), user name and time zone.
-    """
-    return {k: v for k, v in os.environ.items() if k in _ENV_ALLOWED or k.startswith("LC_")}
+# Kept under its old name for callers and tests.
+_scanner_env = process.scanner_env
 
 
 def execute(cmd: list[str], cwd: Path, timeout: int) -> dict:
     """Run Opengrep and return its parsed JSON output, or raise ScanError."""
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            env=_scanner_env(),
-            start_new_session=True,
-        )
-    except OSError as exc:
-        raise ScanError(f"opengrep could not start: {exc}") from None
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            proc.kill()
-        proc.communicate()
-        raise ScanError(f"opengrep timed out after {timeout}s") from None
-    tail = stderr.decode("utf-8", errors="replace").strip()[-2000:]
-    if proc.returncode < 0:
-        raise ScanError(f"opengrep was killed by signal {-proc.returncode}\n{tail}")
-    if proc.returncode not in (0, 1):
+    returncode, stdout, tail = process.run_scanner("opengrep", cmd, cwd, timeout)
+    if returncode not in (0, 1):
         detail = tail
         try:
             reported = json.loads(stdout).get("errors") or []
             detail = "\n".join(f"- {str(e.get('message', e)).strip()[:400]}" for e in reported[:5]) or tail
         except (ValueError, AttributeError, UnicodeDecodeError):
             pass
-        raise ScanError(f"opengrep failed with exit code {proc.returncode}\n{detail}")
+        raise ScanError(f"opengrep failed with exit code {returncode}\n{detail}")
     if len(stdout) > MAX_STDOUT_BYTES:
         raise ScanError("opengrep output is larger than allowed")
     try:
         doc = json.loads(stdout)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise ScanError(f"opengrep output is not valid JSON (exit code {proc.returncode})\n{tail}") from None
+        raise ScanError(f"opengrep output is not valid JSON (exit code {returncode})\n{tail}") from None
     if not isinstance(doc, dict) or not isinstance(doc.get("results"), list) or not isinstance(doc.get("errors"), list):
         raise ScanError("opengrep output has no results or errors list")
     return doc

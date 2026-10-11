@@ -5,7 +5,9 @@ This guide collects how Shoalscan protects itself: the scan, the dashboard and t
 ## Scans and the policy
 
 - Scanner binaries and the community rules are pinned by SHA-256 in `tools.lock`, and the Opengrep binary's cosign signature is checked at install time ([Getting started](getting-started.md#install-the-pinned-scanners)).
-- A scan makes no network calls. Opengrep gets only an allowlisted environment: `PATH`, `HOME`, the temporary directory variables, the locale, the user name and the time zone.
+- A scan makes no network calls. Each scanner gets only an allowlisted environment: `PATH`, `HOME`, the temporary directory variables, the locale, the user name and the time zone.
+- Nothing in the scanned repository can configure a scanner or silence it: Opengrep ignores `.semgrepignore` files, and Gitleaks ignores `.gitleaks.toml`, `.gitleaksignore` and `gitleaks:allow` comments ([Scanners](scanners.md#nothing-in-the-repository-can-silence-it)). Inline suppressions for Opengrep must name a rule and an issue.
+- Secrets that Gitleaks finds never reach the findings, the SARIF file or the history ([details](scanners.md#the-secrets-stay-out-of-the-output)).
 - The tools directory and the output directory must be outside the repository, so a pull request cannot plant files in them.
 - A scan that fails in any way fails the command; it is never read as "no findings".
 - On a pull request with `--policy-ref`, the configuration, the baseline and the rule directories come from the base branch, so a change cannot relax its own checks ([details](baseline-and-check.md#pull-requests-the-policy-comes-from-the-base-branch)).

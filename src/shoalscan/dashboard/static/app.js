@@ -930,7 +930,7 @@
         var used = inUse[s.name.toLowerCase()];
         sBody.appendChild(el("tr", null, el("td", null, externalLink(s.source, s.name)), el("td", null, s.role),
           el("td", { "class": "mono" }, s.version || "-"), el("td", null, s.licence || "-"),
-          el("td", { "class": "mono" }, used && used.version ? used.version : (s.name === "Opengrep" ? "no runs yet" : "install only"))));
+          el("td", { "class": "mono" }, used && used.version ? used.version : (s.name === "Opengrep" ? "no runs yet" : (s.name === "cosign" ? "install only" : "not enabled")))));
       });
       var rBody = clear($("about-rules").tBodies[0]);
       a.rule_sources.forEach(function (r) {

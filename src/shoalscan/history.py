@@ -957,7 +957,14 @@ def _covered(meta: dict, tool: str, rule: str, path: str, line: int | None) -> b
     unscanned = meta.get("unscanned")
     if not isinstance(unscanned, dict):
         return False  # nothing says which files were fully scanned
-    if tool == "opengrep":
+    if tool != "shoalscan":
+        # A scanner's finding is evidence only if that scanner ran this time
+        # (scanners can be turned off) and, for scanners that list their
+        # rules, with this rule. Shoalscan's own lint always runs.
+        scanners = meta.get("scanners")
+        if not isinstance(scanners, dict) or tool not in scanners:
+            return False
+    if tool in ("opengrep", "gitleaks"):
         rules = meta.get("rule_ids")
         if not isinstance(rules, list) or rule not in rules:
             return False
