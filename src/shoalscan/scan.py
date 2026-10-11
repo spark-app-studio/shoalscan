@@ -17,7 +17,7 @@ from shoalscan.errors import ScanError, SetupError
 from shoalscan.excludes import ExcludeMatcher
 from shoalscan.findings import Finding, findings_to_json
 from shoalscan.lockfile import verify_sha256
-from shoalscan.gitref import worktree_state
+from shoalscan.gitref import baseline_binding_path, worktree_state
 from shoalscan.rulesets import RuleIdFilter
 from shoalscan.sarif import build_sarif
 from shoalscan.suppressions import find_suppressions, lint_findings
@@ -83,11 +83,16 @@ def run_scan(
     out_dir: Path,
     rule_root: Path | None = None,
     policy: dict | None = None,
+    baseline: Path | None = None,
 ) -> ScanResult:
     """Scan `repo`. Repository rule dirs are read under `rule_root` (default: the repo).
 
     With a policy ref, `rule_root` holds the rule dirs extracted from that ref
     and `policy` records which ref and configuration were used.
+
+    `baseline` is the baseline file `check` will read, given only without a
+    policy ref: the tree binding then also records the working tree's state
+    with that file left out (see `gitref.worktree_state`).
     """
     started = time.monotonic()
     root = repo.resolve()
@@ -108,7 +113,7 @@ def run_scan(
         "shoalscan_version": __version__,
         "scanners": {},
         "policy": policy or {"ref": None},
-        "worktree": worktree_state(root),
+        "worktree": worktree_state(root, baseline_binding_path(repo, baseline) if baseline is not None else None),
     }
     unscanned: dict = {"skipped": [], "errors": []}
     sarif_index: dict = {}

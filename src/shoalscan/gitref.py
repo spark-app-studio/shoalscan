@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import re
 import subprocess
 import tarfile
@@ -136,12 +137,62 @@ def diff_against(repo: Path, commit: str, paths: list[str], max_lines: int = 400
     return "\n".join(lines)
 
 
-def worktree_state(repo: Path) -> dict | None:
+def baseline_binding_path(repo: Path, baseline: Path) -> str | None:
+    """The baseline file's path relative to `repo`, if it may be left out of the tree binding.
+
+    Returns None (nothing is left out, the binding stays strict) when the path
+    is outside the repository, inside `.git`, not a regular file, or reached
+    through a symbolic link below the repository root: then the path git sees
+    and the file `check` reads could differ. `..` is resolved lexically first.
+    """
+    root = repo.resolve()
+    lexical = Path(os.path.normpath(os.path.abspath(baseline)))
+    for base in (Path(os.path.normpath(os.path.abspath(repo))), root):
+        try:
+            rel = lexical.relative_to(base)
+            break
+        except ValueError:
+            continue
+    else:
+        return None
+    if not rel.parts or rel.parts[0] == ".git":
+        return None
+    target = root / rel
+    try:
+        if target.resolve() != target or target.is_symlink():
+            return None
+        if target.exists() and not target.is_file():
+            return None
+    except (OSError, RuntimeError):
+        return None
+    return rel.as_posix()
+
+
+def _changes_digest(repo: Path, tree: str | None, options: tuple[str, ...], pathspec: tuple[str, ...]) -> tuple[bool, str]:
+    status = _git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", *options, *pathspec).stdout
+    digest = hashlib.sha256(status)
+    if tree is not None:
+        digest.update(_git(repo, "diff", "--no-ext-diff", "--binary", *options, "HEAD", *pathspec).stdout)
+    for entry in status.split(b"\0"):
+        if entry.startswith(b"?? "):
+            path = repo / entry[3:].decode("utf-8", errors="surrogateescape")
+            if path.is_file() and not path.is_symlink():
+                digest.update(entry[3:] + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+    return bool(status), digest.hexdigest()
+
+
+def worktree_state(repo: Path, baseline: str | None = None) -> dict | None:
     """Identify what was scanned: the HEAD tree, and whether the working tree differs.
 
     Returns None outside a git work tree. `changes_sha256` hashes the status
     (untracked files included) and the full diff against HEAD, so any edit
     after the scan is noticed even in a dirty tree.
+
+    With `baseline` (a path from `baseline_binding_path`), the state also
+    carries `without_baseline`: the same dirty flag and digest computed with
+    that one file left out, so `check` can accept an edit to the baseline it
+    reads and nothing else. Renames are not paired there, so a file renamed
+    to the baseline's path still shows as deleted.
     """
     inside = _git(repo, "rev-parse", "--is-inside-work-tree", check=False)
     if inside.returncode != 0 or inside.stdout.decode().strip() != "true":
@@ -150,16 +201,13 @@ def worktree_state(repo: Path) -> dict | None:
     tree = head.stdout.decode().strip() if head.returncode == 0 else None
     head_commit = _git(repo, "rev-parse", "--verify", "--quiet", "HEAD^{commit}", check=False)
     commit = head_commit.stdout.decode().strip() if head_commit.returncode == 0 else None
-    status = _git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
-    digest = hashlib.sha256(status)
-    if tree is not None:
-        digest.update(_git(repo, "diff", "--no-ext-diff", "--binary", "HEAD").stdout)
-    for entry in status.split(b"\0"):
-        if entry.startswith(b"?? "):
-            path = repo / entry[3:].decode("utf-8", errors="surrogateescape")
-            if path.is_file() and not path.is_symlink():
-                digest.update(entry[3:] + b"\0" + hashlib.sha256(path.read_bytes()).digest())
-    return {"commit": commit, "tree": tree, "dirty": bool(status), "changes_sha256": digest.hexdigest()}
+    dirty, changes = _changes_digest(repo, tree, (), ())
+    state = {"commit": commit, "tree": tree, "dirty": dirty, "changes_sha256": changes}
+    if baseline is not None:
+        spec = ("--", ":/", f":(exclude,literal){baseline}")
+        dirty, changes = _changes_digest(repo, tree, ("--no-renames",), spec)
+        state["without_baseline"] = {"path": baseline, "dirty": dirty, "changes_sha256": changes}
+    return state
 
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")

@@ -123,6 +123,12 @@ def _tools(args: argparse.Namespace, config: Config, lock: Lock) -> Tools:
     )
 
 
+def _baseline_path(args: argparse.Namespace, config: Config) -> Path:
+    """The baseline file `check` and `baseline init` read: --baseline, or the configured one."""
+    baseline = getattr(args, "baseline", None)
+    return Path(baseline) if baseline else Path(args.repo) / config.baseline
+
+
 def _do_scan(args: argparse.Namespace):
     out = _out_dir(args)
     _tools_dir(args)
@@ -132,7 +138,10 @@ def _do_scan(args: argparse.Namespace):
     if policy.commit is None or policy.adoption:
         if policy.adoption:
             _print_adoption(policy)
-        return run_scan(Path(args.repo), policy.config, tools, out, policy=policy.record()), policy.config
+        # Without a policy ref, `check` may accept an edit to the baseline it reads.
+        baseline = _baseline_path(args, policy.config) if policy.ref is None else None
+        result = run_scan(Path(args.repo), policy.config, tools, out, policy=policy.record(), baseline=baseline)
+        return result, policy.config
     # The repository's own rules also come from the policy ref.
     with tempfile.TemporaryDirectory(prefix="shoalscan-policy-rules-") as tmp:
         gitref.archive_dirs(Path(args.repo), policy.commit, list(policy.config.opengrep.rule_dirs), Path(tmp))
@@ -197,6 +206,45 @@ def _print_policy_diff(repo: Path, policy: Policy) -> None:
         print()
 
 
+def _same_tree(meta: dict, state: dict | None, findings: list, leave_out: str | None) -> bool:
+    """Do the findings describe the current tree?
+
+    The whole working tree must match the scan's. The one exception is the
+    baseline file `check` reads (`leave_out`): an edit to it is accepted when
+    the scan recorded the same file left out, the scan reported nothing in
+    that file, and everything else (HEAD, other changes, untracked files)
+    matches exactly. If the scan found something in the baseline file it is a
+    scanned file like any other, and the strict comparison applies.
+    """
+    recorded = meta.get("worktree")
+    if state is None or recorded is None:
+        return recorded == state
+    if not isinstance(recorded, dict):
+        return False
+    strict = {k: v for k, v in state.items() if k != "without_baseline"}
+    if {k: v for k, v in recorded.items() if k != "without_baseline"} == strict:
+        return True
+    if leave_out is None:
+        return False
+    if recorded.get("commit") != state.get("commit") or recorded.get("tree") != state.get("tree"):
+        return False
+    without = recorded.get("without_baseline")
+    if not isinstance(without, dict) or without.get("path") != leave_out or without != state.get("without_baseline"):
+        return False
+    return not _reported_in(meta, findings, leave_out)
+
+
+def _reported_in(meta: dict, findings: list, path: str) -> bool:
+    """Did the scan report a finding, an unscanned entry or a suppression in `path`?"""
+    if any(f.path == path for f in findings):
+        return True
+    unscanned = meta.get("unscanned") or {}
+    for kind in ("skipped", "errors"):
+        if any(isinstance(e, dict) and e.get("path") == path for e in unscanned.get(kind) or []):
+            return True
+    return any(isinstance(s, dict) and s.get("path") == path for s in meta.get("suppression_list") or [])
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     out = _out_dir(args)
     policy = _policy(args)
@@ -212,18 +260,21 @@ def cmd_check(args: argparse.Namespace) -> int:
             "the findings were produced with a different policy than this check uses; "
             "run `shoalscan scan` with the same --policy-ref (or the same configuration) as `shoalscan check`"
         )
-    state = gitref.worktree_state(repo.resolve())
+    baseline_path = _baseline_path(args, config)
+    # Without a policy ref, the baseline this check reads may be left out of
+    # the tree binding: editing it cannot change what was scanned.
+    leave_out = gitref.baseline_binding_path(repo, baseline_path) if policy.ref is None else None
+    state = gitref.worktree_state(repo.resolve(), leave_out)
     if state is None and not args.no_git:
         raise SetupError(
             f"{repo} is not inside a git work tree, so check cannot tie the findings to a commit. "
             "Pass --no-git to check a directory without git."
         )
-    if meta.get("worktree") != state:
+    if not _same_tree(meta, state, findings, leave_out):
         raise SetupError(
             "the findings do not match the current tree: the repository changed after `shoalscan scan` "
             "(or the findings come from another checkout); run the scan again"
         )
-    baseline_path = Path(args.baseline) if args.baseline else repo / config.baseline
     baseline = load_baseline(baseline_path)
     base_baseline = None
     changed = None
