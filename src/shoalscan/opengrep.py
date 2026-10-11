@@ -45,6 +45,8 @@ class StageStats:
     rules_kept: int = 0
     rules_dropped: int = 0
     rule_ids: set[str] = field(default_factory=set)
+    # Each staged rule id's file, as `<namespace>/<path in the source>`.
+    rule_files: dict[str, str] = field(default_factory=dict)
 
 
 def is_rule_file(name: str) -> bool:
@@ -95,6 +97,7 @@ def stage_rules(stage: Path, sources: list[RuleSource], excluded: RuleIdFilter |
                 # run can be checked against them.
                 for rule in split_rules(dest.read_text(encoding="utf-8"), where):
                     stats.rule_ids.add(f"{id_prefix}.{rule.rule_id}")
+                    stats.rule_files[f"{id_prefix}.{rule.rule_id}"] = where
                 stats.files += 1
         if stats.rules_kept + stats.files == kept_before:
             raise SetupError(f"no rules selected from {source.path} ({source.namespace})")
@@ -299,6 +302,61 @@ def normalise(doc: dict, root: Path, components: dict[str, str]) -> tuple[list[F
         )
         index[(it["rule"], it["path"], it["line"], it["col"])] = fp
     return findings, index
+
+
+# Rule metadata kept for the work list and reports. Rule files can come from
+# the scanned repository, so every value is checked and bounded, and only
+# http(s) links are kept.
+MAX_META_TEXT = 500
+MAX_META_ITEMS = 5
+_META_LEVELS = ("confidence", "likelihood", "impact")
+
+
+def _meta_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    return text[:MAX_META_TEXT] or None
+
+
+def _meta_list(value: object) -> list[str]:
+    items = value if isinstance(value, list) else [value]
+    out = []
+    for item in items:
+        text = _meta_text(item)
+        if text and text not in out:
+            out.append(text)
+    return out[:MAX_META_ITEMS]
+
+
+def rule_metadata(doc: dict, rule_files: dict[str, str]) -> dict[str, dict]:
+    """What each rule that reported a finding says about itself.
+
+    For every rule with a result: its CWE and OWASP labels, confidence,
+    likelihood and impact, fix hint and reference links from the rule's
+    `metadata`, and the staged file it came from (`<namespace>/<path>`).
+    """
+    out: dict[str, dict] = {}
+    for r in doc["results"]:
+        if not isinstance(r, dict) or not isinstance(r.get("extra"), dict) or r["extra"].get("is_ignored") is True:
+            continue
+        rule = r.get("check_id")
+        if not isinstance(rule, str) or rule in out:
+            continue
+        meta = r["extra"].get("metadata")
+        meta = meta if isinstance(meta, dict) else {}
+        info: dict = {
+            "file": rule_files.get(rule),
+            "cwe": _meta_list(meta.get("cwe")),
+            "owasp": _meta_list(meta.get("owasp")),
+            "fix": _meta_text(meta.get("fix")),
+            "references": [u for u in _meta_list(meta.get("references")) if u.startswith(("https://", "http://")) and " " not in u],
+        }
+        for level in _META_LEVELS:
+            text = _meta_text(meta.get(level))
+            info[level] = text.upper()[:20] if text else None
+        out[rule] = info
+    return out
 
 
 def ignored_count(doc: dict) -> int:

@@ -167,6 +167,8 @@ def run_scan(
                 raise ScanError("opengrep did not write its SARIF output")
             # Which rules this run applied: a finding missing from a run proves a fix only if its rule ran.
             meta["rule_ids"] = sorted(stats.rule_ids)
+            # What the rules behind the findings say about themselves, for `shoalscan triage`.
+            meta["rules"] = opengrep.rule_metadata(doc, stats.rule_files)
             meta["scanners"]["opengrep"] = {
                 "version": tools.opengrep_version,
                 "signature_verified": tools.signature_verified,

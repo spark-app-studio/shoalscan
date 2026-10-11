@@ -4,9 +4,15 @@ All notable changes to Shoalscan are recorded here.
 
 ## Unreleased
 
+### Added
+
+- `shoalscan triage` prints a prioritised work list of the last scan's findings, offline, from `findings.json` and the baseline: stale baseline entries first, then one group per rule family (the CWE a rule names, or the rule itself), each with its rules' messages, fix hints, CWE and OWASP labels, references and a link to the rule file, and its findings by component, marked new and blocking, new, or baselined with their issue and reason. Groups follow the dashboard's Fix priority. `--format json` lists every finding for scripts and agents; `--blocking-only`, `--output` and `--max-per-group` shape the list. It warns when the tree, HEAD or configuration changed after the scan. `triage export` is unchanged.
+- `shoalscan scan` records each reporting rule's metadata (CWE, OWASP, confidence, likelihood, impact, fix hint, references and rule file) under `rules` in `findings.json`. Values are bounded and only http(s) links are kept.
+
 ### Security
 
 - `findings.sarif` no longer copies the scanned code: the `snippet` of every Opengrep result (its region, context region, related locations and code flows) is removed. A snippet held the whole matched line, so a rule that finds hard-coded secrets put the secret itself into a file that CI uploads or keeps as an artifact. Locations, messages and fingerprints are unchanged.
+- Text from the scanned repository (paths, messages, rule metadata, baseline reasons, component names) is escaped in the work list, so it cannot add links, images, HTML or headings.
 
 ## 0.1.1 (2026-10-11)
 

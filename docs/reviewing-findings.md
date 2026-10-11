@@ -34,4 +34,4 @@ shoalscan triage export --repo owner/project --issue "#123" > reviewed-entries.t
 
 It prints baseline entries for the findings reviewed as false positive, accepted risk or won't fix. Each reason is the review's description with "(reviewed in dashboard by WHO on WHEN)", and `--issue` is required. `--suppressions` also prints matching inline suppression lines, as comments. The command never writes the repository's baseline itself. [The baseline file](baseline-and-check.md#the-baseline-file) describes the format.
 
-**Next:** [Scheduled scans](scheduled-scans.md).
+**Next:** [The triage work list](triage.md).
