@@ -1,0 +1,52 @@
+name: fuzz
+
+# Coverage-guided fuzzing of the parsers that read untrusted input (fuzz/targets.py), with Atheris.
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "fuzz/**"
+      - "requirements-fuzz.txt"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    # Weekly, on Wednesday at 04:41 UTC, for longer.
+    - cron: "41 4 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [config_file, baseline_file, suppression_line, markdown_text, id_token, id_token_claims]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install Atheris (pinned by hash)
+        run: |
+          python -m pip install --require-hashes --only-binary :all: -r requirements-fuzz.txt
+      - name: Fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          # A minute on pull requests, ten on the weekly run.
+          SECONDS_TO_RUN: ${{ github.event_name == 'schedule' && '600' || '60' }}
+        run: |
+          mkdir -p crashes
+          python fuzz/run.py "$TARGET" -max_total_time="$SECONDS_TO_RUN" -artifact_prefix=crashes/ -print_final_stats=1
+      - name: Keep the input that failed
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: crash-${{ matrix.target }}
+          path: crashes/
+          retention-days: 14

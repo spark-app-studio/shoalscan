@@ -26,6 +26,7 @@ All notable changes to Shoalscan are recorded here.
 ### Fixed
 
 - `shoalscan scan` no longer warns about Opengrep's signature when Opengrep is not among the scanners.
+- A `.shoalscan.toml`, baseline or dashboard policy nested deeply enough to exhaust Python's stack (thousands of `[` or `{`) is now reported as not valid TOML, instead of stopping with a `RecursionError` traceback. Found by the new fuzz targets.
 
 ### Security
 
@@ -40,6 +41,7 @@ All notable changes to Shoalscan are recorded here.
 ### Project
 
 - The code follows PEP 8 with 120-character lines, formatted and checked by Ruff 0.14.0 (a development tool, pinned by hash in `requirements-dev.txt`, never a dependency). CI runs `ruff check` and `ruff format --check`. `CloneTooLarge` in the scan worker is now `CloneTooLargeError`.
+- Fuzzing: `fuzz/targets.py` holds fuzz targets for the parsers that read untrusted input (`.shoalscan.toml`, the baseline, suppression markers, the Markdown escaper, and ID tokens, both arbitrary and correctly signed with arbitrary claims), each checking a contract rather than only "no crash". The `fuzz` workflow runs each under Atheris (pinned by hash in `requirements-fuzz.txt`, never a dependency) for a minute on pull requests that change the code and ten minutes weekly; the unit tests run every target over its seeds and random edits of them.
 - CodeQL leaves out the deliberately insecure test fixtures in `rules/` and `tests/data/`, as Shoalscan's own scan does; the alerts raised on them were dismissed as false positives.
 
 ## 0.1.1 (2026-10-11)

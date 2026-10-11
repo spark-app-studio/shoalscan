@@ -346,7 +346,7 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
 def config_from_bytes(data: bytes, source: str) -> Config:
     try:
         parsed = tomllib.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError, RecursionError) as exc:
         raise SetupError(f"{source}: not valid TOML: {exc}") from None
     return parse_config(parsed, source=source)
 
@@ -358,7 +358,7 @@ def load_config(path: Path) -> Config:
             data = tomllib.load(handle)
     except FileNotFoundError:
         return Config()
-    except tomllib.TOMLDecodeError as exc:
+    except (tomllib.TOMLDecodeError, RecursionError) as exc:
         raise SetupError(f"{path}: not valid TOML: {exc}") from None
     return parse_config(data, source=str(path))
 

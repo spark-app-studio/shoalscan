@@ -76,7 +76,7 @@ def load_baseline(path: Path) -> list[Entry] | None:
             data = tomllib.load(handle)
     except FileNotFoundError:
         return None
-    except tomllib.TOMLDecodeError as exc:
+    except (tomllib.TOMLDecodeError, RecursionError) as exc:
         raise SetupError(f"{path}: not valid TOML: {exc}") from None
     return parse_baseline(data, str(path))
 
@@ -84,7 +84,7 @@ def load_baseline(path: Path) -> list[Entry] | None:
 def baseline_from_bytes(data: bytes, source: str) -> list[Entry]:
     try:
         parsed = tomllib.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError, RecursionError) as exc:
         raise SetupError(f"{source}: not valid TOML: {exc}") from None
     return parse_baseline(parsed, source)
 

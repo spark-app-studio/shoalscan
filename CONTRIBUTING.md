@@ -47,7 +47,7 @@ Shoalscan's own Opengrep rules in `rules/` have tests next to them. After instal
 
   ```sh
   python3 -m pip install --require-hashes -r requirements-dev.txt
-  ruff format src tests scripts && ruff check src tests scripts
+  ruff format src tests scripts fuzz && ruff check src tests scripts fuzz
   ```
 
   Ruff is a development tool only; it is not a dependency of Shoalscan. The configuration is in `pyproject.toml`. The schema migrations in `history.py` are exempt from the line length, because shipped migrations are never edited.

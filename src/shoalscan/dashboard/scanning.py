@@ -325,7 +325,7 @@ def validate_policy(text: object) -> str:
         raise SetupError(f"the policy must be text of up to {MAX_POLICY_BYTES} bytes")
     try:
         data = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
+    except (tomllib.TOMLDecodeError, RecursionError) as exc:
         raise SetupError(f"the policy is not valid TOML: {exc}") from None
     if "baseline" in data:
         raise SetupError(
@@ -374,7 +374,7 @@ def split_policy(text: str) -> tuple[str, tuple[str, ...] | None]:
     line, _, body = text[len(SCANNERS_HEADER) :].partition("\n")
     try:
         data = tomllib.loads(line)
-    except tomllib.TOMLDecodeError:
+    except (tomllib.TOMLDecodeError, RecursionError):
         return text, None
     chosen = data.get("scanners")
     if set(data) != {"scanners"} or not isinstance(chosen, list) or not all(isinstance(c, str) for c in chosen):
@@ -425,7 +425,7 @@ def _read_toml(path: Path) -> dict:
     check_private(path)
     try:
         return tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, RecursionError) as exc:
         raise SetupError(f"{path} is not valid TOML: {exc}") from None
 
 
