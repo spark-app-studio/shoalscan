@@ -86,6 +86,22 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaises(SetupError):
                 load_config(path)
 
+    def test_deep_nesting_is_invalid_toml_not_a_crash(self):
+        # tomllib recurses into nested arrays and tables; the repository controls these files.
+        from shoalscan.baseline import baseline_from_bytes, load_baseline
+        from shoalscan.config import config_from_bytes
+
+        for text in ("a = " + "[" * 5000, "a = " + "{x = " * 5000):
+            with self.subTest(text=text[:10]), tempfile.TemporaryDirectory() as tmp:
+                for parse_bytes in (config_from_bytes, baseline_from_bytes):
+                    with self.assertRaisesRegex(SetupError, "not valid TOML"):
+                        parse_bytes(text.encode(), "x")
+                path = Path(tmp) / "f.toml"
+                path.write_text(text, encoding="utf-8")
+                for load in (load_config, load_baseline):
+                    with self.assertRaises(SetupError):
+                        load(path)
+
     def test_component_longest_prefix(self):
         comps = {"services": "services", "services/api": "api", "web/": "web"}
         self.assertEqual(component_for("services/api/main.py", comps), "api")

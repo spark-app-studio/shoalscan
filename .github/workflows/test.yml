@@ -38,5 +38,5 @@ jobs:
           python-version: "3.13"
       # Ruff is a development tool, pinned by hash; the package has no dependencies.
       - run: python -m pip install --require-hashes -r requirements-dev.txt
-      - run: ruff check src tests scripts
-      - run: ruff format --check src tests scripts
+      - run: ruff check src tests scripts fuzz
+      - run: ruff format --check src tests scripts fuzz

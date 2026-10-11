@@ -176,7 +176,7 @@ def load(state_dir: Path) -> Config | None:
             raw = tomllib.load(handle)
     except FileNotFoundError:
         return None
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, tomllib.TOMLDecodeError, RecursionError) as exc:
         raise SetupError(f"{path} is unreadable: {exc}") from None
     if path.stat().st_mode & 0o077:
         raise SetupError(f"{path} holds the client secret and must not be readable by others (chmod 600)")

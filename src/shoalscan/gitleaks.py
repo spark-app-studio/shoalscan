@@ -55,7 +55,7 @@ def rule_ids(config: Path) -> list[str]:
     try:
         with open(config, "rb") as handle:
             data = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, tomllib.TOMLDecodeError, RecursionError) as exc:
         raise SetupError(f"the gitleaks configuration is unreadable: {exc}") from None
     rules = data.get("rules")
     ids = [r.get("id") for r in rules] if isinstance(rules, list) and all(isinstance(r, dict) for r in rules) else []

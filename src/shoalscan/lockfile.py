@@ -299,6 +299,6 @@ def load_lock(path: Path) -> Lock:
             data = tomllib.load(handle)
     except FileNotFoundError:
         raise SetupError(f"tools.lock not found: {path}") from None
-    except tomllib.TOMLDecodeError as exc:
+    except (tomllib.TOMLDecodeError, RecursionError) as exc:
         raise SetupError(f"tools.lock is not valid TOML: {exc}") from None
     return parse_lock(data)
