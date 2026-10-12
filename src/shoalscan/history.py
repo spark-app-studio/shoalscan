@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -353,11 +354,60 @@ def open_for_write(path: Path) -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 30000")
+        found = conn.execute("PRAGMA user_version").fetchone()[0]
+        if 0 < found < SCHEMA_VERSION:
+            backup_before_migration(conn, path, found)
         migrate(conn)
     except BaseException:
         conn.close()
         raise
     return conn
+
+
+def backup_path(path: Path, version: int) -> Path:
+    return path.with_name(f"{path.name}.bak-schema{version}")
+
+
+def backup_before_migration(conn: sqlite3.Connection, path: Path, found: int) -> Path:
+    """Copy the database, as it is at schema `found`, next to it (mode 0600) before a migration.
+
+    An older Shoalscan cannot open a migrated database; after rolling the
+    binary back, stop the dashboard and put this copy back in place.
+    """
+    dest = backup_path(path, found)
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    os.close(os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    try:
+        target = sqlite3.connect(str(tmp))
+        try:
+            conn.backup(target)
+        finally:
+            target.close()
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    print(
+        f"shoalscan: backed up the history database (schema {found}) to {dest} before migrating it to schema "
+        f"{SCHEMA_VERSION}",
+        file=sys.stderr,
+    )
+    return dest
+
+
+def migrate_in_place(path: Path) -> None:
+    """Bring an existing database up to this Shoalscan's schema, with a backup first (for `serve`)."""
+    if not path.is_file():
+        return
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+    if version < SCHEMA_VERSION:
+        open_for_write(path).close()
 
 
 def open_read_only(path: Path) -> sqlite3.Connection:
@@ -371,7 +421,7 @@ def open_read_only(path: Path) -> sqlite3.Connection:
         conn.close()
         raise SetupError(
             f"the history database has schema version {version}; this Shoalscan needs {SCHEMA_VERSION}. "
-            "Run `shoalscan record` with this version once to migrate it."
+            "Run `shoalscan record` or start `shoalscan serve` with this version once to migrate it."
         )
     return conn
 

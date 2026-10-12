@@ -350,6 +350,8 @@ class App:
         self.about = about_info()
         self._cache: OrderedDict = OrderedDict()
         self._cache_lock = threading.Lock()
+        # An older database is migrated at start, as `record` does, after a backup copy next to it.
+        history.migrate_in_place(config.db)
         # Fail at start-up, not on the first request, if the database is unusable.
         history.open_read_only(config.db).close()
         self.scans = ScanControl(config.state_dir, config.db) if config.state_dir else None
