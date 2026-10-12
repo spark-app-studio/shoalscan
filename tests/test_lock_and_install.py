@@ -114,6 +114,10 @@ def make_lock(assets: Assets, tarball: bytes, binary=b"opengrep-binary", cosign=
     archive = tool_tarball({"trivy": b"trivy-binary"})
     blobs[tv["url"]], blobs[tv["bundle_url"]] = archive, b"bundle"
     tv["sha256"], tv["binary_sha256"], tv["bundle_sha256"] = sha(archive), sha(b"trivy-binary"), sha(b"bundle")
+    hm = data["helm"]["platforms"][PLAT]
+    archive = tool_tarball({hm["member"]: b"helm-binary", "LICENSE": b"Apache"})
+    blobs[hm["url"]] = archive
+    hm["sha256"], hm["binary_sha256"] = sha(archive), sha(b"helm-binary")
     assets.files.update(blobs)
     return parse_lock(data)
 

@@ -7,12 +7,14 @@ import contextlib
 import copy
 import io
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import helpers
 from history_fixtures import record
@@ -200,10 +202,12 @@ class CommandTests(unittest.TestCase):
             "--config /s/trivy/trivy.yaml",
             "--ignorefile /s/trivy/trivyignore",
             "--module-dir /s/trivy/modules",
+            "--misconfig-scanners azure-arm,cloudformation,dockerfile,kubernetes,terraform,",
             "--exit-code 0",
         ):
             self.assertIn(part, joined)
         self.assertEqual(cmd[-1], "/repo")
+        self.assertNotIn("helm", cmd[cmd.index("--misconfig-scanners") + 1])
 
 
 class ExecuteTests(unittest.TestCase):
@@ -326,6 +330,90 @@ class MarkerTests(unittest.TestCase):
         self.assertEqual(parse_trivy_line(f"{MARK}* #3"), [((), None, True)])
         self.assertEqual(parse_trivy_line("nothing here"), [])
 
+    def test_every_syntax_trivy_accepts_is_a_marker(self):
+        legacy = "tf" + "sec:"
+        cases = {
+            # The legacy prefix, with and without a wildcard.
+            f"#{legacy}ignore:*": [((), None, True)],
+            f"# {legacy}ignore:AWS-0089 #7": [(("AWS-0089",), "#7", False)],
+            # Other keys before the ignore key, parameters after the id, any case.
+            "# trivy:exp:2030-01-01:ignore:AVD-AWS-0089 #8": [(("AVD-AWS-0089",), "#8", False)],
+            "// trivy:ignore:aws-s3-enable-logging[bucket=x] #9": [(("aws-s3-enable-logging",), "#9", False)],
+            "/* TRIVY:ignore:AWS-0089 */": [(("AWS-0089",), None, False)],
+            # Wildcards anywhere, and more than one id, are refused.
+            "#trivy:ignore:AWS-*": [((), None, True)],
+            "#trivy:ignore:*-0089 #1": [((), None, True)],
+            "#trivy:ignore:AWS-0001:ignore:AWS-0002 #1": [(("",), "#1", False)],
+            "#trivy:ignore: #1": [(("",), "#1", False)],
+            # Trivy splits on spaces only: a tab or vertical tab stays inside the word.
+            "# trivy:k:v\tw:ignore:*": [((), None, True)],
+            "# trivy:k:v\x0bw:ignore:DS002": [(("DS002",), None, False)],
+            # Not markers: no ignore key.
+            "image: aquasec/trivy:0.74.0": [],
+            f"see {legacy}docs": [],
+        }
+        for line, expected in cases.items():
+            with self.subTest(line=line):
+                self.assertEqual(parse_trivy_line(line), expected)
+
+    def test_markers_in_packaged_charts_are_found(self):
+        from shoalscan.suppressions import find_trivy_suppressions
+
+        chart = tool_tarball(
+            {"web/Chart.yaml": b"name: web\n", "web/templates/pod.yaml": b"kind: Pod\n# trivy:ignore:*\nspec: {}\n"}
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "web-1.0.tgz").write_bytes(chart)
+            (Path(tmp) / "broken.tgz").write_bytes(b"not an archive")
+            files = trivy.config_files(Path(tmp), (), 100_000)
+            found = find_trivy_suppressions(Path(tmp), files, 100_000)
+        self.assertEqual(files, ["broken.tgz", "web-1.0.tgz"])
+        self.assertEqual([(s.path, s.line, s.valid) for s in found], [("web-1.0.tgz", 2, False)])
+        self.assertTrue(found[0].text.startswith("web/templates/pod.yaml: "))
+
+
+class OversizeMarkerTests(unittest.TestCase):
+    def test_a_file_over_the_size_limit_is_still_linted(self):
+        from shoalscan.suppressions import find_trivy_suppressions
+
+        with tempfile.TemporaryDirectory() as tmp:
+            big = "RUN true\n" * 200_000
+            (Path(tmp) / "Dockerfile").write_text("FROM alpine\n" + big + "# trivy:ignore:*\n")
+            (Path(tmp) / "plain.json").write_text("[" + "1," * 600_000 + "1]")
+            found = find_trivy_suppressions(Path(tmp), ["Dockerfile", "plain.json"], 1_000_000)
+        self.assertEqual([(s.path, s.line, s.valid) for s in found], [("Dockerfile", 200_002, False)])
+
+
+class SilencedTests(unittest.TestCase):
+    LOG = (
+        '2026-10-12T11:58:41-05:00\tINFO\t[terraform executor] Ignore finding\trule="a" range="infra/main.tf:6-8"\n'
+        '2026-10-12T11:58:41-05:00\tINFO\t[cloudformation scanner] Ignore finding\trule="b" range="cf.yaml:15"\n'
+    )
+
+    def marker(self, path, valid=True):
+        from shoalscan.suppressions import Suppression
+
+        return Suppression(path, 1, "x", ("AWS-0001",), "#1" if valid else None, False, kind="trivy")
+
+    def test_each_silenced_finding_needs_a_valid_marker_in_its_file(self):
+        both = [self.marker("infra/main.tf"), self.marker("cf.yaml")]
+        self.assertEqual(trivy.silenced_findings(self.LOG, both, ()), 2)
+        for markers in ([self.marker("infra/main.tf")], [self.marker("infra/main.tf"), self.marker("cf.yaml", False)]):
+            with self.subTest(markers=markers), self.assertRaises(ScanError) as ctx:
+                trivy.silenced_findings(self.LOG, markers, ())
+            self.assertIn("cf.yaml", str(ctx.exception))
+        # A valid marker below the silenced finding does not explain it.
+        from shoalscan.suppressions import Suppression
+
+        below = [Suppression("infra/main.tf", 9, "x", ("AWS-0001",), "#1", False, kind="trivy"), self.marker("cf.yaml")]
+        with self.assertRaises(ScanError):
+            trivy.silenced_findings(self.LOG, below, ())
+        # Findings in excluded files are dropped anyway.
+        self.assertEqual(trivy.silenced_findings(self.LOG, [self.marker("cf.yaml")], ("infra",)), 1)
+        odd = 'x\tINFO\t[terraform executor] Ignore finding\trule="a"\n'
+        with self.assertRaises(ScanError):
+            trivy.silenced_findings(odd, both, ())
+
     def test_bad_markers_become_blocking_findings(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -434,7 +522,67 @@ class EndToEndTests(unittest.TestCase):
             self.assertNotIn("trivy.KSV-0011", rules)
             self.assertEqual(doc["unscanned"]["errors"], [{"path": "infra/broken.tf", "type": "trivy parse error"}])
             self.assertEqual(doc["suppressions"], {"total": 2, "invalid": 1, "suppressed_findings": 2})
-            self.assertEqual(doc["scanners"]["trivy"]["verification"], "sha256 and cosign")
+            # What really happened at install: a cosign check, or none.
+            signed = inst.tool_signature_verified(TOOLS, load_lock(LOCK_PATH).tools["trivy"], inst.current_platform())
+            self.assertEqual(
+                doc["scanners"]["trivy"]["verification"],
+                "sha256 and cosign" if signed else "sha256 (signature not verified)",
+            )
+            self.assertEqual(doc["scanners"]["trivy"]["signature_verified"], bool(signed))
+
+    def test_legacy_and_wildcard_markers_cannot_pass_a_check(self):
+        legacy = "#" + "tf" + "sec:ignore:*"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, out = Path(tmp) / "repo", Path(tmp) / "out"
+            repo.mkdir()
+            (repo / "main.tf").write_text(f'{legacy}\nresource "aws_s3_bucket" "a" {{\n  bucket = "a"\n}}\n')
+            (repo / ".shoalscan.toml").write_text('scanners = ["trivy"]\n')
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                code = main(["scan", "--repo", str(repo), "--out", str(out), "--tools-dir", str(TOOLS)])
+            # The marker is linted, and the findings it silenced have no valid marker: the scan fails.
+            self.assertEqual(code, 2, err.getvalue())
+            self.assertIn("not a valid, linted marker (main.tf)", err.getvalue())
+            self.assertFalse((out / "findings.json").exists())
+
+    def test_a_remote_module_is_never_fetched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            marker, repo, out, bin_dir = base / "marker", base / "repo", base / "out", base / "bin"
+            for d in (marker, repo, bin_dir):
+                d.mkdir()
+            (marker / "main.tf").write_text('resource "aws_s3_bucket" "m" {\n  bucket = "marker"\n}\n')
+            git(marker, "init", "-q", "-b", "main")
+            git(marker, "add", "-A")
+            git(marker, "commit", "-q", "-m", "m")
+            (repo / "main.tf").write_text(f'module "m" {{\n  source = "git::file://{marker}"\n}}\n')
+            (repo / ".shoalscan.toml").write_text('scanners = ["trivy"]\n')
+            # Every git Trivy runs goes through this, which records how it ended and what it saw.
+            calls = base / "git-calls.txt"
+            (bin_dir / "git").write_text(
+                f'#!/bin/sh\n{shutil.which("git")} "$@"; rc=$?\n'
+                f'echo "$rc|$HOME|$GIT_ALLOW_PROTOCOL|$*" >> {calls}\nexit $rc\n'
+            )
+            (bin_dir / "git").chmod(0o755)
+            env = {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+            err = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, env),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(err),
+            ):
+                code = main(["scan", "--repo", str(repo), "--out", str(out), "--tools-dir", str(TOOLS)])
+            self.assertEqual(code, 0, err.getvalue())
+            lines = calls.read_text().splitlines() if calls.exists() else []
+            clones = [line.split("|") for line in lines if "clone" in line]
+            # Trivy tried, and git refused: no transport is allowed, and the home is not the real one.
+            self.assertTrue(clones, lines)
+            for rc, home, allowed, _ in clones:
+                self.assertNotEqual(rc, "0")
+                self.assertNotEqual(home, os.path.expanduser("~"))
+                self.assertEqual(allowed, "")
+            doc = json.loads((out / "findings.json").read_text())
+            self.assertFalse(any("marker" in f["message"] for f in doc["findings"]))
 
 
 if __name__ == "__main__":

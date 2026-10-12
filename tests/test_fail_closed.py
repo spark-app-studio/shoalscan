@@ -160,7 +160,7 @@ class RunScanTests(unittest.TestCase):
     def test_scanner_environment_is_filtered(self):
         os.environ["SEMGREP_RULES"] = "https://example.com/rules.yaml"
         try:
-            env = opengrep._scanner_env()
+            env = opengrep._scanner_env(Path("/run/home"))
         finally:
             del os.environ["SEMGREP_RULES"]
         self.assertNotIn("SEMGREP_RULES", env)

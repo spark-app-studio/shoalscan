@@ -18,6 +18,7 @@ timeout_minutes = 30         # a scan that runs longer is stopped and records no
 max_scans_per_hour = 6       # for all repositories together
 min_free_mb = 2048           # refuse to start a scan with less free disk space than this
 max_clone_mb = 2048          # a clone or fetch that grows past this is stopped and cleaned up
+require_network_sandbox = true  # the default: a scan fails unless the scanners run without network access
 
 [[target]]
 name = "owner/project"                               # the name on the dashboard
@@ -52,6 +53,21 @@ Each target has exactly one source:
 - **`clone`**, an absolute path to a clone, set only by editing the file. Shoalscan fetches it with your own git setup, as `examples/scheduled-scan.sh` does.
 
 A repository added on the Configuration page gets its policy and baseline in `targets/<name>/` in the state directory: `shoalscan.toml` is the policy text from the page, and `baseline.toml` is its baseline.
+
+### The network sandbox
+
+The worker passes `--require-network-sandbox` to every scan, so a scan fails, and records nothing, unless the scanners can run in an operating-system network sandbox: `sandbox-exec` on macOS, or `unshare --net` with unprivileged user namespaces on Linux ([Scanner isolation](security-model.md#scanner-isolation)). A dashboard runs on a long-lived machine, often next to other services on its loopback interface, so a scanner that fetches something a repository names (Trivy fetches remote Terraform modules) must not reach them. To scan on a machine without a sandbox, set `require_network_sandbox = false` at the top of `scan_targets.toml`; scans then rely on the scanner environment alone, and `findings.json` records that under `isolation`.
+
+### Which policy a scan uses
+
+Every scan the worker runs, from the dashboard or at night, gets its policy explicitly, in this order:
+
+1. the configuration file set for the repository in `scan_targets.toml`, or else its managed policy from the Configuration page;
+2. otherwise, the `.shoalscan.toml` at the head of the registered branch, read from git when the scan starts (an empty policy, so Opengrep alone, when the head has none). It must be a regular file; a link or a directory there fails the scan.
+
+The commit being scanned never decides its own policy. For a normal scan the head is the commit being scanned, so nothing changes; for **Rescan this commit** it means an older commit is scanned under the policy the branch has today, with today's scanners, just as `--policy-ref` takes a pull request's policy from its base branch. To control the scanners from Shoalscan rather than from the repository, give the repository a managed policy, or choose its scanners on the Configuration page.
+
+Each run records which scanners ran and their versions, and the run's page on the Runs page lists them, so a run that used fewer scanners than you expect is visible. The worker's log also names the policy it used.
 
 ## Starting a scan
 

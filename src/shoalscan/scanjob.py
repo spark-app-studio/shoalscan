@@ -9,6 +9,10 @@ enabled nightly target, one after another. Either way the worker:
 - holds the scan lock, so only one scan runs at a time on this machine;
 - fetches the clone and scans the head of the branch in a temporary
   worktree, so the clone's own checkout is never touched;
+- always passes the policy explicitly: the managed policy when there is
+  one, else the `.shoalscan.toml` at the head of the registered branch,
+  read from git, so the commit being scanned (an older one, on a rescan)
+  never chooses its own scanners;
 - runs `scan`, `check` and `record` as child processes with fixed argument
   lists, no shell, an allowlisted environment and a deadline; at the
   deadline the whole process group is killed and nothing is recorded;
@@ -31,6 +35,7 @@ import time
 from pathlib import Path
 
 from shoalscan import history
+from shoalscan.config import CONFIG_NAME
 from shoalscan.dashboard import scanning
 from shoalscan.errors import SetupError, ShoalscanError
 
@@ -66,6 +71,29 @@ ENV_ALLOW = (
     "XDG_CONFIG_HOME",
 )
 _RUN_ID = re.compile(r"\brun (\d+)\b")
+MAX_POLICY_BYTES = 1024 * 1024
+WORK_PREFIX = "shoalscan-scan-"
+OWNER_FILE = ".shoalscan-state-dir"
+
+
+def sweep_stale_work(state_dir: Path) -> int:
+    """Remove work directories an earlier worker of this state directory left behind (killed, say).
+
+    Called with the scan lock held, so no other worker of this state directory is running.
+    """
+    removed = 0
+    owner = str(state_dir.resolve())
+    for path in Path(tempfile.gettempdir()).glob(WORK_PREFIX + "*"):
+        try:
+            if path.is_symlink() or not path.is_dir() or path.stat().st_uid != os.getuid():
+                continue
+            if (path / OWNER_FILE).read_text(encoding="utf-8") != owner:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        removed += 1
+    return removed
 
 
 class ScanTimeout(Exception):  # noqa: N818 - a signal to stop the scan, not an error
@@ -130,10 +158,17 @@ class Job:
         self.who = who
         self.log = log
         self.deadline = time.monotonic() + targets.timeout_seconds
-        self.work = Path(tempfile.mkdtemp(prefix="shoalscan-scan-"))
+        self.work = Path(tempfile.mkdtemp(prefix=WORK_PREFIX))
+        # Which state directory this work belongs to, so a later worker can sweep it if it is left behind.
+        (self.work / OWNER_FILE).write_text(str(state_dir.resolve()), encoding="utf-8")
         self.db = targets.history_db or history.default_db_path()
         self.clone = targets.clone_dir(target)
         self.env = child_env()
+        # The scan's own temporary files (its stage holds Gitleaks's report) live in the work
+        # directory, which is removed on every exit path, even when the scan is killed at the deadline.
+        tmp = self.work / "tmp"
+        tmp.mkdir(mode=0o700)
+        self.env["TMPDIR"] = str(tmp)
         self.logged = 0
         self.log_full = False
 
@@ -334,11 +369,63 @@ class Job:
                     "scanned"
                 )
             return commit
+        return self.branch_head()
+
+    def branch_head(self) -> str:
+        """The commit at the head of the registered branch in the clone."""
+        t = self.target
         for ref in (f"refs/remotes/origin/{t.branch}", f"refs/heads/{t.branch}"):
             commit = self.git_out("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
             if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
                 return commit
         raise SetupError(f"the branch {t.branch} does not exist in the clone")
+
+    def git_blob(self, blob: str, limit: int) -> bytes:
+        """A blob's exact bytes from the clone, refused past `limit`."""
+        pairs = self.git_pairs()
+        proc = subprocess.Popen(
+            ["git", *scanning.git_args(pairs), "-C", str(self.clone), "cat-file", "blob", blob],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=scanning.git_env(base_env(), pairs),
+            start_new_session=True,
+        )
+        try:
+            out, _ = proc.communicate(timeout=max(1, self.deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            _kill_group(proc.pid)
+            proc.communicate()
+            raise ScanTimeout() from None
+        if proc.returncode != 0:
+            raise SetupError(f"could not read {CONFIG_NAME} from the clone")
+        if len(out) > limit:
+            raise SetupError(f"{CONFIG_NAME} at the head of the branch is larger than {limit} bytes")
+        return out
+
+    def branch_policy(self) -> Path:
+        """The repository's own policy, from the head of the registered branch, as a private file.
+
+        A missing file is an empty policy (Shoalscan's defaults). Anything
+        other than a regular file there (a link, a directory) is refused.
+        """
+        head = self.branch_head()
+        # An empty answer must mean "no such file", never "git failed": check the tree first.
+        if not self.git_out("rev-parse", "--verify", "--quiet", f"{head}^{{tree}}"):
+            raise SetupError(f"could not read the tree at the head of {self.target.branch}")
+        entry = self.git_out("ls-tree", "--full-tree", head, "--", CONFIG_NAME)
+        data = b""
+        if entry:
+            fields = entry.split(None, 3)
+            if len(fields) != 4 or fields[0] not in ("100644", "100755") or fields[1] != "blob":
+                raise SetupError(f"{CONFIG_NAME} at the head of {self.target.branch} is not a regular file")
+            data = self.git_blob(fields[2], MAX_POLICY_BYTES)
+        path = self.work / "branch-policy.toml"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        self.say(f"policy: {CONFIG_NAME} at the head of {self.target.branch} ({head[:12]})")
+        return path
 
     def check_clone_size(self) -> None:
         if tree_size(self.clone, self.clone_limit()) > self.clone_limit():
@@ -365,14 +452,20 @@ class Job:
             raise SetupError("git worktree add failed")
         out = self.work / "out"
         out.mkdir(mode=0o700)
+        # The policy is always explicit: the managed one, else the branch head's own file.
         policy = self.targets.policy_path(t)
-        config = ["--config", str(policy)] if policy else []
+        if policy is not None:
+            self.say("policy: the policy registered for this repository")
+        else:
+            policy = self.branch_policy()
+        config = ["--config", str(policy)]
         baseline = ["--baseline", str(self.targets.baseline_path(t))] if t.baseline or t.kind != "clone" else []
         tools = ["--tools-dir", str(self.targets.tools_dir)] if self.targets.tools_dir else []
         # A rescan of an earlier commit keeps that run's time, so it replaces the run where it
         # was and never becomes the newest point of the trend.
         started = self.pinned[2] if self.pinned else history.parse_timestamp(None)
-        code = self.run(self.shoalscan("scan", "--repo", str(src), "--out", str(out), *tools, *config))
+        sandbox = ["--require-network-sandbox"] if self.targets.require_network_sandbox else []
+        code = self.run(self.shoalscan("scan", "--repo", str(src), "--out", str(out), *tools, *config, *sandbox))
         check_txt = self.work / "check.txt"
         if code == 0:
             code = self.run(
@@ -486,6 +579,7 @@ def run_one(
     outcome, run_id, detail = "failed", None, None
     started = history.parse_timestamp(None)
     try:
+        sweep_stale_work(state_dir)
         job = Job(state_dir, targets, target, who, log, pinned)
         conn = history.open_for_write(job.db)
         trigger_id = history.start_trigger(conn, name, who, started, trigger)

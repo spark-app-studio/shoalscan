@@ -60,6 +60,8 @@ class ToolPlatform:
     binary_sha256: str
     # A Sigstore bundle for the download, when the tool's table has a [<name>.signature].
     bundle: Asset | None = None
+    # The member that is the binary, when it differs by platform (Helm's archives hold `darwin-arm64/helm`).
+    member: str | None = None
 
 
 @dataclass(frozen=True)
@@ -82,7 +84,14 @@ class PinnedTool:
 
 
 # Scanners pinned in their own [<name>] table, and the extra files each needs.
-PINNED_TOOLS: dict[str, tuple[str, ...]] = {"gitleaks": ("config",), "hadolint": (), "zizmor": (), "trivy": ()}
+PINNED_TOOLS: dict[str, tuple[str, ...]] = {
+    "gitleaks": ("config",),
+    "hadolint": (),
+    "zizmor": (),
+    "trivy": (),
+    # Not a scanner of its own: Trivy uses it to render Helm charts.
+    "helm": (),
+}
 
 
 @dataclass(frozen=True)
@@ -207,14 +216,21 @@ def _pinned_tool(name: str, data: object, extra_files: tuple[str, ...]) -> Pinne
     platform_keys = {"url", "sha256", "binary_sha256"} | ({"bundle_url", "bundle_sha256"} if signature else set())
     for plat, entry in _platforms(tool["platforms"], f"[{name}.platforms]").items():
         pwhere = f"{name}.platforms.{plat}"
-        entry = _table(entry, f"[{pwhere}]", platform_keys)
+        keys = platform_keys | ({"member"} if isinstance(entry, dict) and "member" in entry else set())
+        entry = _table(entry, f"[{pwhere}]", keys)
         bundle = Asset(_url(entry, "bundle_url", pwhere), _sha(entry, "bundle_sha256", pwhere)) if signature else None
+        plat_member = entry.get("member")
+        if plat_member is not None and (
+            not isinstance(plat_member, str) or not _MEMBER_RE.match(plat_member) or ".." in plat_member.split("/")
+        ):
+            raise SetupError(f"tools.lock: {pwhere}.member must be a relative path inside the archive")
         platforms[plat] = ToolPlatform(
             Asset(_url(entry, "url", pwhere), _sha(entry, "sha256", pwhere)),
             _sha(entry, "binary_sha256", pwhere),
             bundle,
+            plat_member,
         )
-        if not member and platforms[plat].binary_sha256 != platforms[plat].download.sha256:
+        if not (plat_member or member) and platforms[plat].binary_sha256 != platforms[plat].download.sha256:
             raise SetupError(
                 f"tools.lock: {pwhere}.binary_sha256 must equal sha256 when the download is the binary itself"
             )

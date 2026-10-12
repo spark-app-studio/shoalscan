@@ -817,6 +817,9 @@
       el("dt", null, "Commit"), el("dd", { "class": "mono" }, run.commit),
       el("dt", null, "Check exit"), el("dd", null, run.check_exit === null ? "not recorded" : String(run.check_exit)),
       el("dt", null, "Policy ref"), el("dd", { "class": "mono" }, run.policy_ref || "the working tree"),
+      el("dt", null, "Scanners"), el("dd", null, (run.scanners || []).length
+        ? run.scanners.map(function (s) { return s.name + (s.version ? " " + s.version : ""); }).join(", ")
+        : (run.outcome === "scan_error" ? "unknown (the scan failed)" : "not recorded")),
       el("dt", null, "Shoalscan"), el("dd", null, run.shoalscan_version || "-")));
   }
 

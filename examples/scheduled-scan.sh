@@ -21,6 +21,11 @@
 #                         (default: $HOME/.cache/shoalscan)
 #   SHOALSCAN_DB          the history database (default: Shoalscan's default,
 #                         $XDG_DATA_HOME/shoalscan/history.sqlite3)
+#   SHOALSCAN_REQUIRE_NETWORK_SANDBOX
+#                         1 (the default) makes the scan fail unless the
+#                         scanners can run without network access
+#                         (sandbox-exec on macOS, unshare --net on Linux);
+#                         0 allows the environment-only fallback
 #
 # Exit codes: 0 when the run was recorded (whether the check passed or
 # failed; the dashboard shows which), 2 when the scan or the setup failed and
@@ -83,7 +88,12 @@ mkdir "$work/out"
 git -C "$clone" worktree add --quiet --detach "$work/src" "$commit" || fail "git worktree add failed"
 
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-"$shoalscan" scan --repo "$work/src" --tools-dir "$home/tools" --out "$work/out" || fail "the scan failed"
+sandbox=()
+if [ "${SHOALSCAN_REQUIRE_NETWORK_SANDBOX:-1}" != "0" ]; then
+  sandbox=(--require-network-sandbox)
+fi
+"$shoalscan" scan --repo "$work/src" --tools-dir "$home/tools" --out "$work/out" ${sandbox[@]+"${sandbox[@]}"} \
+  || fail "the scan failed"
 
 status=0
 "$shoalscan" check --repo "$work/src" --out "$work/out" > "$work/out/check.txt" || status=$?

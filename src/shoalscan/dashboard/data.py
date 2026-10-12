@@ -45,7 +45,7 @@ _RUN_COLUMNS = (
     "baseline_additions, suppressions, suppressions_invalid, suppressed_findings, unscanned_skipped, "
     "unscanned_errored, changed_unscanned, policy_ref, shoalscan_version, duration_seconds, outcome, check_exit, "
     "details_known, files_known, suppressions_known, partial_warnings, partial_warn_only, excluded_changed, "
-    "blocking_class_count, "
+    "blocking_class_count, scanners, "
     "EXISTS (SELECT 1 FROM scan_triggers st WHERE st.run_id = runs.id AND st.trigger = 'rescan-commit') AS rescanned"
 )
 SORTS = ("priority",)
@@ -219,6 +219,22 @@ def run_status(d: dict) -> dict:
     }
 
 
+def _scanners_ran(text: object) -> list[dict]:
+    """Which scanners a run used, with their versions, from the run's stored scanner metadata."""
+    try:
+        doc = json.loads(text) if isinstance(text, str) else {}
+    except ValueError:
+        return []
+    if not isinstance(doc, dict):
+        return []
+    out = []
+    for name, info in sorted(doc.items()):
+        info = info if isinstance(info, dict) else {}
+        version = info.get("version")
+        out.append({"name": str(name)[:40], "version": str(version)[:40] if isinstance(version, str) else None})
+    return out[:20]
+
+
 def _run_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     out = {
@@ -267,6 +283,7 @@ def _run_dict(row: sqlite3.Row) -> dict:
         "shoalscan_version": d["shoalscan_version"],
         "duration_seconds": d["duration_seconds"],
         "rescanned": bool(d["rescanned"]),
+        "scanners": _scanners_ran(d.get("scanners")),
     }
     out["status"] = run_status(d)
     return out

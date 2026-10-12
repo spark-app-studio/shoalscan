@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -16,7 +17,7 @@ from pathlib import Path
 
 import helpers
 
-from shoalscan import history, scanjob
+from shoalscan import history, process, scanjob
 from shoalscan.dashboard import scanning
 from shoalscan.errors import SetupError
 
@@ -35,6 +36,7 @@ if args[:1] == ["-P"]:
     args = args[1:]
 if args[:3] == ["-m", "shoalscan", "scan"]:
     (here / "scan.pid").write_text(str(os.getpid()))
+    (here / "env.json").write_text(json.dumps(dict(os.environ)))
     if (here / "slow").exists():
         time.sleep(60)
     sys.path.insert(0, {src!r})
@@ -46,6 +48,8 @@ if args[:3] == ["-m", "shoalscan", "scan"]:
         (here / "seen_app.txt").write_bytes((repo / "app.py").read_bytes())
     config = Path(opts["--config"]) if "--config" in opts else repo / ".shoalscan.toml"
     data = config.read_bytes() if config.is_file() else b""
+    with open(here / "seen_config.jsonl", "a") as seen:
+        seen.write(json.dumps([str(config), data.decode()]) + "\\n")
     digest = hashlib.sha256(data).hexdigest()
     meta = {{"policy": {{"ref": None, "commit": None, "config_sha256": digest, "adoption": False}},
             "worktree": worktree_state(repo), "suppressions": {{"total": 0, "invalid": 0, "suppressed_findings": 0}},
@@ -192,7 +196,8 @@ class WorkerTests(WorkerTestCase):
             ("acme/app", "main", head, "scheduled", "0", str(f.db)),
         )
         # The scan ran in a temporary worktree of the registered clone, which is gone again.
-        scan_repo = Path(dict(zip(calls[0][3::2], calls[0][4::2], strict=True))["--repo"])
+        # The scan ends with a flag that takes no value, so the pairs are uneven.
+        scan_repo = Path(dict(zip(calls[0][3::2], calls[0][4::2], strict=False))["--repo"])
         self.assertFalse(scan_repo.exists())
         self.assertNotIn(str(f.clone), json.dumps(calls[0]))
         self.assertEqual(
@@ -281,6 +286,73 @@ class RescanTests(WorkerTestCase):
         record = [c for c in f.calls() if c[2] == "record"][-1]
         # This record ends with a flag that takes no value, so the pairs are uneven.
         self.assertEqual(dict(zip(record[3::2], record[4::2], strict=False))["--commit"], first_commit)
+
+    def seen_configs(self, f: Fixture) -> list[list[str]]:
+        return [json.loads(line) for line in (f.bin / "seen_config.jsonl").read_text().splitlines()]
+
+    def test_the_branch_head_policy_decides_even_for_an_older_commit(self):
+        f = Fixture(self.base)
+        (f.origin / ".shoalscan.toml").write_text('scanners = ["opengrep", "gitleaks"]\n', encoding="utf-8")
+        git("add", ".shoalscan.toml", cwd=f.origin)
+        git("commit", "-q", "-m", "policy", cwd=f.origin)
+        log = io.StringIO()
+        scanjob.run_one(f.state, f.targets(), "acme/app", "x", log)
+        ((first_id,),) = f.rows("SELECT id FROM runs")
+        self.assertIn("policy: .shoalscan.toml at the head of main", log.getvalue())
+        # The commit's own file is not what the scan reads: the head's copy is passed explicitly.
+        path, text = self.seen_configs(f)[-1]
+        self.assertTrue(path.endswith("branch-policy.toml"), path)
+        self.assertEqual(text, 'scanners = ["opengrep", "gitleaks"]\n')
+        for call in f.calls()[:2]:
+            self.assertIn("--config", call)
+        # The head now drops gitleaks; a rescan of the older commit follows the head.
+        (f.origin / ".shoalscan.toml").write_text('scanners = ["opengrep"]\n', encoding="utf-8")
+        git("commit", "-q", "-am", "narrower", cwd=f.origin)
+        time.sleep(1.1)
+        scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO(), "rescan-commit", first_id)
+        self.assertEqual(self.seen_configs(f)[-1][1], 'scanners = ["opengrep"]\n')
+
+    def test_the_scan_requires_a_sandbox_and_keeps_its_temporary_files_in_the_work_directory(self):
+        f = Fixture(self.base)
+        # A work directory a killed worker of this state directory left behind, and one of another's.
+        stale = Path(tempfile.mkdtemp(prefix=scanjob.WORK_PREFIX))
+        (stale / scanjob.OWNER_FILE).write_text(str(f.state.resolve()))
+        other = Path(tempfile.mkdtemp(prefix=scanjob.WORK_PREFIX))
+        (other / scanjob.OWNER_FILE).write_text("/somewhere/else")
+        try:
+            scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO())
+            self.assertFalse(stale.exists())
+            self.assertTrue(other.exists())
+        finally:
+            for d in (stale, other):
+                shutil.rmtree(d, ignore_errors=True)
+        scan = f.calls()[0]
+        self.assertIn("--require-network-sandbox", scan)
+        # Children ran with TMPDIR inside the job's work directory, which is gone again.
+        work = Path(dict(zip(scan[3::2], scan[4::2], strict=False))["--out"]).parent
+        self.assertEqual(json.loads((f.bin / "env.json").read_text())["TMPDIR"], str(work / "tmp"))
+        self.assertFalse(work.exists())
+        f.write(f"""
+            require_network_sandbox = false
+            [[target]]
+            name = "acme/app"
+            clone = "{f.clone}"
+            branch = "main"
+            python = "{f.python}"
+            """)
+        self.assertFalse(f.targets().require_network_sandbox)
+        scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO())
+        self.assertNotIn("--require-network-sandbox", f.calls()[-3])
+
+    def test_a_head_policy_that_is_not_a_regular_file_is_refused(self):
+        f = Fixture(self.base)
+        (f.origin / ".shoalscan.toml").symlink_to("/etc/hosts")
+        git("add", ".shoalscan.toml", cwd=f.origin)
+        git("commit", "-q", "-m", "link", cwd=f.origin)
+        log = io.StringIO()
+        self.assertEqual(scanjob.run_one(f.state, f.targets(), "acme/app", "x", log), "failed")
+        self.assertIn("is not a regular file", log.getvalue())
+        self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(0,)])
 
     def test_a_commit_that_is_gone_records_nothing(self):
         f = Fixture(self.base)
@@ -617,6 +689,14 @@ class LockTests(WorkerTestCase):
         self.assertIsNone(scanning.lock_holder(f.state), "the kernel released the crashed worker's lock")
         (f.bin / "slow").unlink()
         self.assertEqual(scanjob.run_one(f.state, f.targets(), "acme/app", scanjob.WHO["cli"], io.StringIO()), "passed")
+        # The next worker swept the crashed one's work directory.
+        owner = str(f.state.resolve())
+        left = [
+            d
+            for d in Path(tempfile.gettempdir()).glob(scanjob.WORK_PREFIX + "*")
+            if (d / scanjob.OWNER_FILE).is_file() and (d / scanjob.OWNER_FILE).read_text() == owner
+        ]
+        self.assertEqual(left, [])
 
 
 def scanjob_can_start(f: Fixture) -> bool:
@@ -693,8 +773,11 @@ class EndToEndWorkerTests(WorkerTestCase):
         (f.origin / "app.py").write_text("eval(input())\n", encoding="utf-8")
         git("add", "-A", cwd=f.origin)
         git("commit", "-q", "-m", "eval", cwd=f.origin)
+        # The worker requires a network sandbox by default; a machine without one turns that off here.
+        required = "false" if process.network_sandbox()[1] == process.NO_SANDBOX else "true"
         f.write(f"""
             tools_dir = "{helpers.tools_dir().resolve()}"
+            require_network_sandbox = {required}
 
             [[target]]
             name = "acme/real"

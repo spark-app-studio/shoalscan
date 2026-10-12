@@ -23,7 +23,12 @@ class EnvironmentTests(unittest.TestCase):
             "AWS_SECRET_ACCESS_KEY": "s",
         }
         with mock.patch.dict(os.environ, env, clear=True):
-            self.assertEqual(opengrep._scanner_env(), {"PATH": "/usr/bin", "HOME": "/home/u", "LC_CTYPE": "C.UTF-8"})
+            got = opengrep._scanner_env(Path("/run/home"))
+        self.assertEqual((got["PATH"], got["LC_CTYPE"]), ("/usr/bin", "C.UTF-8"))
+        self.assertEqual(got["HOME"], "/run/home")
+        self.assertNotIn("SEMGREP_RULES", got)
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", got)
+        self.assertEqual(got["HTTPS_PROXY"], "http://127.0.0.1:9")
 
 
 class _Sock:

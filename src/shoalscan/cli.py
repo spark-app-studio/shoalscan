@@ -25,12 +25,13 @@ from shoalscan.install import (
     signature_verified,
     tool_file_path,
     tool_path,
+    tool_signature_verified,
     verify_rules_dir,
 )
 from shoalscan.locations import default_out_dir, default_tools_dir, refuse_inside_repo
 from shoalscan.lockfile import Lock, current_platform, load_lock
 from shoalscan.resources import default_lock_path, shoalscan_rules_dir
-from shoalscan.scan import FINDINGS_JSON, PinnedBinary, Tools, run_scan, write_atomic
+from shoalscan.scan import FINDINGS_JSON, PinnedBinary, Tools, check_network_sandbox, run_scan, write_atomic
 
 TOOLS_HELP = "installed tools (default: $XDG_CACHE_HOME/shoalscan/tools or ~/.cache/shoalscan/tools)"
 OUT_HELP = "output directory, outside the repository (default: a private directory under the system temp directory)"
@@ -124,7 +125,9 @@ def _tools(args: argparse.Namespace, config: Config, lock: Lock) -> Tools:
     if config.opengrep.shoalscan_rules:
         own = shoalscan_rules_dir()
     pinned = {}
-    for name in config.scanners:
+    # Helm is no scanner of its own: Trivy renders charts with it.
+    wanted = [*config.scanners, *(["helm"] if "trivy" in config.scanners and "helm" in lock.tools else [])]
+    for name in wanted:
         tool = lock.tools.get(name)
         if name == "opengrep" or tool is None:
             continue
@@ -139,6 +142,7 @@ def _tools(args: argparse.Namespace, config: Config, lock: Lock) -> Tools:
                 extra: (tool_file_path(tools_dir, name, extra).absolute(), asset.sha256)
                 for extra, asset in tool.files.items()
             },
+            signature_verified=tool_signature_verified(tools_dir, tool, plat),
         )
     return Tools(
         pinned=pinned,
@@ -159,6 +163,8 @@ def _baseline_path(args: argparse.Namespace, config: Config) -> Path:
 
 
 def _do_scan(args: argparse.Namespace):
+    # Checked first: a required sandbox that is missing must stop the scan before anything else runs.
+    check_network_sandbox(getattr(args, "require_network_sandbox", False))
     out = _out_dir(args)
     _tools_dir(args)
     policy = _policy(args)
@@ -169,12 +175,28 @@ def _do_scan(args: argparse.Namespace):
             _print_adoption(policy)
         # Without a policy ref, `check` may accept an edit to the baseline it reads.
         baseline = _baseline_path(args, policy.config) if policy.ref is None else None
-        result = run_scan(Path(args.repo), policy.config, tools, out, policy=policy.record(), baseline=baseline)
+        result = run_scan(
+            Path(args.repo),
+            policy.config,
+            tools,
+            out,
+            policy=policy.record(),
+            baseline=baseline,
+            require_network_sandbox=getattr(args, "require_network_sandbox", False),
+        )
         return result, policy.config
     # The repository's own rules also come from the policy ref.
     with tempfile.TemporaryDirectory(prefix="shoalscan-policy-rules-") as tmp:
         gitref.archive_dirs(Path(args.repo), policy.commit, list(policy.config.opengrep.rule_dirs), Path(tmp))
-        result = run_scan(Path(args.repo), policy.config, tools, out, rule_root=Path(tmp), policy=policy.record())
+        result = run_scan(
+            Path(args.repo),
+            policy.config,
+            tools,
+            out,
+            rule_root=Path(tmp),
+            policy=policy.record(),
+            require_network_sandbox=getattr(args, "require_network_sandbox", False),
+        )
     return result, policy.config
 
 
@@ -190,15 +212,15 @@ def cmd_install(args: argparse.Namespace) -> int:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     result, _ = _do_scan(args)
-    opengrep_meta = result.meta["scanners"].get("opengrep")
-    if opengrep_meta is not None and not opengrep_meta.get("signature_verified", False):
-        bar = "!" * 78
-        print(
-            f"{bar}\nshoalscan: WARNING: there is no record that the installed Opengrep's cosign signature was\n"
-            "verified (installed with --skip-signature-check, or copied in by hand). Its SHA-256 matches\n"
-            f"tools.lock. Run `shoalscan install` with cosign available to verify it.\n{bar}",
-            file=sys.stderr,
-        )
+    for name, info in sorted(result.meta["scanners"].items()):
+        if isinstance(info, dict) and info.get("signature_verified") is False:
+            bar = "!" * 78
+            print(
+                f"{bar}\nshoalscan: WARNING: there is no record that the installed {name}'s cosign signature was\n"
+                "verified (installed with --skip-signature-check, or copied in by hand). Its SHA-256 matches\n"
+                f"tools.lock. Run `shoalscan install` with cosign available to verify it.\n{bar}",
+                file=sys.stderr,
+            )
     counts = result.meta["counts"]
     print(
         f"shoalscan scan: {len(result.findings)} findings "
@@ -413,6 +435,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("scan", help="run the scanners and write findings.json and findings.sarif")
     _scan_options(p)
+    p.add_argument(
+        "--require-network-sandbox",
+        action="store_true",
+        help="fail unless the scanners can run in an operating-system network sandbox (sandbox-exec or unshare --net)",
+    )
     _policy_option(p)
     p.set_defaults(func=cmd_scan)
 

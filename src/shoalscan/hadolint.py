@@ -124,11 +124,10 @@ def build_command(binary: Path, config: Path, ignore: tuple[str, ...], files: li
 
 def execute(cmd: list[str], cwd: Path, timeout: int) -> list:
     """Run Hadolint and return its parsed JSON output, or raise ScanError. With --no-fail, only 0 is success."""
-    returncode, stdout, tail = process.run_scanner(TOOL, cmd, cwd, timeout)
+    returncode, stdout, stderr = process.run_scanner(TOOL, cmd, cwd, timeout, max_stdout=MAX_OUTPUT_BYTES)
+    tail = process.error_summary(stderr)
     if returncode != 0:
         raise ScanError(f"hadolint failed with exit code {returncode}\n{tail}")
-    if len(stdout) > MAX_OUTPUT_BYTES:
-        raise ScanError("hadolint output is larger than allowed")
     try:
         doc = json.loads(stdout)
     except (ValueError, UnicodeDecodeError):
@@ -171,7 +170,9 @@ def normalise(
         if rel not in scanned:
             raise ScanError(f"hadolint reported a file it was not given: {rel[:300]}")
         if code == PARSE_ERROR:
-            errors[rel] = {"path": rel, "type": f"hadolint {PARSE_ERROR}", "message": str(r.get("message", ""))[:400]}
+            # The message can quote the line that did not parse: keep what went wrong, not the line.
+            message = process.error_summary(str(r.get("message", "")), 400)
+            errors[rel] = {"path": rel, "type": f"hadolint {PARSE_ERROR}", "message": message}
             continue
         if rel not in lines_cache:
             try:
