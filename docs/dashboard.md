@@ -72,15 +72,18 @@ The dashboard answers only to requests whose `Host` header is one of those names
 
 People sign in through your organisation's OpenID Connect provider. Shoalscan never sees a password.
 
-**Setting it up.** The first time `shoalscan serve` starts, it has no sign-in settings, so it serves only a setup wizard and prints a one-time setup code on its console:
+**Setting it up.** The first time `shoalscan serve` starts, it has no sign-in settings, so it serves only a setup wizard. It makes a one-time setup code and writes it to `setup-code` in its state directory, readable only by the account that runs the dashboard. The console names the file but never shows the code, since console output often ends up in system journals and container logs:
 
 ```text
-shoalscan serve: sign-in is not set up yet. Open /setup on the dashboard and enter this one-time setup code:
+shoalscan serve: sign-in is not set up yet. Open /setup on the dashboard and enter the one-time setup code from this file (readable only by this account):
 
-    6dW1n8kq...
+    /home/shoal/.config/shoalscan/dashboard/setup-code
+
+For example: cat /home/shoal/.config/shoalscan/dashboard/setup-code
+The code works for 30 minutes and only while the dashboard runs; a restart makes a new one.
 ```
 
-The wizard needs that code, so only someone who can see the server's console can set up sign-in; a stranger who reaches the port first cannot. A restart prints a new code. In the wizard:
+The wizard needs that code, so only someone who can read the file on the server can set up sign-in; a stranger who reaches the port first cannot. The code works for 30 minutes, and the file is deleted when it expires; after that, restart `shoalscan serve` for a new one. Saving the settings deletes the file. In the wizard:
 
 1. Register Shoalscan at your provider as a confidential client, with the redirect URI the wizard shows (`https://<the dashboard's address>/oidc/callback`) and a client secret. For Dex, the wizard shows the `staticClients` entry to add.
 2. Enter the setup code, the issuer URL, the client id and secret, and, if the provider's certificate comes from a private CA, paste that CA's certificate (PEM). The dashboard keeps it as `oidc-ca.pem` in its state directory; it never takes a file path from the browser.
@@ -91,15 +94,19 @@ The settings are kept in `oidc.toml` in the state directory, mode 0600, since it
 
 **Who gets in.**
 
-- **Admins** are the people whose ID token carries the admin claim. That is decided at the provider, at every sign-in: take someone out of the group there, and their next sign-in is no longer an admin's. Admins manage who may sign in, the Configuration page and scans.
+- **Admins** are the people whose ID token carries the admin claim. That is decided at the provider, at every sign-in: take someone out of the group there, and their next sign-in is no longer an admin's. An admin session lasts at most one hour, so that change takes effect within the hour; to take someone's admin rights away at once, also disable them here. Admins manage who may sign in, the Configuration page and scans.
 - **Members** are people an admin has allowed, by email address, on the **Users** page or with `shoalscan serve user allow EMAIL`. They read every page and review findings.
 - **Everyone else is refused**, even with a valid account at the provider, and is told to ask an admin.
 
-Only email addresses the provider marks as verified count. A person's first sign-in ties their address to their account at the provider, so another account that later uses the same address is refused. An admin can take back a member's access, or disable anyone but themselves, admins included; either ends the person's sessions at once. `shoalscan serve user list|allow|disallow|disable|enable` does the same from the command line. Every change, and every first sign-in, is recorded with who and when, and the **Users** page shows it.
+Only email addresses the provider marks as verified count, and only plain ASCII addresses are accepted. A person's first sign-in ties their address to their account at the provider, so another account that later uses the same address is refused. An admin can take back a member's access, or disable anyone but themselves, admins included; either ends the person's sessions at once.
+
+**Sessions.** A member's session ends after eight hours without use or after seven days; an admin's after eight hours without use or after one hour. One person can be signed in on at most 10 browsers at once; signing in on an eleventh ends their oldest session. `shoalscan serve user list|allow|disallow|disable|enable` does the same from the command line. Every change, and every first sign-in, is recorded with who and when, and the **Users** page shows it.
 
 The people list is kept in `users.sqlite3` in the state directory (mode 0600), not in the history database: `shoalscan record` writes the history, often from CI, and nothing that can write it should be able to let someone in.
 
-**How sign-in works.** **Sign in** sends you to the provider with the authorization code flow, PKCE (S256), a `state` tied to a short-lived cookie and a `nonce`. When you come back, Shoalscan swaps the code for an ID token at the provider's token endpoint, using the client secret over TLS, and checks the token's RS256 signature against the provider's published keys, its issuer, audience, expiry and nonce. The provider must be reached over https (plain http only on the loopback interface), with its certificate checked; proxy settings are ignored.
+**How sign-in works.** **Sign in** sends you to the provider with the authorization code flow, PKCE (S256), a `state` tied to a short-lived signed cookie and a `nonce`; the dashboard itself keeps nothing for a sign-in in progress. When you come back, Shoalscan swaps the code for an ID token at the provider's token endpoint, using the client secret over TLS, and checks the token's RS256 signature against the provider's published keys, its issuer, audience, authorised party, expiry and nonce. The issuer must match exactly what the provider publishes, trailing slash included.
+
+Starting a sign-in is limited per client address to a burst of 30, then one every 10 seconds, and failed sign-ins are limited per address too. Behind a reverse proxy, a load balancer, NAT or a container port mapping, the dashboard sees one address for everyone, so all clients share these limits. The burst lets a team sign in together; if people see "Too many sign-ins were started from your network address", they wait a minute and try again. The provider must be reached over https (plain http only on the loopback interface), with its certificate checked; proxy settings are ignored.
 
 [Security model](security-model.md#the-dashboard) describes how the dashboard protects itself: TLS settings, login, sessions, headers and limits.
 

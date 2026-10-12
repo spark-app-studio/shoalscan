@@ -27,6 +27,8 @@ All notable changes to Shoalscan are recorded here.
 
 - `shoalscan scan` no longer warns about Opengrep's signature when Opengrep is not among the scanners.
 - A `.shoalscan.toml`, baseline or dashboard policy nested deeply enough to exhaust Python's stack (thousands of `[` or `{`) is now reported as not valid TOML, instead of stopping with a `RecursionError` traceback. Found by the new fuzz targets.
+- The dashboard's setup wizard counts a setup code that is not plain ASCII as a wrong code, instead of dropping the request.
+- The dashboard accepts an OpenID Connect issuer with a trailing slash, and compares it exactly as the provider publishes it.
 
 ### Security
 
@@ -37,6 +39,11 @@ All notable changes to Shoalscan are recorded here.
 - Nothing in a scanned repository or on the machine can silence Trivy: its `trivy.yaml`, `.trivyignore`, cached checks and home-directory modules are not read, and `TRIVY_*` variables are not passed. Its inline ignore comments, which cannot be turned off, must name one check and an issue or they block, and they are counted with the other suppressions.
 - The secrets Gitleaks finds never reach the findings, the SARIF file, `check.json` or the history: the report stays in the scan's private temporary directory, and fingerprints hash the matched line with the secret masked.
 - Text from the scanned repository (paths, messages, rule metadata, baseline reasons, component names, review descriptions) is escaped in the work list and the report, so it cannot add links, images, HTML or headings.
+- Dashboard admin sessions last at most one hour, after which the admin signs in again and the provider's admin claim is read again, so removing someone from the admin group takes effect within the hour. Disabling someone still takes effect at once. Member sessions keep their limits.
+- The dashboard keeps no server-side state for a sign-in in progress: the state, nonce and PKCE verifier travel in the `__Host-` login cookie, signed with HMAC-SHA256 under a key held only in memory, and each state works once; when too many used states are still current, new sign-ins are refused for a few minutes rather than one being forgotten. Starting sign-ins can no longer push out other people's. Starting a sign-in is rate limited per client address with a token bucket (a burst of 30, then one every 10 seconds), so clients behind one shared address can still sign in together.
+- One person holds at most 10 dashboard sessions; signing in again ends their own oldest session, never someone else's.
+- The one-time setup code is written to `setup-code` in the state directory (mode 0600) instead of the console output, and it expires after 30 minutes; the file is deleted once it expires.
+- The dashboard accepts only ASCII email addresses, checks the ID token's `azp` whenever it is present, and briefly remembers that the provider could not be reached, so sign-ins do not queue behind a network timeout.
 
 ### Project
 

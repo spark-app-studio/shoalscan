@@ -8,8 +8,8 @@
 - Sign-in goes through an OpenID Connect provider (see `oidc`): the code
   flow with PKCE, state and nonce, and an RS256-checked ID token. Until it is
   configured, the dashboard serves only a setup wizard, which needs a
-  one-time code printed on the server's console. Logout needs the session's
-  CSRF token.
+  one-time code written to a private file in the state directory (it expires
+  after SETUP_CODE_SECONDS). Logout needs the session's CSRF token.
 - Admins (the provider's admin claim) manage who may sign in, the
   Configuration page and scans; members (allowed by an admin) read
   everything and review findings. Roles are checked on the server for every
@@ -76,6 +76,20 @@ USER_POSTS = ("/api/users/allow", "/api/users/change")
 SETUP_POSTS = ("/setup/test", "/setup/save")
 SETUP_PATHS = frozenset({"/setup", "/static/setup.js"})
 LOGIN_COOKIE = "__Host-shoalscan-login"
+# The one-time setup code: in this file in the state directory (mode 0600), never in the console output.
+SETUP_CODE_FILE = "setup-code"
+SETUP_CODE_SECONDS = 30 * 60
+# The provider's discovery document and keys are read again after this long; a failed read is retried after
+# PROVIDER_RETRY_SECONDS, so sign-ins in the meantime fail at once rather than each waiting on the network.
+PROVIDER_REFRESH_SECONDS = 3600
+PROVIDER_RETRY_SECONDS = 30
+# Starting a sign-in, per client address: a burst of LOGIN_START_BURST, then one every LOGIN_START_REFILL_SECONDS.
+# Behind a reverse proxy, NAT or a container port mapping every client shares one address, so the burst lets a
+# team sign in together, and the refill (360 an hour) covers a steady stream of sign-ins and abandoned attempts.
+# Sign-ins keep no server state, so this only bounds what one address can make the dashboard remember (used
+# states, see oidc.MAX_USED_STATES) and send on to the provider.
+LOGIN_START_BURST = 30
+LOGIN_START_REFILL_SECONDS = 10.0
 # Sent after a successful sign-in: a same-origin refresh, so the browser sends the new
 # SameSite=Strict session cookie (a redirect chain begun at the provider would not).
 SIGNED_IN_PAGE = (
@@ -300,12 +314,20 @@ class App:
         self.auth_dir = config.auth_dir
         # None until the setup wizard (or a hand-written oidc.toml) configures sign-in.
         self.oidc = oidc.load(self.auth_dir)
-        self.setup_code = secrets.token_urlsafe(18) if self.oidc is None else None
+        self.setup_code: str | None = None
+        self.setup_code_expires = 0.0
+        if self.oidc is None:
+            self.new_setup_code()
+        else:
+            self.drop_setup_code()
         self.provider: oidc.Provider | None = None
-        self._provider_lock = threading.Lock()
+        self._provider_lock = threading.Lock()  # guards provider and _provider_failure; never held over the network
+        self._discovery_lock = threading.Lock()  # one discovery at a time
+        self._provider_failure: tuple[float, str] | None = None  # (retry after, why), monotonic
         self.logins = oidc.Logins()
         self.sessions = auth.Sessions(self.session_valid)
         self.limiter = auth.LoginLimiter()
+        self.start_limiter = auth.TokenBucket(LOGIN_START_BURST, LOGIN_START_REFILL_SECONDS)
         icon = data_path("assets/shoalscan-icon.svg").read_bytes()
         self.static = {
             path: icon if source == "icon" else (STATIC_DIR / source).read_bytes()
@@ -318,6 +340,25 @@ class App:
         history.open_read_only(config.db).close()
         self.scans = ScanControl(config.state_dir, config.db) if config.state_dir else None
         self.config_editor = ConfigEditor(config.state_dir, config.db) if config.state_dir else None
+
+    @property
+    def setup_code_path(self) -> Path:
+        return self.auth_dir / SETUP_CODE_FILE
+
+    def new_setup_code(self) -> None:
+        """Make the one-time setup code and write it to a private file; it expires after SETUP_CODE_SECONDS."""
+        self.setup_code = secrets.token_urlsafe(18)
+        self.setup_code_expires = time.monotonic() + SETUP_CODE_SECONDS
+        auth.write_private_file(self.setup_code_path, self.setup_code + "\n")
+
+    def drop_setup_code(self) -> None:
+        self.setup_code = None
+        self.setup_code_path.unlink(missing_ok=True)
+
+    def expire_setup_code(self) -> None:
+        """Delete the setup code and its file once it has expired."""
+        if self.setup_code is not None and time.monotonic() >= self.setup_code_expires:
+            self.drop_setup_code()
 
     def users(self):
         return users.open_users(self.auth_dir)
@@ -333,11 +374,46 @@ class App:
             conn.close()
 
     def provider_now(self) -> oidc.Provider:
-        """The provider's endpoints and keys, read at the first sign-in and again every hour."""
-        with self._provider_lock:
-            if self.provider is None or time.monotonic() - self.provider.fetched_at > 3600:
-                self.provider = oidc.discover(self.oidc)
-            return self.provider
+        """The provider's endpoints and keys, read at the first sign-in and again every hour.
+
+        One discovery runs at a time, outside `_provider_lock`. While it runs, a sign-in uses the previous
+        answer when there is one, and otherwise waits for that one discovery. A failure is remembered for
+        PROVIDER_RETRY_SECONDS, and sign-ins in that time fail at once."""
+
+        def cached() -> oidc.Provider | None:
+            with self._provider_lock:
+                provider, failure = self.provider, self._provider_failure
+            now = time.monotonic()
+            if provider is not None and now - provider.fetched_at <= PROVIDER_REFRESH_SECONDS:
+                return provider
+            if failure is not None and now < failure[0]:
+                raise oidc.OidcError(failure[1])
+            return None
+
+        provider = cached()
+        if provider is not None:
+            return provider
+        stale = self.provider
+        if not self._discovery_lock.acquire(blocking=stale is None, timeout=-1 if stale else 2 * oidc.TIMEOUT_SECONDS):
+            if stale is not None:
+                return stale  # another request is reading the provider again
+            raise oidc.OidcError("the identity provider is slow to answer")
+        try:
+            provider = cached()  # another request may have just read it, or failed to
+            if provider is not None:
+                return provider
+            config = self.oidc
+            try:
+                provider = oidc.discover(config)
+            except oidc.OidcError as exc:
+                with self._provider_lock:
+                    self._provider_failure = (time.monotonic() + PROVIDER_RETRY_SECONDS, str(exc))
+                raise
+            with self._provider_lock:
+                self.provider, self._provider_failure = provider, None
+            return provider
+        finally:
+            self._discovery_lock.release()
 
     def config_enabled(self) -> bool:
         """The Configuration page exists once scan_targets.toml does, or with serve --allow-config."""
@@ -376,6 +452,11 @@ class DashboardServer(socketserver.ThreadingMixIn, HTTPServer):
 
     daemon_threads = True
     request_queue_size = 64
+
+    def service_actions(self) -> None:
+        """Called by serve_forever on every poll: an expired setup code is deleted even when nobody asks for it."""
+        super().service_actions()
+        self.app.expire_setup_code()
 
     def __init__(self, address, app: App, ctx: ssl.SSLContext):
         self.app = app
@@ -638,6 +719,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         route = ROUTES.get(url.path)
         if self.app.oidc is None:
+            self.app.expire_setup_code()
             # Setup mode: the wizard and what it needs, and nothing else.
             if route and route[2] and url.path not in ("/", "/login"):
                 return self.send(200, self.app.static[url.path], route[1])
@@ -821,10 +903,15 @@ class Handler(BaseHTTPRequestHandler):
         request = self._json_body(body)
         if request is None:
             return None
+        if self.app.setup_code is None or time.monotonic() >= self.app.setup_code_expires:
+            self.app.drop_setup_code()
+            return self.send_error_json(403, "the setup code has expired; restart shoalscan serve for a new one")
         code = request.pop("setup_code", None)
-        if not isinstance(code, str) or not hmac.compare_digest(code.strip(), self.app.setup_code or "\0"):
+        # Bytes, not str: compare_digest refuses a str with characters outside ASCII.
+        given = code.strip().encode("utf-8", "replace") if isinstance(code, str) else b""
+        if not given or not hmac.compare_digest(given, self.app.setup_code.encode("utf-8")):
             self.app.limiter.failed(address)
-            return self.send_error_json(403, "that is not the setup code printed on the server's console")
+            return self.send_error_json(403, "that is not the setup code from the file named on the server's console")
         request["redirect_uri"] = f"https://{self.headers.get('Host')}/oidc/callback"
         if "ca_file" in request:
             # No file paths from a browser: the CA comes as the certificate itself.
@@ -847,8 +934,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"ok": True, "checks": checks, "redirect_uri": config.redirect_uri})
         oidc.save(self.app.auth_dir, config)
         with self.app._provider_lock:
-            self.app.provider = provider
-        self.app.oidc, self.app.setup_code = config, None
+            self.app.provider, self.app._provider_failure = provider, None
+        self.app.oidc = config
+        self.app.drop_setup_code()
         self.app.limiter.succeeded(address)
         return self.send_json(200, {"ok": True, "checks": checks, "redirect": "/login"})
 
@@ -919,13 +1007,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send(303, b"", "text/plain", {"Location": f"/login?error={error}", **(extra or {})})
 
     def oidc_start(self) -> None:
-        """GET /oidc/start: send the browser to the provider, with a fresh state, nonce and PKCE challenge."""
+        """GET /oidc/start: send the browser to the provider, with a fresh state, nonce and PKCE challenge.
+        They travel in the signed login cookie; the server keeps nothing for the login."""
+        address = self.client_address[0]
+        if not self.app.start_limiter.take(address):
+            return self._to_login("starts")
         try:
             provider = self.app.provider_now()
         except oidc.OidcError:
             return self._to_login("provider")
-        state, pending = self.app.logins.start()
-        cookie = f"{LOGIN_COOKIE}={state}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={oidc.LOGIN_SECONDS}"
+        state, pending, sealed = self.app.logins.start()
+        cookie = f"{LOGIN_COOKIE}={sealed}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={oidc.LOGIN_SECONDS}"
         location = oidc.authorization_url(provider, self.app.oidc, state, pending)
         return self.send(303, b"", "text/plain", {"Location": location, "Set-Cookie": cookie})
 
@@ -941,12 +1033,14 @@ class Handler(BaseHTTPRequestHandler):
             name, _, value = part.strip().partition("=")
             if name == LOGIN_COOKIE:
                 cookie = value
-        # The state must come back to the browser that started the login, and be used once.
-        if not state or not cookie or not hmac.compare_digest(state, cookie):
-            self.app.limiter.failed(address)
-            return self._to_login("state", clear)
-        pending = self.app.logins.finish(state)
+        # The state must come back to the browser that started the login, in its genuine, unexpired login
+        # cookie, and be used once.
+        try:
+            pending = self.app.logins.finish(state, cookie)
+        except oidc.TooManyLoginsError:
+            return self._to_login("busy", clear)
         if pending is None:
+            self.app.limiter.failed(address)
             return self._to_login("state", clear)
         if _one(query, "error", 100):
             return self._to_login("denied", clear)
@@ -965,7 +1059,9 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
         self.app.limiter.succeeded(address)
         sid = self.app.sessions.create(user.email, user.role, user.version)
-        return self.send(200, SIGNED_IN_PAGE, HTML, {"Set-Cookie": [auth.session_cookie(sid), clear["Set-Cookie"]]})
+        return self.send(
+            200, SIGNED_IN_PAGE, HTML, {"Set-Cookie": [auth.session_cookie(sid, user.role), clear["Set-Cookie"]]}
+        )
 
     def api(self, path: str, query: dict, session: auth.Session) -> None:
         if path not in API_PATHS:
@@ -1140,10 +1236,13 @@ def serve(config: ServeConfig) -> None:
     hosts = ", ".join(f"https://{h}" for h in sorted(allowed_host_headers(config.hosts, port)))
     print(f"shoalscan serve: HTTPS only on {config.bind}:{port}; open {hosts}", flush=True)
     if server.app.setup_code:
+        # The code itself is never printed: console output ends up in journals and container logs.
         print(
-            "shoalscan serve: sign-in is not set up yet. Open /setup on the dashboard and enter this one-time "
-            f"setup code:\n\n    {server.app.setup_code}\n\n"
-            "It works only while the dashboard runs; a restart prints a new one.",
+            "shoalscan serve: sign-in is not set up yet. Open /setup on the dashboard and enter the one-time "
+            f"setup code from this file (readable only by this account):\n\n    {server.app.setup_code_path}\n\n"
+            f"For example: cat {server.app.setup_code_path}\n"
+            f"The code works for {SETUP_CODE_SECONDS // 60} minutes and only while the dashboard runs; "
+            "a restart makes a new one.",
             flush=True,
         )
     try:

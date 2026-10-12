@@ -3,7 +3,10 @@
 People sign in through an OpenID Connect provider (see `oidc` and `users`).
 Sessions live in memory only, keyed by the SHA-256 of the cookie value;
 every request checks a session against the users database, so it ends at
-once when its person is disabled or loses access.
+once when its person is disabled or loses access. An admin's role comes from
+the provider's admin claim at sign-in, so admin sessions are kept short
+(ADMIN_SESSION_MAX_SECONDS): taking someone out of the admin group at the
+provider takes effect when their admin session runs out at the latest.
 """
 
 from __future__ import annotations
@@ -23,8 +26,17 @@ from urllib.parse import urlsplit
 COOKIE_NAME = "__Host-shoalscan"
 SESSION_IDLE_SECONDS = 8 * 3600
 SESSION_MAX_SECONDS = 7 * 24 * 3600
+# An admin signs in again after this long, which reads the admin claim again.
+ADMIN_SESSION_MAX_SECONDS = 3600
 MAX_SESSIONS = 100
+# One person's sessions; past this, signing in again ends that person's oldest session.
+MAX_SESSIONS_PER_USER = 10
 MAX_SECRET_CHARS = 128
+
+
+def session_lifetime(role: str) -> int:
+    """How long a session may last at most, whatever its use."""
+    return ADMIN_SESSION_MAX_SECONDS if role == "admin" else SESSION_MAX_SECONDS
 
 
 def sha256_hex(value: str) -> str:
@@ -69,9 +81,17 @@ class Sessions:
         self._items: dict[str, Session] = {}
 
     def create(self, user: str, role: str, credential_version: int) -> str:
+        """A new session for `user`. A person over MAX_SESSIONS_PER_USER loses their own oldest session; only
+        when every person is within that cap and the dashboard holds MAX_SESSIONS does the least recently used
+        session of anyone go."""
         sid = secrets.token_urlsafe(32)
         now = time.time()
         with self._lock:
+            for key in [k for k, v in self._items.items() if self._expired(v, now)]:
+                del self._items[key]
+            mine = sorted((k for k, v in self._items.items() if v.user == user), key=lambda k: self._items[k].created)
+            for key in mine[: max(0, len(mine) - MAX_SESSIONS_PER_USER + 1)]:
+                del self._items[key]
             if len(self._items) >= MAX_SESSIONS:
                 oldest = min(self._items, key=lambda k: self._items[k].last_used)
                 del self._items[oldest]
@@ -79,6 +99,10 @@ class Sessions:
                 now, now, secrets.token_urlsafe(32), secrets.token_hex(4), user, role, credential_version
             )
         return sid
+
+    @staticmethod
+    def _expired(session: Session, now: float) -> bool:
+        return now - session.last_used > SESSION_IDLE_SECONDS or now - session.created > session_lifetime(session.role)
 
     def get(self, sid: str | None) -> Session | None:
         if not sid or len(sid) > MAX_SECRET_CHARS:
@@ -89,8 +113,7 @@ class Sessions:
             session = self._items.get(key)
             if session is None:
                 return None
-            expired = now - session.last_used > SESSION_IDLE_SECONDS or now - session.created > SESSION_MAX_SECONDS
-            if expired or not self.validate(session):
+            if self._expired(session, now) or not self.validate(session):
                 del self._items[key]
                 return None
             session.last_used = now
@@ -147,6 +170,33 @@ class LoginLimiter:
             self._all.append(now)
 
 
+class TokenBucket:
+    """A token bucket per address: up to `burst` requests at once, then one every `refill_seconds`.
+
+    Unlike LoginLimiter it has no overall hold-off and nothing is cleared by success: one address never affects
+    another, and a busy shared address recovers on its own as tokens refill. At most `max_addresses` buckets are
+    kept; when that many exist, full buckets (which mean nothing) are dropped first, then the oldest."""
+
+    def __init__(self, burst: int, refill_seconds: float, max_addresses: int = 10_000):
+        self.burst, self.refill, self.max_addresses = burst, refill_seconds, max_addresses
+        self._lock = threading.Lock()
+        self._buckets: dict[str, tuple[float, float]] = {}  # address -> (tokens, as of when), monotonic
+
+    def take(self, address: str, now: float | None = None) -> bool:
+        """Spend one token for `address`; False when it has none left."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            tokens, since = self._buckets.pop(address, (float(self.burst), now))
+            tokens = min(float(self.burst), tokens + max(0.0, now - since) / self.refill)
+            if len(self._buckets) >= self.max_addresses:
+                full = [a for a, (t, s) in self._buckets.items() if t + (now - s) / self.refill >= self.burst]
+                for key in full or [next(iter(self._buckets))]:
+                    del self._buckets[key]
+            allowed = tokens >= 1.0
+            self._buckets[address] = (tokens - 1.0 if allowed else tokens, now)
+            return allowed
+
+
 def same_origin(host: str | None, origin: str | None, referer: str | None, allowed_hosts: frozenset[str]) -> bool:
     """True when a state-changing request comes from this dashboard's own pages."""
     if not host or host not in allowed_hosts:
@@ -163,8 +213,8 @@ def csrf_matches(session: Session, value: str | None) -> bool:
     return bool(value) and len(value) <= MAX_SECRET_CHARS and hmac.compare_digest(session.csrf, value)
 
 
-def session_cookie(sid: str) -> str:
-    return f"{COOKIE_NAME}={sid}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={SESSION_MAX_SECONDS}"
+def session_cookie(sid: str, role: str) -> str:
+    return f"{COOKIE_NAME}={sid}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={session_lifetime(role)}"
 
 
 def clear_cookie() -> str:
