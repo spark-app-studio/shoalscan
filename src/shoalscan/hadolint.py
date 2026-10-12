@@ -158,7 +158,7 @@ def normalise(
         if not isinstance(r, dict):
             raise ScanError("hadolint output has a result that is not an object")
         code, level, line, path = r.get("code"), r.get("level"), r.get("line"), r.get("file")
-        if not isinstance(code, str) or not _CODE.match(code) or level not in _SEVERITY:
+        if not isinstance(code, str) or not _CODE.match(code) or not isinstance(level, str) or level not in _SEVERITY:
             raise ScanError(f"hadolint output has a malformed result: {str(r)[:300]}")
         if not isinstance(line, int) or isinstance(line, bool) or line < 0:
             raise ScanError("hadolint output has a malformed line number")

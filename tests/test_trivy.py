@@ -237,6 +237,14 @@ class NormaliseTests(unittest.TestCase):
     def normalise(self, results, ignore=()):
         return trivy.normalise({"Results": results}, self.root, {"infra/": "infra"}, ("vendor",), ignore)
 
+    def test_a_target_the_file_system_refuses_fails_the_scan_cleanly(self):
+        # Found by the trivy_report fuzz target: a name too long for the file system made is_file() raise OSError.
+        for target in ("Docke" + "\udcff" * 200 + "rfile", "a" * 5000, "infra/" + "b" * 300 + ".tf"):
+            with self.subTest(length=len(target)), self.assertRaises(ScanError):
+                self.normalise([{"Target": target, "Misconfigurations": [misconfig("AWS-0087", "HIGH")]}])
+        log = '2026-01-01T00:00:00Z\tERROR\tError parsing file file_path="' + "c" * 5000 + '"\n'
+        self.assertEqual(trivy.parse_errors(log, self.root, ()), [])
+
     def test_severities_ignores_and_excludes(self):
         found, meta = self.normalise(
             [

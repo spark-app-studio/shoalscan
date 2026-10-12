@@ -139,6 +139,16 @@ def sort_findings(findings: list[Finding]) -> list[Finding]:
     return sorted(findings, key=lambda f: (f.path, f.line, f.rule, f.fingerprint, f.tool))
 
 
+def _well_typed(item: dict) -> bool:
+    """Every field of a finding has its type: text, and a line number that is a whole number."""
+    line = item["line"]
+    return (
+        isinstance(line, int)
+        and not isinstance(line, bool)
+        and all(isinstance(item[k], str) for k in Finding.__dataclass_fields__ if k != "line")
+    )
+
+
 def load_findings(path: Path) -> tuple[list[Finding], dict]:
     """Read findings.json written by `shoalscan scan`. Incomplete files are refused."""
     try:
@@ -146,8 +156,10 @@ def load_findings(path: Path) -> tuple[list[Finding], dict]:
             doc = json.load(handle)
     except FileNotFoundError:
         raise SetupError(f"findings file not found: {path} (run `shoalscan scan` first)") from None
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:  # ValueError: not JSON, or not UTF-8
         raise SetupError(f"findings file is unreadable: {path}: {exc}") from None
+    except RecursionError:
+        raise SetupError(f"findings file is unreadable: {path}: nested too deeply") from None
     if not isinstance(doc, dict) or doc.get("format") != FINDINGS_FORMAT or doc.get("complete") is not True:
         raise ScanError(f"findings file is incomplete or has an unknown format: {path}")
     raw = doc.get("findings")
@@ -156,7 +168,7 @@ def load_findings(path: Path) -> tuple[list[Finding], dict]:
     fields = set(Finding.__dataclass_fields__)
     findings = []
     for item in raw:
-        if not isinstance(item, dict) or set(item) != fields:
+        if not isinstance(item, dict) or set(item) != fields or not _well_typed(item):
             raise ScanError(f"findings file has a malformed entry: {item!r}"[:300])
         findings.append(Finding(**item))
     meta = {k: v for k, v in doc.items() if k != "findings"}

@@ -16,6 +16,7 @@ newest MAX_TREND_RUNS trend runs and holds two runs' findings at a time.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections import Counter
@@ -60,32 +61,33 @@ REVIEW_FILTERS = (
     "baselined",
     "suggested",
 )
-# The neighbour's decision, now: its dashboard review, else its newest baseline reason.
+# The neighbour's decision, now: its dashboard review, else its baseline reason in its newest scheduled run.
+# A pull-request run's baseline reason is never a decision: the change under review has not been accepted.
 _NEIGHBOUR_REVIEW = (
     "LEFT JOIN finding_reviews nr ON nr.repo_name = (SELECT name FROM repos WHERE id = nk.repo_id) "
     "AND nr.tool = nk.tool "
     "AND nr.rule = nk.rule AND nr.path = nk.path AND nr.fingerprint = nk.fingerprint"
 )
 _NEIGHBOUR_BASELINE = (
-    "(SELECT nrf.baseline_{} FROM run_findings nrf JOIN runs nrun ON nrun.id = nrf.run_id WHERE nrf.key_id = nk.id "
-    "ORDER BY nrun.scanned_at DESC, nrun.id DESC LIMIT 1)"
+    f"LEFT JOIN run_findings nb ON nb.key_id = nk.id AND nb.run_id = {embeddings.DECISION_RUN.format(key='nk.id')} "
+    "LEFT JOIN runs nbr ON nbr.id = nb.run_id"
 )
-# The stored suggestions of some findings, with their neighbours' decisions now.
+# The stored suggestions of some findings, with their neighbours' decisions now and where they come from.
 _SUGGESTIONS = (
     "SELECT s.key_id, s.score, s.computed_at, nk.tool, nk.rule, nk.path, nk.fingerprint, nr.status, "
-    f"nr.description, nr.updated_by, {_NEIGHBOUR_BASELINE.format('issue')}, "
-    f"{_NEIGHBOUR_BASELINE.format('reason')} "
+    "nr.description, nr.updated_by, nr.updated_at, nb.baseline_issue, nb.baseline_reason, nbr.id, nbr.commit_sha, "
+    "nbr.scanned_at "
     f"FROM finding_suggestions s JOIN finding_keys nk ON nk.id = s.neighbour_id {_NEIGHBOUR_REVIEW} "
+    f"{_NEIGHBOUR_BASELINE} "
     "WHERE s.model = ? AND s.key_id IN (SELECT value FROM json_each(?))"
 )
 # Untriaged, with a suggestion whose neighbour still has a decision that suggests a status.
 _SUGGESTED = (
     "fr.status IS NULL AND rf.baseline_reason IS NULL AND EXISTS (SELECT 1 FROM finding_suggestions s "
-    f"JOIN finding_keys nk ON nk.id = s.neighbour_id {_NEIGHBOUR_REVIEW} "
+    f"JOIN finding_keys nk ON nk.id = s.neighbour_id {_NEIGHBOUR_REVIEW} {_NEIGHBOUR_BASELINE} "
     "WHERE s.key_id = rf.key_id AND s.model = ? AND "
-    f"(nr.status IN ('false_positive', 'accepted_risk', 'wont_fix') OR (nr.status IS NULL AND "
-    f"(substr({_NEIGHBOUR_BASELINE.format('reason')}, 1, 15) = 'False positive:' OR "
-    f"substr({_NEIGHBOUR_BASELINE.format('reason')}, 1, 9) = 'Accepted:'))))"
+    "(nr.status IN ('false_positive', 'accepted_risk', 'wont_fix') OR (nr.status IS NULL AND "
+    "(substr(nb.baseline_reason, 1, 15) = 'False positive:' OR substr(nb.baseline_reason, 1, 9) = 'Accepted:'))))"
 )
 # A finding's review status: a review made on the dashboard, else what its
 # baseline entry's reason says, else open.
@@ -505,8 +507,7 @@ class Data:
         if run_id is not None:
             row = self.conn.execute("SELECT id FROM runs WHERE id = ? AND repo_id = ?", (run_id, repo_id)).fetchone()
             return row[0] if row else None
-        runs = self._trend_runs(repo_id)
-        return runs[-1]["id"] if runs else None
+        return embeddings.latest_trend_run(self.conn, repo_id)
 
     def _age_keys(self, repo_id: int, run_id: int, bucket: int) -> list[int] | None:
         """Key ids of the open findings in one age bucket; None unless `run_id` is the latest trend run."""
@@ -660,8 +661,10 @@ class Data:
         }
 
     def suggestions(self, key_ids: list[int], model: str = embeddings.DEFAULT_MODEL) -> dict[int, dict]:
-        """The stored suggestion for each of these (untriaged) findings, with its neighbour's decision now.
-        A suggestion whose neighbour no longer has a decision that suggests a status is left out."""
+        """The stored suggestion for each of these (untriaged) findings, with its neighbour's decision now
+        and where that decision comes from: a review (who, when) or the baseline of a scheduled run (which
+        run, commit and time). A suggestion whose neighbour no longer has a decision that suggests a status
+        is left out. The neighbour's description is for reference only; a reviewer writes their own."""
         if not key_ids:
             return {}
         rows = self.conn.execute(
@@ -669,18 +672,23 @@ class Data:
             (model, json.dumps(key_ids)),
         ).fetchall()
         out = {}
-        for key_id, score, computed, tool, rule, path, fp, status, description, by, issue, reason in rows:
-            suggested = embeddings.decision_status(status, reason)
-            if suggested is None:
+        for key_id, score, computed, tool, rule, path, fp, *decided in rows:
+            suggested = embeddings.decision_status(decided[0], decided[5])
+            found = embeddings.decision(tuple(decided))
+            if suggested is None or found is None:
                 continue
             out[key_id] = {
                 "status": suggested,
                 "score": score,
                 "computed_at": computed,
                 "like": [tool, rule, path, fp],
-                "source": "review" if status is not None else "baseline",
-                "description": description if status is not None else reason,
-                "by": by if status is not None else issue,
+                "source": found["source"],
+                "description": found["description"],
+                "by": found.get("by"),
+                "at": found["at"],
+                "issue": found.get("issue"),
+                "run": found.get("run"),
+                "commit": found.get("commit"),
             }
         return out
 
@@ -707,7 +715,26 @@ class Data:
         )
         return {"model": model, "threshold": threshold, "embedded": found is not None, "similar": found or []}
 
-    def _groups(self, repo_id: int, run_id: int, threshold: float, model: str) -> tuple[list[list[int]], dict]:
+    def groups_version(self, repo_id: int, run_id: int, model: str = embeddings.DEFAULT_MODEL) -> tuple:
+        """Changes whenever the groups of a run could: its findings' embeddings (a new or re-embedded
+        finding) or the repository's reviews. Used with `version` as a cache key."""
+        digest = hashlib.sha256()
+        for key_id, text_sha in self.conn.execute(
+            "SELECT e.key_id, e.text_sha256 FROM run_findings rf JOIN finding_embeddings e ON e.key_id = rf.key_id "
+            "AND e.model = ? WHERE rf.run_id = ? ORDER BY e.key_id",
+            (model, run_id),
+        ):
+            digest.update(f"{key_id}:{text_sha};".encode())
+        reviews = self.conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM finding_review_events WHERE repo_name = (SELECT name FROM repos WHERE "
+            "id = ?)",
+            (repo_id,),
+        ).fetchone()[0]
+        return (digest.hexdigest(), reviews)
+
+    def group_members(
+        self, repo_id: int, run_id: int, threshold: float, model: str = embeddings.DEFAULT_MODEL
+    ) -> tuple[list[list[int]], dict]:
         """The run's untriaged findings that have a vector, in groups of two or more alike, largest first."""
         rows = self.conn.execute(_UNTRIAGED_VECTORS, (repo_id, model, run_id)).fetchall()
         items = [(key_id, embeddings.unpack(blob, dims)) for key_id, blob, dims in rows[: embeddings.MAX_GROUPED]]
@@ -720,9 +747,17 @@ class Data:
         }
         return groups, counts
 
-    def groups(self, repo_id: int, run_id: int, threshold: float, model: str = embeddings.DEFAULT_MODEL) -> dict:
-        """Groups of similar untriaged findings in a run, to review together. Only stored vectors are used."""
-        groups, counts = self._groups(repo_id, run_id, threshold, model)
+    def groups(
+        self,
+        repo_id: int,
+        run_id: int,
+        threshold: float,
+        model: str = embeddings.DEFAULT_MODEL,
+        grouped: tuple[list[list[int]], dict] | None = None,
+    ) -> dict:
+        """Groups of similar untriaged findings in a run, to review together. Only stored vectors are used.
+        `grouped` is a result of `group_members` worked out earlier (the server caches it)."""
+        groups, counts = grouped or self.group_members(repo_id, run_id, threshold, model)
         shown = groups[:MAX_GROUPS]
         ids = [key_id for g in shown for key_id in g]
         details = {r["key_id"]: r for r in self.conn.execute(_GROUP_DETAILS, (run_id, json.dumps(ids)))}
@@ -764,7 +799,13 @@ class Data:
         }
 
     def group_keys(
-        self, repo_id: int, run_id: int, leader: list[str], threshold: float, model: str = embeddings.DEFAULT_MODEL
+        self,
+        repo_id: int,
+        run_id: int,
+        leader: list[str],
+        threshold: float,
+        model: str = embeddings.DEFAULT_MODEL,
+        grouped: tuple[list[list[int]], dict] | None = None,
     ) -> list[int]:
         """The findings of the group this finding leads, now; empty when it no longer leads one."""
         row = self.conn.execute(
@@ -773,7 +814,7 @@ class Data:
         ).fetchone()
         if row is None:
             return []
-        groups, _ = self._groups(repo_id, run_id, threshold, model)
+        groups, _ = grouped or self.group_members(repo_id, run_id, threshold, model)
         return next((g for g in groups if g[0] == row[0]), [])
 
     def embedding_status(self, repo_id: int, run_id: int, model: str = embeddings.DEFAULT_MODEL) -> dict:

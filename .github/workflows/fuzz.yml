@@ -24,7 +24,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [config_file, baseline_file, suppression_line, markdown_text, id_token, id_token_claims]
+        target:
+          - config_file
+          - baseline_file
+          - suppression_line
+          - markdown_text
+          - id_token
+          - id_token_claims
+          - gitleaks_report
+          - trivy_report
+          - hadolint_report
+          - zizmor_report
+          - findings_file
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

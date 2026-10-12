@@ -14,7 +14,10 @@ the start of the value (`#`, `-`, `+`, `=`, `1.`, `1)`), because a list
 item's content is parsed as blocks: `- # x` is a heading. `code` puts a value in
 a code span, where nothing is interpreted, and `link` keeps only plain
 http(s) URLs. All three fold line breaks and other control characters into
-spaces, so a value can never start a new block.
+spaces, so a value can never start a new block. Control characters include
+the C1 range (U+0080 to U+009F, where some terminals read escape sequences)
+and the bidirectional formatting characters, which can make text read in a
+different order than it is stored.
 `text` output is also safe in a table cell; `code` output is not (a pipe in
 a code span still splits a cell), so code spans go in lists only.
 """
@@ -23,7 +26,11 @@ from __future__ import annotations
 
 import re
 
-_CONTROL = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]+")
+# DEL and C1 controls, and the bidirectional marks, embeddings, overrides and isolates.
+FORMAT_CONTROLS = "\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069"
+_CONTROL = re.compile(f"[\\x00-\\x1f\\u2028\\u2029{FORMAT_CONTROLS}]+")
+_UNSAFE_IN_LINES = re.compile(f"[\\x00-\\x08\\x0b-\\x1f\\u2028\\u2029{FORMAT_CONTROLS}]")
+_FORMAT_CONTROL = re.compile(f"[{FORMAT_CONTROLS}]")
 _SPECIAL = re.compile(r"([\\`*_\[\]<>|~&@$])")
 _BLOCK_START = re.compile(r"^(?:([#+=-])|(\d+)([.)]))")
 _URL = re.compile(r"^https?://[A-Za-z0-9._~:/?#@!$&'*+,;=%\-]+$")
@@ -34,6 +41,17 @@ def one_line(value: object, limit: int = MAX_TEXT) -> str:
     """The value as a single line: control characters become spaces, runs of spaces collapse, long text is cut."""
     text = " ".join(_CONTROL.sub(" ", str(value)).split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def lines(value: object) -> str:
+    """Text of several lines for a terminal, kept as it is except that every control character other than a
+    newline or a tab, and every bidirectional formatting character, becomes U+FFFD."""
+    return _UNSAFE_IN_LINES.sub("\ufffd", str(value))
+
+
+def is_format_control(char: str) -> bool:
+    """DEL, a C1 control or a bidirectional formatting character."""
+    return _FORMAT_CONTROL.fullmatch(char) is not None
 
 
 def text(value: object, limit: int = MAX_TEXT) -> str:

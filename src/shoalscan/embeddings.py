@@ -18,7 +18,15 @@ host is a command-line setting, never read from the scanned repository's
 
 Vectors are stored normalised to unit length as packed float32 (the standard
 library's `array`), which keeps thousands of them small and quick to load;
-cosine similarity is then computed in pure Python.
+cosine similarity is then their dot product, computed in pure Python.
+
+A decision suggests a status for findings like it only when it comes from a
+trusted place: a dashboard review (made by a signed-in person and audited),
+or the baseline as a scheduled run recorded it. A scheduled run is whatever
+was recorded with `record --kind scheduled` (the dashboard's worker records
+its scans of each target's configured branch that way); recording one is an
+operator action, and is trusted. A pull-request run's baseline is the change
+under review, not yet the policy, so its reasons never become suggestions.
 """
 
 from __future__ import annotations
@@ -45,9 +53,15 @@ BATCH = 64
 TIMEOUT_SECONDS = 120
 MAX_TEXT_CHARS = 2000
 MAX_DIMS = 8192
-MAX_RESPONSE_BYTES = 256 * 1024 * 1024
+# The largest answer to one batch: BATCH vectors of MAX_DIMS numbers, each at most about 26 characters of JSON
+# ("-1.2345678901234567e-05, "), twice over for headroom. About 26 MiB, below the 32 MiB ceiling.
+MAX_RESPONSE_BYTES = min(2 * BATCH * MAX_DIMS * 26, 32 * 1024 * 1024)
 # Untriaged findings grouped at most, highest priority first: grouping compares each with every group.
 MAX_GROUPED = 500
+# Suggestions compare every untriaged finding with every decided one, so both sides are bounded: the most
+# recently decided findings, and the most important untriaged findings of the latest trend run.
+MAX_DECIDED = 1000
+MAX_SUGGESTED = 5000
 LOOPBACK = ("127.0.0.1", "::1", "localhost")
 # EmbeddingGemma is trained with task prompts; this is its prompt for semantic similarity.
 PROMPT = "task: sentence similarity | query: "
@@ -93,9 +107,21 @@ def text_sha256(text: str) -> str:
 Post = Callable[[str, bytes, float], bytes]
 
 
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """Ollama never redirects; an answer that does could send the finding text to another host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise OllamaError(f"Ollama answered {code} with a redirect, which is never followed")
+
+
+def _opener() -> urllib.request.OpenerDirector:
+    """No proxies and no redirects: the request must never leave this machine."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _RefuseRedirects())
+
+
 def _post(url: str, body: bytes, timeout: float) -> bytes:
-    """POST JSON to Ollama on loopback. Proxies are ignored: the request must never leave this machine."""
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    """POST JSON to Ollama on loopback. Proxies are ignored and redirects refused."""
+    opener = _opener()
     request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
     try:
         with opener.open(request, timeout=timeout) as response:
@@ -168,6 +194,19 @@ def normalise(v: list[float]) -> list[float]:
     return [x / n for x in v]
 
 
+def dot(a: list[float], b: list[float]) -> float:
+    """The cosine similarity of two unit vectors, as stored: their dot product."""
+    return _sumprod(a, b)
+
+
+def _sumprod_py(a: list[float], b: list[float]) -> float:
+    return sum(map(operator.mul, a, b))
+
+
+# math.sumprod (Python 3.12 and later) does the same in C, several times faster.
+_sumprod = getattr(math, "sumprod", _sumprod_py)
+
+
 def cosine(a: list[float], b: list[float]) -> float:
     """Cosine similarity: A·B / (|A| |B|). 0 when either vector is zero."""
     if len(a) != len(b):
@@ -194,20 +233,21 @@ def unpack(blob: bytes, dims: int) -> list[float]:
 
 
 def _latest_texts(conn: sqlite3.Connection, repo_id: int) -> list[tuple[int, str]]:
-    """Each finding identity of the repository with the text of its most recent occurrence."""
+    """Each finding identity of the repository with the text of its most recent occurrence.
+
+    SQLite picks each finding's newest occurrence through the run_findings key index, so only one row per
+    finding reaches Python, not one per run."""
     rows = conn.execute(
         "SELECT fk.id, fk.tool, fk.rule, fk.path, rf.component, m.text FROM finding_keys fk "
-        "JOIN run_findings rf ON rf.key_id = fk.id JOIN runs r ON r.id = rf.run_id JOIN messages m ON m.id = "
-        "rf.message_id "
-        "WHERE fk.repo_id = ? ORDER BY fk.id, r.scanned_at DESC, r.id DESC",
+        "JOIN run_findings rf ON rf.key_id = fk.id AND rf.run_id = (SELECT nrf.run_id FROM run_findings nrf "
+        "JOIN runs nr ON nr.id = nrf.run_id WHERE nrf.key_id = fk.id ORDER BY nr.scanned_at DESC, nr.id DESC LIMIT 1) "
+        "JOIN messages m ON m.id = rf.message_id WHERE fk.repo_id = ? ORDER BY fk.id",
         (repo_id,),
-    ).fetchall()
-    out, seen = [], set()
-    for key_id, tool, rule, path, component, message in rows:
-        if key_id not in seen:
-            seen.add(key_id)
-            out.append((key_id, finding_text(tool, rule, path, component, message)))
-    return out
+    )
+    return [
+        (key_id, finding_text(tool, rule, path, component, message))
+        for key_id, tool, rule, path, component, message in rows
+    ]
 
 
 @dataclass
@@ -259,7 +299,8 @@ def decision_status(review_status: str | None, baseline_reason: str | None) -> s
     """The status a finding's decision suggests for findings like it, if any.
 
     A dashboard review decides; without one, a baseline reason that starts
-    "False positive:" or "Accepted:" does, as on the dashboard.
+    "False positive:" or "Accepted:" does, as on the dashboard. Callers pass
+    only the reason of a scheduled run (DECISION_RUN), never a pull request's.
     """
     if review_status is not None:
         return review_status if review_status in SUGGESTIBLE else None
@@ -268,11 +309,6 @@ def decision_status(review_status: str | None, baseline_reason: str | None) -> s
     if baseline_reason and baseline_reason.startswith("Accepted:"):
         return "accepted_risk"
     return None
-
-
-def dot(a: list[float], b: list[float]) -> float:
-    """The cosine similarity of two unit vectors, as stored: their dot product."""
-    return sum(map(operator.mul, a, b))
 
 
 def group(items: list[tuple[int, list[float]]], threshold: float) -> list[list[int]]:
@@ -297,41 +333,97 @@ def group(items: list[tuple[int, list[float]]], threshold: float) -> list[list[i
     return groups
 
 
+# The run whose baseline reason stands as a finding's decision: the newest scheduled run (recorded with
+# `--kind scheduled`, an operator action that is trusted) that holds the finding and whose check ran.
+# `{key}` names the finding's key id column.
+# A pull-request run never counts: its baseline is the change under review, not the accepted policy.
+DECISION_RUN = (
+    "(SELECT drf.run_id FROM run_findings drf JOIN runs drun ON drun.id = drf.run_id WHERE drf.key_id = {key} "
+    "AND drun.kind = 'scheduled' AND drun.outcome != 'scan_error' "
+    "ORDER BY drun.scanned_at DESC, drun.id DESC LIMIT 1)"
+)
+# The decision of the finding `fk`, as columns: its dashboard review, and its baseline at DECISION_RUN.
+_DECISIONS = (
+    "SELECT fk.id, fr.status, fr.description, fr.updated_by, fr.updated_at, "
+    "db.baseline_issue, db.baseline_reason, dr.id, dr.commit_sha, dr.scanned_at "
+    "FROM finding_keys fk JOIN repos rp ON rp.id = fk.repo_id "
+    "LEFT JOIN finding_reviews fr ON fr.repo_name = rp.name AND fr.tool = fk.tool AND fr.rule = fk.rule "
+    "AND fr.path = fk.path AND fr.fingerprint = fk.fingerprint "
+    f"LEFT JOIN run_findings db ON db.key_id = fk.id AND db.run_id = {DECISION_RUN.format(key='fk.id')} "
+    "LEFT JOIN runs dr ON dr.id = db.run_id "
+)
+
+
+def latest_trend_run(conn: sqlite3.Connection, repo_id: int) -> int | None:
+    """The run the dashboard's trends end with: the newest scheduled run whose check ran, or, for a
+    repository without scheduled runs, the newest run of any kind whose check ran."""
+    row = conn.execute(
+        "SELECT id FROM runs WHERE repo_id = ? AND outcome != 'scan_error' "
+        "ORDER BY kind = 'scheduled' DESC, scanned_at DESC, id DESC LIMIT 1",
+        (repo_id,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def decision(row: tuple) -> dict | None:
+    """A finding's decision, with where it comes from, from a row of `_DECISIONS` (without the key id)."""
+    status, description, by, at, issue, reason, run, commit, scanned_at = row
+    if status is not None:
+        return {"source": "review", "status": status, "description": description, "by": by, "at": at}
+    if reason is not None:
+        return {
+            "source": "baseline",
+            "status": "baselined",
+            "issue": issue,
+            "description": reason,
+            "run": run,
+            "commit": commit,
+            "at": scanned_at,
+        }
+    return None
+
+
 def suggest_repository(
     conn: sqlite3.Connection, repo: str, model: str, threshold: float = DEFAULT_THRESHOLD, now: str = ""
 ) -> int:
-    """For each untriaged finding of the repository's latest run, store the most similar finding
+    """For each untriaged finding of the repository's latest trend run, store the most similar finding
     that has a decision, if it is at least `threshold` alike. Returns how many were stored.
 
-    Untriaged means no dashboard review and no baseline entry. Earlier
+    Untriaged means no dashboard review and no baseline entry in that run.
+    Decisions come from dashboard reviews and from the baseline of scheduled
+    runs (DECISION_RUN), never from a pull-request run. At most the
+    MAX_DECIDED most recently decided findings are compared, with at most
+    MAX_SUGGESTED untriaged findings, most important first. Earlier
     suggestions of the repository for this model are replaced.
     """
-    row = conn.execute("SELECT id, name FROM repos WHERE name = ?", (repo,)).fetchone()
+    row = conn.execute("SELECT id FROM repos WHERE name = ?", (repo,)).fetchone()
     if row is None:
         raise SetupError(f"the history database has no runs of {repo}")
     repo_id = row[0]
-    latest = conn.execute(
-        "SELECT id FROM runs WHERE repo_id = ? AND outcome IS NOT 'scan_error' ORDER BY scanned_at DESC, id DESC LIMIT "
-        "1",
-        (repo_id,),
-    ).fetchone()
-    decided: list[tuple[int, list[float]]] = []
-    untriaged: list[tuple[int, list[float]]] = []
-    for key_id, blob, dims, review, reason, in_latest in conn.execute(
-        "SELECT fk.id, e.vector, e.dims, fr.status, "
-        "(SELECT rf.baseline_reason FROM run_findings rf JOIN runs r ON r.id = rf.run_id WHERE rf.key_id = fk.id "
-        " ORDER BY r.scanned_at DESC, r.id DESC LIMIT 1), "
-        "EXISTS (SELECT 1 FROM run_findings WHERE run_id = ? AND key_id = fk.id) "
-        "FROM finding_embeddings e JOIN finding_keys fk ON fk.id = e.key_id "
-        "LEFT JOIN finding_reviews fr ON fr.repo_name = ? AND fr.tool = fk.tool AND fr.rule = fk.rule "
-        "AND fr.path = fk.path AND fr.fingerprint = fk.fingerprint "
-        "WHERE fk.repo_id = ? AND e.model = ?",
-        (latest[0] if latest else -1, repo, repo_id, model),
+    run_id = latest_trend_run(conn, repo_id)
+    decided_at: list[tuple[str, int]] = []
+    for key_id, *rest in conn.execute(
+        _DECISIONS + "JOIN finding_embeddings e ON e.key_id = fk.id AND e.model = ? WHERE fk.repo_id = ?",
+        (model, repo_id),
     ):
-        if decision_status(review, reason) is not None:
-            decided.append((key_id, unpack(blob, dims)))
-        elif review is None and reason is None and in_latest:
-            untriaged.append((key_id, unpack(blob, dims)))
+        status, _, _, reviewed_at, _, reason, _, _, scanned_at = rest
+        if decision_status(status, reason) is not None:
+            decided_at.append((reviewed_at if status is not None else scanned_at, key_id))
+    decided_at.sort(reverse=True)
+    decided = _vectors(conn, model, [key_id for _, key_id in decided_at[:MAX_DECIDED]])
+    untriaged = [
+        (key_id, unpack(blob, dims))
+        for key_id, blob, dims in conn.execute(
+            "SELECT rf.key_id, e.vector, e.dims FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id "
+            "JOIN repos rp ON rp.id = fk.repo_id JOIN finding_embeddings e ON e.key_id = rf.key_id AND e.model = ? "
+            "LEFT JOIN finding_reviews fr ON fr.repo_name = rp.name AND fr.tool = fk.tool AND fr.rule = fk.rule "
+            "AND fr.path = fk.path AND fr.fingerprint = fk.fingerprint "
+            "WHERE rf.run_id = ? AND fr.status IS NULL AND rf.baseline_reason IS NULL "
+            "ORDER BY CASE rf.severity WHEN 'ERROR' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END, "
+            "fk.path, rf.line, fk.rule, rf.key_id LIMIT ?",
+            (model, run_id if run_id is not None else -1, MAX_SUGGESTED),
+        )
+    ]
     rows = []
     for key_id, vector in untriaged:
         best_id, best = None, threshold
@@ -355,6 +447,19 @@ def suggest_repository(
     return len(rows)
 
 
+def _vectors(conn: sqlite3.Connection, model: str, key_ids: list[int]) -> list[tuple[int, list[float]]]:
+    """The stored vectors of these findings, in the order given."""
+    found = {
+        key_id: unpack(blob, dims)
+        for key_id, blob, dims in conn.execute(
+            "SELECT key_id, vector, dims FROM finding_embeddings WHERE model = ? "
+            "AND key_id IN (SELECT value FROM json_each(?))",
+            (model, json.dumps(key_ids)),
+        )
+    }
+    return [(key_id, found[key_id]) for key_id in key_ids if key_id in found]
+
+
 def similar(
     conn: sqlite3.Connection,
     key_id: int,
@@ -368,7 +473,8 @@ def similar(
     Returns None when the finding has no vector for this model yet. Other
     findings are those of the same repository, or of every repository with
     `all_repos`. A finding's decision is its dashboard review, else what its
-    newest baseline entry says.
+    baseline entry said in its newest scheduled run (never a pull-request
+    run's), with where it comes from.
     """
     target = conn.execute(
         "SELECT e.vector, e.dims, fk.repo_id FROM finding_embeddings e JOIN finding_keys fk ON fk.id = e.key_id "
@@ -384,7 +490,7 @@ def similar(
         "WHERE e.model = ? AND e.key_id != ? AND e.dims = ? AND (? OR fk.repo_id = ?)",
         (model, key_id, target[1], 1 if all_repos else 0, target[2]),
     ):
-        score = cosine(vector, unpack(blob, dims))
+        score = dot(vector, unpack(blob, dims))  # stored vectors are unit length
         if score >= threshold:
             scored.append((score, other_id))
     scored.sort(key=lambda s: (-s[0], s[1]))
@@ -398,22 +504,13 @@ def _describe(conn: sqlite3.Connection, key_id: int, score: float) -> dict:
         "WHERE fk.id = ?",
         (key_id,),
     ).fetchone()
-    review = conn.execute(
-        "SELECT status, description, updated_by, updated_at FROM finding_reviews "
-        "WHERE repo_name = ? AND tool = ? AND rule = ? AND path = ? AND fingerprint = ?",
-        (repo, tool, rule, path, fingerprint),
-    ).fetchone()
+    decided = conn.execute(_DECISIONS + "WHERE fk.id = ?", (key_id,)).fetchone()
     latest = conn.execute(
-        "SELECT rf.severity, rf.line, m.text, rf.baseline_issue, rf.baseline_reason, r.scanned_at FROM run_findings rf "
+        "SELECT rf.severity, rf.line, m.text, r.scanned_at FROM run_findings rf "
         "JOIN runs r ON r.id = rf.run_id JOIN messages m ON m.id = rf.message_id WHERE rf.key_id = ? "
         "ORDER BY r.scanned_at DESC, r.id DESC LIMIT 1",
         (key_id,),
     ).fetchone()
-    decision = None
-    if review is not None:
-        decision = {"source": "review", "status": review[0], "description": review[1], "by": review[2], "at": review[3]}
-    elif latest is not None and latest[4] is not None:
-        decision = {"source": "baseline", "status": "baselined", "issue": latest[3], "description": latest[4]}
     return {
         "score": score,
         "repo": repo,
@@ -421,8 +518,8 @@ def _describe(conn: sqlite3.Connection, key_id: int, score: float) -> dict:
         "severity": latest[0] if latest else None,
         "line": latest[1] if latest else None,
         "message": latest[2] if latest else "",
-        "last_seen": latest[5] if latest else None,
-        "decision": decision,
+        "last_seen": latest[3] if latest else None,
+        "decision": decision(tuple(decided[1:])),
     }
 
 

@@ -394,6 +394,18 @@
     };
   }
 
+  // Where a similar finding's decision comes from, in words: a review (by whom, when) or the baseline as a
+  // scheduled run recorded it (which run, commit and day). A pull-request run's
+  // baseline never makes a decision, so it never appears here.
+  function decisionSource(d) {
+    if (!d) return "";
+    if (d.source === "review") return "reviewed by " + (d.by || "?") + " on " + day(d.at);
+    var where = "in the baseline of scheduled run " + (d.run == null ? "?" : d.run);
+    if (d.commit) where += " at commit " + String(d.commit).slice(0, 12);
+    if (d.at) where += " (" + day(d.at) + ")";
+    return where + (d.issue ? ", issue " + d.issue : "");
+  }
+
   var Model = {
     SEVERITIES: SEVERITIES,
     FILE_KINDS: FILE_KINDS,
@@ -422,7 +434,8 @@
     THRESHOLDS: THRESHOLDS,
     groupHref: groupHref,
     similarityView: similarityView,
-    groupView: groupView
+    groupView: groupView,
+    decisionSource: decisionSource
   };
   if (typeof module !== "undefined" && module.exports) module.exports = Model;
   else root.ShoalscanModel = Model;

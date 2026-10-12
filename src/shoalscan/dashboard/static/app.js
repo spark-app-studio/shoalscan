@@ -633,16 +633,19 @@
   function suggestionCell(s) {
     if (!s) return "";
     var label = (M.REVIEW_LABELS[s.status] || s.status) + "? " + s.score.toFixed(2);
-    var why = "Like " + s.like[2] + " (" + s.like[1] + "), " + (s.source === "review" ? "reviewed" : "baselined") + " as " +
-      (M.REVIEW_LABELS[s.status] || s.status) + ": " + (s.description || "");
+    var why = "Like " + s.like[2] + " (" + s.like[1] + "), " + (M.REVIEW_LABELS[s.status] || s.status) + ", " +
+      M.decisionSource(s) + ": " + (s.description || "");
     var href = M.findingHref(null, s.like);
     return href ? internalLink(href, label, why, "suggestion") : el("span", { "class": "suggestion", title: why }, label);
   }
 
+  // Fills in the status only. The similar finding's description is shown for reference, read-only, and is
+  // never copied: each reviewer writes their own reason, which is what the review records and exports.
   function useSuggestion() {
     var picked = Object.keys(state.selected || {}).map(function (k) { return (state.findingRows || {})[k]; });
     var form = $("bulk-review").elements;
     var withOne = picked.filter(function (f) { return f && f.suggestion; });
+    var reference = $("bulk-reference");
     if (!picked.length || withOne.length !== picked.length) {
       $("bulk-message").textContent = "Select only findings that have a suggestion.";
       return;
@@ -654,12 +657,13 @@
     }
     var scores = withOne.map(function (f) { return f.suggestion.score; });
     var first = withOne[0].suggestion;
-    var label = M.REVIEW_LABELS[status];
     form.status.value = status;
-    form.description.value = "Like findings already marked " + label + " (similarity " + Math.min.apply(null, scores).toFixed(2) +
-      (withOne.length > 1 ? " to " + Math.max.apply(null, scores).toFixed(2) : "") + "), for example " + first.like[2] + ": " +
-      (first.description || "").slice(0, 1500);
-    $("bulk-message").textContent = "Check the status and the description, edit them if needed, then Apply. Nothing is saved until you do.";
+    clear(reference).hidden = false;
+    reference.appendChild(el("p", { "class": "small" }, "Suggested by a similar finding (similarity " +
+      Math.min.apply(null, scores).toFixed(2) + (withOne.length > 1 ? " to " + Math.max.apply(null, scores).toFixed(2) : "") +
+      "), for example " + first.like[2] + ", " + M.REVIEW_LABELS[status] + ", " + M.decisionSource(first) + ". Its reason, for reference only:"));
+    reference.appendChild(el("blockquote", { "class": "review-description" }, first.description || ""));
+    $("bulk-message").textContent = "Check the status, then write your own description of why it fits these findings, and Apply. Nothing is saved until you do.";
     form.description.focus();
   }
 
@@ -667,6 +671,7 @@
     var keys = Object.keys(state.selected || {});
     var form = $("bulk-review");
     form.hidden = keys.length === 0;
+    if (!keys.length) clear($("bulk-reference")).hidden = true;
     $("bulk-count").textContent = keys.length + " selected";
   }
 
@@ -678,6 +683,7 @@
       .then(function (r) {
         if (r.status === 200) {
           e.description.value = "";
+          clear($("bulk-reference")).hidden = true;
           $("bulk-message").textContent = "Marked " + r.body.reviewed + " as " + M.REVIEW_LABELS[r.body.status] + ".";
           route();
         } else {
@@ -742,8 +748,7 @@
         var label = s.repo === state.repo ? internalLink(M.findingHref(null, s.key), where, "Open the similar finding in " + where) : where + " (" + s.repo + ")";
         var d = s.decision;
         var decided = !d ? "no decision yet"
-          : d.source === "review" ? (M.REVIEW_LABELS[d.status] || d.status) + " by " + d.by + ": " + d.description
-          : "baselined (" + d.issue + "): " + d.description;
+          : (d.source === "review" ? (M.REVIEW_LABELS[d.status] || d.status) : "baselined") + ", " + M.decisionSource(d) + ": " + d.description;
         list.appendChild(el("li", null, el("strong", null, s.score.toFixed(3)), " ", label, " ", el("span", { "class": "mono" }, s.key[1]),
           el("span", { "class": "review-description" }, decided)));
       });

@@ -485,6 +485,30 @@ class SimilarityViewTests(unittest.TestCase):
         self.assertNotIn("<", hostile)
 
 
+class DecisionSourceTests(unittest.TestCase):
+    def test_a_suggestion_says_where_its_decision_comes_from(self):
+        review = {"source": "review", "by": "alice@example.com", "at": "2026-10-02T09:00:00Z"}
+        self.assertEqual(call("return M.decisionSource(d);", d=review), "reviewed by alice@example.com on 2026-10-02")
+        baseline = {
+            "source": "baseline",
+            "run": 12,
+            "commit": "3f2a1b4c5d6e7f80",
+            "at": "2026-10-01T02:00:00Z",
+            "issue": "#7",
+        }
+        self.assertEqual(
+            call("return M.decisionSource(d);", d=baseline),
+            "in the baseline of scheduled run 12 at commit 3f2a1b4c5d6e (2026-10-01), issue #7",
+        )
+        self.assertEqual(call("return M.decisionSource(null);"), "")
+
+    def test_using_a_suggestion_never_copies_its_description(self):
+        text = (server.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        body = text[text.index("function useSuggestion()") : text.index("function renderBulk()")]
+        self.assertNotRegex(body, r"description\.value\s*=", "the reviewer writes their own description")
+        self.assertIn("bulk-reference", body)
+
+
 class BadValueTests(unittest.TestCase):
     def test_a_control_character_gives_text_not_an_error(self):
         by_component = {

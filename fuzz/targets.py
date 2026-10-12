@@ -14,8 +14,10 @@ its seeds and some random input in the ordinary test suite.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,11 +25,12 @@ for extra in (ROOT / "src", ROOT / "tests"):
     if str(extra) not in sys.path:
         sys.path.insert(0, str(extra))
 
-from shoalscan import markdown, suppressions  # noqa: E402
+from shoalscan import gitleaks, hadolint, markdown, suppressions, trivy, zizmor  # noqa: E402
 from shoalscan.baseline import baseline_from_bytes  # noqa: E402
 from shoalscan.config import config_from_bytes  # noqa: E402
 from shoalscan.dashboard import oidc  # noqa: E402
-from shoalscan.errors import SetupError  # noqa: E402
+from shoalscan.errors import ScanError, SetupError  # noqa: E402
+from shoalscan.findings import Finding, load_findings  # noqa: E402
 
 
 def _text(data: bytes) -> str:
@@ -76,6 +79,7 @@ def markdown_text(data: bytes) -> None:
     value = _text(data)
     out = markdown.text(value)
     assert not re.search(r"[\x00-\x1f\x7f\u0085  ]", out), "a control character or line break got through"
+    assert not any(markdown.is_format_control(c) for c in out), "a C1 or bidirectional control got through"
     assert not _BLOCK.match(out), "the text starts a block"
     i = 0
     while i < len(out):
@@ -93,6 +97,126 @@ def markdown_text(data: bytes) -> None:
     )
     link = markdown.link(value, value)
     assert link == markdown.text(value) or link.endswith(">)"), "a link to something that is not plain http(s)"
+
+
+# ------------------------------------------------------------------ scanner output
+
+
+# A small repository the scanner reports point into. Reports name files by absolute path, so an input may
+# write $ROOT for this directory's path, which lets the fuzzer reach the code past the path checks.
+_REPO_FILES = {
+    "Dockerfile": "FROM python:3.12 AS build\nRUN pip install x\nFROM scratch\nCOPY --from=build /a /a\n",
+    "main.tf": 'resource "aws_s3_bucket" "logs" {\n  acl = "public-read"\n}\n',
+    ".github/workflows/ci.yml": "on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n",
+    "src/app.py": "class Svc:\n    def run(self):\n        token = 'not-a-real-token-0123'\n",
+}
+_REPO: Path | None = None
+
+
+def _repo() -> Path:
+    global _REPO
+    if _REPO is None:
+        _REPO = Path(tempfile.mkdtemp(prefix="shoalscan-fuzz-")).resolve()
+        for rel, text in _REPO_FILES.items():
+            (_REPO / rel).parent.mkdir(parents=True, exist_ok=True)
+            (_REPO / rel).write_text(text, encoding="utf-8")
+    return _REPO
+
+
+def _report(data: bytes) -> object:
+    """The input as a scanner's JSON report, with $ROOT standing for the repository; None when not JSON."""
+    try:
+        return json.loads(_text(data).replace("$ROOT", json.dumps(str(_repo()))[1:-1]))
+    except (ValueError, RecursionError):
+        return None
+
+
+def _check_findings(findings: object, tool: str) -> None:
+    """Well-formed findings of one tool, each in a file of the repository."""
+    assert isinstance(findings, list)
+    root = _repo()
+    for f in findings:
+        assert isinstance(f, Finding) and f.tool == tool and f.rule.startswith(f"{tool}.")
+        assert f.severity in ("ERROR", "WARNING", "INFO")
+        assert isinstance(f.line, int) and not isinstance(f.line, bool) and f.line >= 1
+        assert all(isinstance(v, str) for v in (f.path, f.fingerprint, f.component, f.message)) and f.fingerprint
+        assert not f.path.startswith("/") and ".." not in f.path.split("/"), f"a path outside the repository: {f.path}"
+        assert f.path != ".git" and not f.path.startswith(".git/")
+        assert (root / f.path).resolve().is_relative_to(root)
+
+
+def gitleaks_report(data: bytes) -> None:
+    """Gitleaks' JSON report: findings in the repository, or a ScanError."""
+    report = _report(data)
+    if not isinstance(report, list):  # `execute` refuses anything else first
+        return
+    try:
+        findings = gitleaks.normalise(report, _repo(), {"src/": "api"}, ("vendor/**",))
+    except ScanError:
+        return
+    _check_findings(findings, gitleaks.TOOL)
+
+
+def trivy_report(data: bytes) -> None:
+    """Trivy's JSON report: findings and rule metadata, or a ScanError."""
+    report = _report(data)
+    if not isinstance(report, dict) or not isinstance(report.get("Results", []), list):
+        return
+    try:
+        findings, meta = trivy.normalise(report, _repo(), {}, (), ("AVD-DS-0001",))
+    except ScanError:
+        return
+    _check_findings(findings, trivy.TOOL)
+    assert isinstance(meta, dict) and set(meta) >= {f.rule for f in findings}
+    for m in meta.values():
+        assert all(isinstance(u, str) and u.startswith("https://") for u in m["references"])
+
+
+def hadolint_report(data: bytes) -> None:
+    """Hadolint's JSON output: findings and parse errors for the Dockerfiles it was given, or a ScanError."""
+    report = _report(data)
+    if not isinstance(report, list):
+        return
+    try:
+        findings, errors = hadolint.normalise(report, _repo(), {"Dockerfile"}, {})
+    except ScanError:
+        return
+    _check_findings(findings, hadolint.TOOL)
+    assert all(f.path == "Dockerfile" for f in findings)
+    assert all(isinstance(e, dict) and e["path"] == "Dockerfile" for e in errors)
+
+
+def zizmor_report(data: bytes) -> None:
+    """zizmor's JSON output: findings in the workflows it was given, or a ScanError."""
+    report = _report(data)
+    if not isinstance(report, list):
+        return
+    try:
+        findings = zizmor.normalise(report, _repo(), {".github/workflows/ci.yml"}, {}, ("unpinned-uses",))
+    except ScanError:
+        return
+    _check_findings(findings, zizmor.TOOL)
+    assert all(f.path == ".github/workflows/ci.yml" for f in findings)
+
+
+def findings_file(data: bytes) -> None:
+    """`findings.json`, which `check` and `record` read back: findings and metadata, or a SetupError or
+    ScanError."""
+    fd, name = tempfile.mkstemp(prefix="shoalscan-fuzz-", suffix=".json")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        try:
+            findings, meta = load_findings(Path(name))
+        except (SetupError, ScanError):
+            return
+    finally:
+        os.unlink(name)
+    assert isinstance(meta, dict) and "findings" not in meta
+    for f in findings:
+        assert isinstance(f, Finding)
+        assert all(isinstance(v, str) for v in (f.tool, f.rule, f.severity, f.path, f.fingerprint, f.component))
+        assert isinstance(f.message, str) and isinstance(f.line, int) and not isinstance(f.line, bool)
 
 
 # ------------------------------------------------------------------ OpenID Connect
@@ -166,6 +290,11 @@ TARGETS = {
     "markdown_text": markdown_text,
     "id_token": id_token,
     "id_token_claims": id_token_claims,
+    "gitleaks_report": gitleaks_report,
+    "trivy_report": trivy_report,
+    "hadolint_report": hadolint_report,
+    "zizmor_report": zizmor_report,
+    "findings_file": findings_file,
 }
 
 # A few inputs per target, as a start for the fuzzer and for the unit test.
@@ -206,5 +335,54 @@ SEEDS = {
         json.dumps({"iss": _ISSUER, "aud": ["shoalscan", "x"], "exp": "soon", "iat": True, "nonce": [_NONCE]}).encode(),
         b'{"aud": {"shoalscan": 1}, "exp": 1e400, "iat": -1e400, "nbf": NaN}',
         b"[]",
+    ],
+    "gitleaks_report": [
+        b'[{"RuleID": "aws-access-token", "Description": "AWS key", "StartLine": 3, "EndLine": 3, '
+        b'"StartColumn": 17, "File": "$ROOT/src/app.py", "Secret": "not-a-real-token-0123"}]',
+        b'[{"RuleID": "generic-api-key", "StartLine": 0, "EndLine": 9, "StartColumn": 0, "File": "$ROOT/../x"}]',
+        b'[{"RuleID": "x", "StartLine": 1, "EndLine": 1, "StartColumn": 1, "File": "$ROOT/.git/config"}]',
+        b"[]",
+    ],
+    "trivy_report": [
+        b'{"Results": [{"Target": "main.tf", "Misconfigurations": [{"ID": "AVD-AWS-0086", "Status": "FAIL", '
+        b'"Severity": "HIGH", "Title": "Public ACL", "Message": "Bucket is public", "PrimaryURL": '
+        b'"https://avd.aquasec.com/x", "References": ["https://a.example", "javascript:x"], "Resolution": "Fix", '
+        b'"CauseMetadata": {"Resource": "aws_s3_bucket.logs", "StartLine": 2, "Code": {"Lines": '
+        b'[{"Content": "acl = 1", "IsCause": true}]}}}]}]}',
+        b'{"Results": [{"Target": "../etc/passwd", "Misconfigurations": [{"ID": "AVD-DS-0002", "Status": "FAIL", '
+        b'"Severity": "LOW"}]}]}',
+        b'{"Results": [{"Target": "Dockerfile", "Misconfigurations": [{"ID": "AVD-DS-0005", "Status": "FAIL", '
+        b'"Severity": "UNKNOWN", "CauseMetadata": {"Code": {"Lines": 5}}, "References": 7}]}]}',
+        b'{"Results": [{"Target": "main.tf", "Misconfigurations": [{"ID": "AVD-AWS-0086", "Status": "FAIL", '
+        b'"Severity": ["HIGH"]}]}]}',
+        b"{}",
+    ],
+    "hadolint_report": [
+        b'[{"code": "DL3008", "level": "warning", "line": 2, "column": 1, "file": "$ROOT/Dockerfile", '
+        b'"message": "Pin versions"}]',
+        b'[{"code": "DL1000", "level": "error", "line": 1, "file": "$ROOT/Dockerfile", "message": "parse error"}, '
+        b'{"code": "SC2086", "level": "info", "line": 99, "file": "$ROOT/Dockerfile"}]',
+        b'[{"code": "DL3000", "level": "style", "line": 0, "file": "$ROOT/../Dockerfile"}]',
+        b'[{"code": "DL3008", "level": ["error"], "line": 2, "file": "$ROOT/Dockerfile"}]',
+    ],
+    "zizmor_report": [
+        b'[{"ident": "template-injection", "desc": "code injection", "determinations": {"severity": "High"}, '
+        b'"locations": [{"symbolic": {"kind": "Primary", "annotation": "here", "key": {"Local": {"verbatim_path": '
+        b'"$ROOT/.github/workflows/ci.yml"}}, "route": {"route": [{"Key": "jobs"}, {"Index": 0}]}}, '
+        b'"concrete": {"location": {"start_point": {"row": 5, "column": 8}}, "feature": "run: echo"}}]}]',
+        b'[{"ident": "artipacked", "determinations": {"severity": "Low"}, "locations": [{"symbolic": {"kind": '
+        b'"Primary", "key": {"Local": {"verbatim_path": "$ROOT/main.tf"}}}, "concrete": {}}]}]',
+        b'[{"ident": "excessive-permissions", "determinations": {"severity": "Medium"}, "locations": [{"symbolic": '
+        b'{"kind": "Primary", "key": {"Local": {"verbatim_path": "$ROOT/.github/workflows/ci.yml"}}, "route": '
+        b'{"route": 3}}, "concrete": {"location": {"start_point": [1]}}}]}]',
+        b'[{"ident": "artipacked", "determinations": {"severity": {"High": 1}}, "locations": []}]',
+    ],
+    "findings_file": [
+        b'{"format": 1, "complete": true, "findings": [{"tool": "opengrep", "rule": "r.a", "severity": "ERROR", '
+        b'"path": "src/a.py", "line": 3, "fingerprint": "aa:0", "component": "api", "message": "m"}]}',
+        b'{"format": 1, "complete": true, "findings": [{"tool": 1, "rule": [], "severity": null, "path": {}, '
+        b'"line": "3", "fingerprint": true, "component": 0, "message": 2}]}',
+        b'{"format": 1, "complete": false}',
+        b"[" * 5000,
     ],
 }

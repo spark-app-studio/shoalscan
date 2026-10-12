@@ -94,7 +94,10 @@ def _inside(root: Path, rel: object) -> str | None:
     if not isinstance(rel, str) or not rel or rel.startswith("/") or "\\" in rel or ".." in rel.split("/"):
         return None
     path = root / rel
-    return rel if path.is_file() and not path.is_symlink() else None
+    try:
+        return rel if path.is_file() and not path.is_symlink() else None
+    except OSError:  # a name the file system refuses (too long, for example) is not a file of the repository
+        return None
 
 
 def parse_errors(log: str, root: Path, excludes: tuple[str, ...]) -> list[dict]:
@@ -131,7 +134,7 @@ def normalise(
         if rel == ".git" or rel.startswith(".git/") or matcher.excluded(rel):
             continue
         for m in failures:
-            check, severity = m.get("ID"), _SEVERITY.get(m.get("Severity"))
+            check, severity = m.get("ID"), _SEVERITY.get(str(m.get("Severity")))
             if not isinstance(check, str) or not _CHECK.match(check) or severity is None:
                 raise ScanError(f"trivy output has a malformed misconfiguration: {str(m)[:300]}")
             if check in ignore:
@@ -140,7 +143,8 @@ def normalise(
             start = cause.get("StartLine")
             line = start if isinstance(start, int) and not isinstance(start, bool) and start > 0 else 1
             code = cause.get("Code") if isinstance(cause.get("Code"), dict) else {}
-            lines = [c.get("Content", "") for c in code.get("Lines") or [] if isinstance(c, dict) and c.get("IsCause")]
+            listed = code.get("Lines") if isinstance(code.get("Lines"), list) else []
+            lines = [c.get("Content", "") for c in listed if isinstance(c, dict) and c.get("IsCause")]
             title = " ".join(str(m.get("Title", "")).split())
             message = " ".join(str(m.get("Message", "")).split())
             rule = f"{TOOL}.{check}"
@@ -159,7 +163,7 @@ def normalise(
             )
             refs = [
                 u
-                for u in [m.get("PrimaryURL"), *(m.get("References") or [])]
+                for u in [m.get("PrimaryURL"), *(m.get("References") if isinstance(m.get("References"), list) else [])]
                 if isinstance(u, str) and u.startswith("https://") and " " not in u
             ]
             resolution = " ".join(str(m.get("Resolution", "")).split())[:500] or None

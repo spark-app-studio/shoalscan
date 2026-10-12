@@ -29,6 +29,9 @@ All notable changes to Shoalscan are recorded here.
 - A `.shoalscan.toml`, baseline or dashboard policy nested deeply enough to exhaust Python's stack (thousands of `[` or `{`) is now reported as not valid TOML, instead of stopping with a `RecursionError` traceback. Found by the new fuzz targets.
 - The dashboard's setup wizard counts a setup code that is not plain ASCII as a wrong code, instead of dropping the request.
 - The dashboard accepts an OpenID Connect issuer with a trailing slash, and compares it exactly as the provider publishes it.
+- Suggestions are worked out for the latest trend run (the newest scheduled run, as on the dashboard), not for the newest run of any kind, so a pull-request run no longer decides which findings get one.
+- Suggestions and groups stay quick on large histories: suggestions compare at most the 1,000 most recently decided findings with at most 5,000 untriaged ones; `triage embed` reads only each finding's newest text from the database; similarity is a dot product of the stored unit vectors (in C on Python 3.12 and later); and the dashboard keeps each run's groups until its embeddings or the reviews change, so the Groups page and a group's findings no longer compare every vector on each request.
+- A malformed scanner report (a severity or level that is not text, a list of lines or references that is not a list, a location of the wrong shape) is now a scan error that names the problem, instead of a traceback. A `findings.json` that is not UTF-8, is nested too deeply, or has a field of the wrong type is refused as unreadable or malformed. Found by the new fuzz targets.
 
 ### Security
 
@@ -44,12 +47,18 @@ All notable changes to Shoalscan are recorded here.
 - One person holds at most 10 dashboard sessions; signing in again ends their own oldest session, never someone else's.
 - The one-time setup code is written to `setup-code` in the state directory (mode 0600) instead of the console output, and it expires after 30 minutes; the file is deleted once it expires.
 - The dashboard accepts only ASCII email addresses, checks the ID token's `azp` whenever it is present, and briefly remembers that the provider could not be reached, so sign-ins do not queue behind a network timeout.
+- Suggestions for similar findings take decisions only from dashboard reviews and from the baseline of scheduled runs of the target's configured branch (recorded with `--kind scheduled`, an operator action that is trusted). A reason in a pull request's own baseline is part of the change under review, and no longer suggests a status for findings like it. Each suggestion now says where its decision comes from: a review, by whom and when, or the baseline of a scheduled run, with the run, the commit and the day.
+- **Use the suggestion** sets only the status of the bulk review. The similar finding's reason is shown read-only, for reference, and is never copied into the description: the reviewer writes their own, so each review and each baseline entry `triage export` makes from it is in the words of the person who checked it.
+- C1 control characters (U+0080 to U+009F) and bidirectional formatting characters (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) are now treated like other control characters: folded away in the work list, the report and the terminal output of `check`, `triage suggest-similar` and `history list-runs`, replaced with U+FFFD in stored text and review descriptions (where they no longer count toward the 10-character minimum), and escaped in baseline files. A policy diff printed by `check` shows them, and other control characters, as U+FFFD.
+- Gitleaks report paths with `..` in them are refused as outside the target.
+- The Ollama client refuses redirects instead of following them, and the largest answer it reads is about 26 MiB (a batch of the longest vectors, with room to spare) instead of 256 MB.
 
 ### Project
 
 - The code follows PEP 8 with 120-character lines, formatted and checked by Ruff 0.14.0 (a development tool, pinned by hash in `requirements-dev.txt`, never a dependency). CI runs `ruff check` and `ruff format --check`. `CloneTooLarge` in the scan worker is now `CloneTooLargeError`.
 - Ruff also checks for likely bugs (its `B` rules, from flake8-bugbear): every `zip()` now says whether its inputs must be the same length, and they must everywhere in Shoalscan, so a mismatch is an error instead of silently dropped data.
 - A command and file reference, `docs/reference.md`: every command, the exit codes, and the files Shoalscan reads and writes. `SECURITY.md` names every scanner's upstream and describes the OpenID Connect sign-in.
+- Fuzz targets for the scanner reports Shoalscan reads (Gitleaks, Trivy, Hadolint and zizmor) and for `findings.json`, each checking that every finding is well formed and in a file of the repository. The `fuzz` workflow and `docs/development.md` list every target.
 - Fuzzing: `fuzz/targets.py` holds fuzz targets for the parsers that read untrusted input (`.shoalscan.toml`, the baseline, suppression markers, the Markdown escaper, and ID tokens, both arbitrary and correctly signed with arbitrary claims), each checking a contract rather than only "no crash". The `fuzz` workflow runs each under Atheris (pinned by hash in `requirements-fuzz.txt`, never a dependency) for a minute on pull requests that change the code and ten minutes weekly; the unit tests run every target over its seeds and random edits of them.
 - CodeQL leaves out the deliberately insecure test fixtures in `rules/` and `tests/data/`, as Shoalscan's own scan does; the alerts raised on them were dismissed as false positives.
 

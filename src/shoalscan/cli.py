@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from shoalscan import __version__, gitref
+from shoalscan import markdown as md
 from shoalscan.baseline import baseline_from_bytes, entries_from_findings, load_baseline, rename_path, write_baseline
 from shoalscan.check import CHECK_JSON, compare, details, render_report, summary_line
 from shoalscan.config import CONFIG_NAME, Config, config_from_bytes, load_config
@@ -230,7 +231,7 @@ def _print_policy_diff(repo: Path, policy: Policy) -> None:
         print("POLICY CHANGES: this change edits the configuration, baseline or rule directories.")
         print(f"They are NOT applied here: the policy comes from {policy.ref}. Review them carefully.")
         print(bar)
-        print(diff)
+        print(md.lines(diff))  # the diff is the change's own text: no escape sequences reach the terminal
         print(bar)
         print()
 
