@@ -413,6 +413,7 @@ class DashboardServerTests(unittest.TestCase):
             set(o["by_component"]["rows"][0]), {"component", "cells", "levels", "new", "new_blocking", "score"}
         )
         run_keys = {
+            "scanners",
             "id",
             "kind",
             "ref",
@@ -442,6 +443,9 @@ class DashboardServerTests(unittest.TestCase):
             "rescanned",
         }
         self.assertEqual(set(o["latest_run"]), run_keys)
+        # Which scanners the run used, by name and version, for the run's detail.
+        self.assertIsInstance(o["latest_run"]["scanners"], list)
+        self.assertTrue(all(set(s) == {"name", "version"} for s in o["latest_run"]["scanners"]))
 
         f = self.get_json("/api/findings?repo=acme/app", cookie)
         self.assertEqual(set(f), {"repo", "run", "total", "limit", "offset", "sort", "facets", "findings"})

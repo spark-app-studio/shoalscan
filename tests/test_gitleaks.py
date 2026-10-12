@@ -283,6 +283,30 @@ class NormaliseTests(unittest.TestCase):
                 self.normalise(report)
 
 
+class WalkTests(unittest.TestCase):
+    def test_the_view_holds_no_ignore_file_and_large_files_are_listed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, view = Path(tmp) / "repo", Path(tmp) / "view"
+            for rel, data in {
+                "app.py": "x = 1\n",
+                ".gitleaksignore": "a:b:1\n",
+                "sub/.gitleaksignore": "a:b:1\n",
+                "sub/big.txt": "y" * 2_000_001,
+                "vendor/big.txt": "y" * 2_000_001,
+                ".git/config": "[core]\n",
+                "empty.txt": "",
+            }.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(data)
+            (root / "link.py").symlink_to(root / "app.py")
+            skipped = gitleaks.walk(root, ("vendor",), 2_000_000, view)
+            staged = sorted(p.relative_to(view).as_posix() for p in view.rglob("*") if p.is_file())
+            self.assertEqual(skipped, [{"path": "sub/big.txt", "reason": "exceeded_size_limit"}])
+            # Gitleaks reads only the top-level ignore file; deeper ones are ordinary files to scan.
+            self.assertEqual(staged, ["app.py", "sub/.gitleaksignore"])
+            self.assertEqual(gitleaks.walk(root, ("vendor",), 2_000_000), skipped)
+
+
 class ConfigTests(unittest.TestCase):
     def test_gitleaks_is_a_known_scanner(self):
         self.assertEqual(parse_config({"scanners": ["opengrep", "gitleaks"]}).scanners, ("opengrep", "gitleaks"))
@@ -304,24 +328,46 @@ def git(repo: Path, *args: str) -> None:
     shutil.which("git") and gitleaks_ready(), f"gitleaks is not installed in {TOOLS}; run `shoalscan install`"
 )
 class EndToEndTests(unittest.TestCase):
+    def scan(self, repo: Path, out: Path) -> dict:
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = main(["scan", "--repo", str(repo), "--out", str(out), "--tools-dir", str(TOOLS)])
+        self.assertEqual(code, 0, err.getvalue())
+        return json.loads((out / "findings.json").read_text())
+
     def test_a_hostile_repository_cannot_hide_its_secrets(self):
         with tempfile.TemporaryDirectory() as tmp:
-            repo, out = Path(tmp) / "repo", Path(tmp) / "out"
+            repo, out = Path(tmp).resolve() / "repo", Path(tmp) / "out"
             (repo / "src").mkdir(parents=True)
             (repo / "src" / "app.py").write_text(f'aws_key = "{AWS}"  # gitleaks:allow\ntoken = "{SECRET}"\n')
+            (repo / "c.py").write_text(f'k = "{AWS}"\n')
             (repo / ".gitleaks.toml").write_text('[allowlist]\npaths = ["src/.*"]\n')
-            (repo / ".gitleaksignore").write_text("src/app.py:github-pat:2\n")
+            # Gitleaks's fingerprints in `dir` mode: the absolute path, the rule and the line, in every form it
+            # accepts. The relative form never matched, so only these prove the file is not read.
+            fingerprints = [
+                f"{repo}/src/app.py:github-pat:2",
+                f"{repo}/src/app.py:aws-access-token:1",
+                f"{repo}/c.py:aws-access-token:1",
+                f"{repo}/.gitleaksignore:aws-access-token:1",
+                f"0000000000000000000000000000000000000000:{repo}/c.py:aws-access-token:1",
+            ]
+            # The ignore file holds a secret of its own, which must still be found.
+            (repo / ".gitleaksignore").write_text(f"# {AWS}\n" + "\n".join(fingerprints) + "\n")
+            (repo / "src" / ".gitleaksignore").write_text(f"# {SECRET}\n" + "\n".join(fingerprints) + "\n")
             (repo / ".shoalscan.toml").write_text('scanners = ["gitleaks"]\n[opengrep]\ncommunity_rules = false\n')
             git(repo, "init", "-q", "-b", "main")
             git(repo, "add", "-A")
             git(repo, "commit", "-q", "-m", "x")
-            err = io.StringIO()
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
-                code = main(["scan", "--repo", str(repo), "--out", str(out), "--tools-dir", str(TOOLS)])
-            self.assertEqual(code, 0, err.getvalue())
-            doc = json.loads((out / "findings.json").read_text())
+            doc = self.scan(repo, out)
             self.assertEqual(
-                sorted(f["rule"] for f in doc["findings"]), ["gitleaks.aws-access-token", "gitleaks.github-pat"]
+                sorted((f["rule"], f["path"]) for f in doc["findings"]),
+                [
+                    ("gitleaks.aws-access-token", ".gitleaksignore"),
+                    ("gitleaks.aws-access-token", "c.py"),
+                    ("gitleaks.aws-access-token", "src/app.py"),
+                    ("gitleaks.github-pat", "src/.gitleaksignore"),
+                    ("gitleaks.github-pat", "src/app.py"),
+                ],
             )
             self.assertEqual(doc["scanners"]["gitleaks"]["version"], "8.30.1")
             self.assertIn("gitleaks.github-pat", doc["rule_ids"])
@@ -329,6 +375,19 @@ class EndToEndTests(unittest.TestCase):
                 text = (out / name).read_text()
                 self.assertNotIn(SECRET, text, name)
                 self.assertNotIn(AWS, text, name)
+
+    def test_without_an_ignore_file_the_tree_is_scanned_in_place(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, out = Path(tmp).resolve() / "repo", Path(tmp) / "out"
+            repo.mkdir()
+            (repo / "c.py").write_text(f'k = "{AWS}"\n')
+            (repo / ".shoalscan.toml").write_text('scanners = ["gitleaks"]\n[limits]\nmax_target_bytes = 1000000\n')
+            # Over the size limit: Gitleaks skips it, and the scan says so.
+            (repo / "huge.txt").write_text(f'k = "{AWS}"\n' + "x" * 1_000_001)
+            doc = self.scan(repo, out)
+        self.assertEqual([(f["rule"], f["path"]) for f in doc["findings"]], [("gitleaks.aws-access-token", "c.py")])
+        self.assertIn({"path": "huge.txt", "reason": "exceeded_size_limit"}, doc["unscanned"]["skipped"])
+        self.assertEqual(doc["scanners"]["gitleaks"]["files_skipped"], 1)
 
 
 if __name__ == "__main__":

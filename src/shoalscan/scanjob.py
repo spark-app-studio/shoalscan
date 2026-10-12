@@ -9,6 +9,10 @@ enabled nightly target, one after another. Either way the worker:
 - holds the scan lock, so only one scan runs at a time on this machine;
 - fetches the clone and scans the head of the branch in a temporary
   worktree, so the clone's own checkout is never touched;
+- always passes the policy explicitly: the managed policy when there is
+  one, else the `.shoalscan.toml` at the head of the registered branch,
+  read from git, so the commit being scanned (an older one, on a rescan)
+  never chooses its own scanners;
 - runs `scan`, `check` and `record` as child processes with fixed argument
   lists, no shell, an allowlisted environment and a deadline; at the
   deadline the whole process group is killed and nothing is recorded;
@@ -31,6 +35,7 @@ import time
 from pathlib import Path
 
 from shoalscan import history
+from shoalscan.config import CONFIG_NAME
 from shoalscan.dashboard import scanning
 from shoalscan.errors import SetupError, ShoalscanError
 
@@ -66,6 +71,7 @@ ENV_ALLOW = (
     "XDG_CONFIG_HOME",
 )
 _RUN_ID = re.compile(r"\brun (\d+)\b")
+MAX_POLICY_BYTES = 1024 * 1024
 
 
 class ScanTimeout(Exception):  # noqa: N818 - a signal to stop the scan, not an error
@@ -334,11 +340,63 @@ class Job:
                     "scanned"
                 )
             return commit
+        return self.branch_head()
+
+    def branch_head(self) -> str:
+        """The commit at the head of the registered branch in the clone."""
+        t = self.target
         for ref in (f"refs/remotes/origin/{t.branch}", f"refs/heads/{t.branch}"):
             commit = self.git_out("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
             if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
                 return commit
         raise SetupError(f"the branch {t.branch} does not exist in the clone")
+
+    def git_blob(self, blob: str, limit: int) -> bytes:
+        """A blob's exact bytes from the clone, refused past `limit`."""
+        pairs = self.git_pairs()
+        proc = subprocess.Popen(
+            ["git", *scanning.git_args(pairs), "-C", str(self.clone), "cat-file", "blob", blob],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=scanning.git_env(base_env(), pairs),
+            start_new_session=True,
+        )
+        try:
+            out, _ = proc.communicate(timeout=max(1, self.deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            _kill_group(proc.pid)
+            proc.communicate()
+            raise ScanTimeout() from None
+        if proc.returncode != 0:
+            raise SetupError(f"could not read {CONFIG_NAME} from the clone")
+        if len(out) > limit:
+            raise SetupError(f"{CONFIG_NAME} at the head of the branch is larger than {limit} bytes")
+        return out
+
+    def branch_policy(self) -> Path:
+        """The repository's own policy, from the head of the registered branch, as a private file.
+
+        A missing file is an empty policy (Shoalscan's defaults). Anything
+        other than a regular file there (a link, a directory) is refused.
+        """
+        head = self.branch_head()
+        # An empty answer must mean "no such file", never "git failed": check the tree first.
+        if not self.git_out("rev-parse", "--verify", "--quiet", f"{head}^{{tree}}"):
+            raise SetupError(f"could not read the tree at the head of {self.target.branch}")
+        entry = self.git_out("ls-tree", "--full-tree", head, "--", CONFIG_NAME)
+        data = b""
+        if entry:
+            fields = entry.split(None, 3)
+            if len(fields) != 4 or fields[0] not in ("100644", "100755") or fields[1] != "blob":
+                raise SetupError(f"{CONFIG_NAME} at the head of {self.target.branch} is not a regular file")
+            data = self.git_blob(fields[2], MAX_POLICY_BYTES)
+        path = self.work / "branch-policy.toml"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        self.say(f"policy: {CONFIG_NAME} at the head of {self.target.branch} ({head[:12]})")
+        return path
 
     def check_clone_size(self) -> None:
         if tree_size(self.clone, self.clone_limit()) > self.clone_limit():
@@ -365,8 +423,13 @@ class Job:
             raise SetupError("git worktree add failed")
         out = self.work / "out"
         out.mkdir(mode=0o700)
+        # The policy is always explicit: the managed one, else the branch head's own file.
         policy = self.targets.policy_path(t)
-        config = ["--config", str(policy)] if policy else []
+        if policy is not None:
+            self.say("policy: the policy registered for this repository")
+        else:
+            policy = self.branch_policy()
+        config = ["--config", str(policy)]
         baseline = ["--baseline", str(self.targets.baseline_path(t))] if t.baseline or t.kind != "clone" else []
         tools = ["--tools-dir", str(self.targets.tools_dir)] if self.targets.tools_dir else []
         # A rescan of an earlier commit keeps that run's time, so it replaces the run where it

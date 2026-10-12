@@ -8,6 +8,21 @@ scan passes the pinned default configuration with `--config`, points
 `--ignore-gitleaks-allow`. A false positive goes into the baseline, with an
 issue and a reason, like any other finding.
 
+`--gitleaks-ignore-path` is not enough on its own: Gitleaks 8.30.1 also
+reads `<source>/.gitleaksignore` whatever the flag says (cmd/root.go), and
+in `dir` mode its fingerprints are `<path as scanned>:<rule>:<line>`, which
+a repository can predict. That top-level file is the only other one it
+reads (it never looks deeper). So when the repository has one, Gitleaks
+scans a staging view of the tree, under a random private directory, that
+holds every other file it would scan but not the top-level `.gitleaksignore`,
+and the top-level file itself is scanned on its own, as a file, which reads
+no ignore file. Without one, the tree is scanned in place, and Gitleaks has
+nothing to read. Either way no ignore file a repository writes is ever
+read, by construction rather than by trusting a flag.
+
+Gitleaks skips files over `--max-target-megabytes` without a word, so they
+are listed here as skipped (not fully scanned), like Hadolint's.
+
 Gitleaks writes each secret into its report. The report goes to the scan's
 private staging directory, which is deleted when the scan ends, and the
 secret is used only to mask it out of the line before the line is hashed
@@ -21,7 +36,10 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+import shutil
+import time
 import tomllib
 from pathlib import Path
 
@@ -44,6 +62,7 @@ FIX = (
 )
 _RULE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,199}$")
 _MASK = "\0secret\0"
+IGNORE_FILE = ".gitleaksignore"
 
 
 def rule_name(rule_id: str) -> str:
@@ -62,6 +81,54 @@ def rule_ids(config: Path) -> list[str]:
     if not ids or not all(isinstance(i, str) and _RULE_ID.match(i) for i in ids):
         raise SetupError("the gitleaks configuration has no rules, or a rule id that is not plain")
     return sorted(rule_name(i) for i in ids)
+
+
+def max_megabytes(limits: Limits) -> int:
+    return max(1, math.ceil(limits.max_target_bytes / 1_000_000))
+
+
+def walk(root: Path, excludes: tuple[str, ...], max_bytes: int, view: Path | None = None) -> list[dict]:
+    """The files Gitleaks skips for their size, as unscanned entries; with `view`, also stage the rest.
+
+    Gitleaks never follows links and skips files over `max_bytes`; `.git` and
+    excluded paths are left out (their findings are dropped anyway). With
+    `view`, every other regular file is hard-linked (or copied) into it at the
+    same relative path, except the top-level `.gitleaksignore` (deeper ones are ordinary files to Gitleaks).
+    """
+    matcher = ExcludeMatcher(list(excludes))
+    skipped = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        rel_dir = Path(dirpath).relative_to(root).as_posix()
+        rel_dir = "" if rel_dir == "." else rel_dir
+        dirnames[:] = sorted(
+            d
+            for d in dirnames
+            if d != ".git"
+            and not matcher.excluded(f"{rel_dir}/{d}" if rel_dir else d)
+            and not os.path.islink(os.path.join(dirpath, d))
+        )
+        if view is not None:
+            (view / rel_dir).mkdir(parents=True, exist_ok=True)
+        for name in sorted(filenames):
+            rel = f"{rel_dir}/{name}" if rel_dir else name
+            full = os.path.join(dirpath, name)
+            try:
+                st = os.lstat(full)
+            except OSError:
+                continue
+            if not os.path.isfile(full) or os.path.islink(full) or matcher.excluded(rel):
+                continue
+            if st.st_size > max_bytes:
+                skipped.append({"path": rel, "reason": "exceeded_size_limit"})
+                continue
+            if view is None or rel == IGNORE_FILE or st.st_size == 0:
+                continue
+            target = view / rel
+            try:
+                os.link(full, target)
+            except OSError:
+                shutil.copyfile(full, target, follow_symlinks=False)
+    return skipped
 
 
 def build_command(
@@ -86,7 +153,7 @@ def build_command(
         "--exit-code",
         str(LEAKS_EXIT),
         "--max-target-megabytes",
-        str(max(1, math.ceil(limits.max_target_bytes / 1_000_000))),
+        str(max_megabytes(limits)),
         "--no-banner",
         "--no-color",
         "--log-level",
@@ -96,9 +163,9 @@ def build_command(
 
 def execute(cmd: list[str], cwd: Path, report: Path, timeout: int) -> list:
     """Run Gitleaks and return its parsed report, or raise ScanError."""
-    returncode, _, tail = process.run_scanner(TOOL, cmd, cwd, timeout)
+    returncode, _, stderr = process.run_scanner(TOOL, cmd, cwd, timeout, max_stdout=1024 * 1024)
     if returncode not in (0, LEAKS_EXIT):
-        raise ScanError(f"gitleaks failed with exit code {returncode}\n{tail}")
+        raise ScanError(f"gitleaks failed with exit code {returncode}\n{process.error_summary(stderr)}")
     try:
         size = report.stat().st_size
     except OSError:
@@ -118,15 +185,18 @@ def execute(cmd: list[str], cwd: Path, report: Path, timeout: int) -> list:
     return doc
 
 
-def _relative(path: object, root: Path) -> str:
+def _relative(path: object, root: Path, scanned: Path | None = None) -> str:
+    """The repository-relative path of a reported file, under `root` or the staging view `scanned`."""
     if not isinstance(path, str) or not Path(path).is_absolute():
         raise ScanError(f"gitleaks reported a path that is not absolute: {str(path)[:300]}")
     if ".." in Path(path).parts:  # relative_to is lexical: root/../x would otherwise pass as "../x"
         raise ScanError(f"gitleaks reported a path outside the target: {path[:300]}")
-    try:
-        return Path(path).relative_to(root).as_posix()
-    except ValueError:
-        raise ScanError(f"gitleaks reported a path outside the target: {path[:300]}") from None
+    for base in (scanned, root) if scanned is not None else (root,):
+        try:
+            return Path(path).relative_to(base).as_posix()
+        except ValueError:
+            continue
+    raise ScanError(f"gitleaks reported a path outside the target: {path[:300]}")
 
 
 def masked_code(lines: list[str], start: int, end: int, secret: str) -> str:
@@ -138,8 +208,13 @@ def masked_code(lines: list[str], start: int, end: int, secret: str) -> str:
     return text.replace(secret, _MASK) if secret in text else ""
 
 
-def normalise(report: list, root: Path, components: dict[str, str], excludes: tuple[str, ...]) -> list[Finding]:
-    """Turn a Gitleaks report into findings. Excluded paths and anything under .git are dropped."""
+def normalise(
+    report: list, root: Path, components: dict[str, str], excludes: tuple[str, ...], scanned: Path | None = None
+) -> list[Finding]:
+    """Turn a Gitleaks report into findings. Excluded paths and anything under .git are dropped.
+
+    `scanned` is the staging view Gitleaks scanned in place of `root`, if any;
+    the lines are always read from `root`."""
     matcher = ExcludeMatcher(list(excludes))
     lines_cache: dict[str, list[str]] = {}
     items = []
@@ -156,7 +231,7 @@ def normalise(report: list, root: Path, components: dict[str, str], excludes: tu
             raise ScanError(f"the gitleaks report has a malformed rule id: {str(rule_id)[:100]!r}")
         if not all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in (start, end, col)):
             raise ScanError("the gitleaks report has a malformed location")
-        rel = _relative(entry.get("File"), root)
+        rel = _relative(entry.get("File"), root, scanned)
         if rel == ".git" or rel.startswith(".git/") or matcher.excluded(rel):
             continue
         if rel not in lines_cache:
@@ -225,8 +300,8 @@ def run(
     limits: Limits,
     components: dict[str, str],
     excludes: tuple[str, ...],
-) -> tuple[list[Finding], list[str]]:
-    """Scan `root`. Returns the findings and the rule names that ran."""
+) -> tuple[list[Finding], list[str], dict]:
+    """Scan `root`. Returns the findings, the rule names that ran and the unscanned files."""
     if not binary.is_file():
         raise SetupError(f"gitleaks is not installed: {binary} (run `shoalscan install`)")
     verify_sha256(binary, binary_sha256)
@@ -237,12 +312,32 @@ def run(
     work = stage / "gitleaks"
     ignore_dir = work / "ignore"
     ignore_dir.mkdir(parents=True)
-    report_path = work / "report.json"
-    cmd = build_command(binary, root, config, ignore_dir, report_path, limits)
-    report = execute(cmd, work, report_path, limits.scan_timeout_seconds)
-    try:
-        findings = normalise(report, root, components, excludes)
-    finally:
-        report.clear()
-        report_path.unlink(missing_ok=True)
-    return findings, rules
+    max_bytes = max_megabytes(limits) * 1_000_000
+    ignore_file = root / IGNORE_FILE
+    # The targets: (what Gitleaks scans, the view it stands for). See the module docstring.
+    if os.path.lexists(ignore_file):
+        view = work / "view"
+        skipped = walk(root, excludes, max_bytes, view)
+        targets: list[tuple[Path, Path | None]] = [(view, view)]
+        if ignore_file.is_file() and not ignore_file.is_symlink() and 0 < ignore_file.stat().st_size <= max_bytes:
+            # A file as the source: Gitleaks looks for "<file>/.gitleaksignore", which cannot exist.
+            targets.append((ignore_file, None))
+    else:
+        skipped = walk(root, excludes, max_bytes)
+        targets = [(root, None)]
+    deadline = time.monotonic() + limits.scan_timeout_seconds
+    findings: list[Finding] = []
+    for number, (target, scanned) in enumerate(targets):
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            raise ScanError(f"gitleaks timed out after {limits.scan_timeout_seconds}s")
+        report_path = work / f"report-{number}.json"
+        cmd = build_command(binary, target, config, ignore_dir, report_path, limits)
+        report = execute(cmd, work, report_path, remaining)
+        try:
+            findings += normalise(report, root, components, excludes, scanned)
+        finally:
+            report.clear()
+            report_path.unlink(missing_ok=True)
+    # Fingerprints are numbered per file, and no file is in two runs, so they stay unique.
+    return findings, rules, {"skipped": skipped, "errors": []}

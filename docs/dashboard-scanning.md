@@ -53,6 +53,17 @@ Each target has exactly one source:
 
 A repository added on the Configuration page gets its policy and baseline in `targets/<name>/` in the state directory: `shoalscan.toml` is the policy text from the page, and `baseline.toml` is its baseline.
 
+### Which policy a scan uses
+
+Every scan the worker runs, from the dashboard or at night, gets its policy explicitly, in this order:
+
+1. the configuration file set for the repository in `scan_targets.toml`, or else its managed policy from the Configuration page;
+2. otherwise, the `.shoalscan.toml` at the head of the registered branch, read from git when the scan starts (an empty policy, so Opengrep alone, when the head has none). It must be a regular file; a link or a directory there fails the scan.
+
+The commit being scanned never decides its own policy. For a normal scan the head is the commit being scanned, so nothing changes; for **Rescan this commit** it means an older commit is scanned under the policy the branch has today, with today's scanners, just as `--policy-ref` takes a pull request's policy from its base branch. To control the scanners from Shoalscan rather than from the repository, give the repository a managed policy, or choose its scanners on the Configuration page.
+
+Each run records which scanners ran and their versions, and the run's page on the Runs page lists them, so a run that used fewer scanners than you expect is visible. The worker's log also names the policy it used.
+
 ## Starting a scan
 
 A request to scan names a registered repository and nothing else. Only one scan runs at a time: a second request gets 409 with the running scan's status. A repository can be scanned again only after its cooldown, and the hourly cap applies to all repositories; both answer 429 with the time to wait.

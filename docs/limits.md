@@ -17,7 +17,15 @@ Shoalscan's own safeguards have limits too:
 
 The changed-file check sees files that Opengrep reports as skipped or errored. A file that no rule's language covers is not scanned at all and is not reported, and a parse error Opengrep does not report is not seen. Files listed in [`parse_warn_only`](configuration.md#partial-parses) only warn about partial parses, so their unparsed lines are not checked by any rule.
 
-Trivy reports the Terraform files it cannot parse, but not YAML or JSON files it cannot parse; those are neither scanned nor counted. Gitleaks does not report the files it skipped, so a file over the size limit is not counted as unscanned for secrets. It scans the working tree, not the history.
+Trivy reports the Terraform files it cannot parse, but not YAML or JSON files it cannot parse; those are neither scanned nor counted. Gitleaks scans the working tree, not the history.
+
+### Trivy's inline comments
+
+Shoalscan lints every Trivy inline ignore comment, and fails a scan when Trivy logs a silenced finding without a valid comment at or above it in its file. Trivy logs silenced findings only for Terraform and CloudFormation; in Dockerfiles it drops them without a trace, so only the lint guards those. A valid comment above a finding in the same file is taken to explain it, as Trivy does not say which comment silenced which finding. Helm charts are not scanned by Trivy, because a template can produce an ignore comment at render time; render them and scan the manifests instead.
+
+### The network
+
+Without an operating-system network sandbox (see [Scanner isolation](security-model.md#scanner-isolation)), a scanner is kept off the network by its environment alone: no credentials, no git transport and proxies that go nowhere. A program that ignores proxy variables could still open a connection of its own. Run untrusted scans where the platform cuts the network off.
 
 ### Fingerprints
 

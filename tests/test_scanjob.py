@@ -46,6 +46,8 @@ if args[:3] == ["-m", "shoalscan", "scan"]:
         (here / "seen_app.txt").write_bytes((repo / "app.py").read_bytes())
     config = Path(opts["--config"]) if "--config" in opts else repo / ".shoalscan.toml"
     data = config.read_bytes() if config.is_file() else b""
+    with open(here / "seen_config.jsonl", "a") as seen:
+        seen.write(json.dumps([str(config), data.decode()]) + "\\n")
     digest = hashlib.sha256(data).hexdigest()
     meta = {{"policy": {{"ref": None, "commit": None, "config_sha256": digest, "adoption": False}},
             "worktree": worktree_state(repo), "suppressions": {{"total": 0, "invalid": 0, "suppressed_findings": 0}},
@@ -281,6 +283,41 @@ class RescanTests(WorkerTestCase):
         record = [c for c in f.calls() if c[2] == "record"][-1]
         # This record ends with a flag that takes no value, so the pairs are uneven.
         self.assertEqual(dict(zip(record[3::2], record[4::2], strict=False))["--commit"], first_commit)
+
+    def seen_configs(self, f: Fixture) -> list[list[str]]:
+        return [json.loads(line) for line in (f.bin / "seen_config.jsonl").read_text().splitlines()]
+
+    def test_the_branch_head_policy_decides_even_for_an_older_commit(self):
+        f = Fixture(self.base)
+        (f.origin / ".shoalscan.toml").write_text('scanners = ["opengrep", "gitleaks"]\n', encoding="utf-8")
+        git("add", ".shoalscan.toml", cwd=f.origin)
+        git("commit", "-q", "-m", "policy", cwd=f.origin)
+        log = io.StringIO()
+        scanjob.run_one(f.state, f.targets(), "acme/app", "x", log)
+        ((first_id,),) = f.rows("SELECT id FROM runs")
+        self.assertIn("policy: .shoalscan.toml at the head of main", log.getvalue())
+        # The commit's own file is not what the scan reads: the head's copy is passed explicitly.
+        path, text = self.seen_configs(f)[-1]
+        self.assertTrue(path.endswith("branch-policy.toml"), path)
+        self.assertEqual(text, 'scanners = ["opengrep", "gitleaks"]\n')
+        for call in f.calls()[:2]:
+            self.assertIn("--config", call)
+        # The head now drops gitleaks; a rescan of the older commit follows the head.
+        (f.origin / ".shoalscan.toml").write_text('scanners = ["opengrep"]\n', encoding="utf-8")
+        git("commit", "-q", "-am", "narrower", cwd=f.origin)
+        time.sleep(1.1)
+        scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO(), "rescan-commit", first_id)
+        self.assertEqual(self.seen_configs(f)[-1][1], 'scanners = ["opengrep"]\n')
+
+    def test_a_head_policy_that_is_not_a_regular_file_is_refused(self):
+        f = Fixture(self.base)
+        (f.origin / ".shoalscan.toml").symlink_to("/etc/hosts")
+        git("add", ".shoalscan.toml", cwd=f.origin)
+        git("commit", "-q", "-m", "link", cwd=f.origin)
+        log = io.StringIO()
+        self.assertEqual(scanjob.run_one(f.state, f.targets(), "acme/app", "x", log), "failed")
+        self.assertIn("is not a regular file", log.getvalue())
+        self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(0,)])
 
     def test_a_commit_that_is_gone_records_nothing(self):
         f = Fixture(self.base)

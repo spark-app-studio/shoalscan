@@ -79,6 +79,45 @@ def signature_verified(tools_dir: Path, lock: Lock, plat: str) -> bool:
     return binary.is_file() and sha256_file(binary) == lock.opengrep[plat].binary.sha256
 
 
+def tool_record_path(tools_dir: Path, name: str) -> Path:
+    """Where the record of a pinned scanner's signature check is kept."""
+    return tools_dir / f"{name}.verified.json"
+
+
+def _expected_tool_record(tool: PinnedTool, plat: str) -> dict | None:
+    entry = tool.platforms.get(plat)
+    if tool.signature is None or entry is None or entry.bundle is None:
+        return None
+    sig = tool.signature
+    return {
+        "verified": "cosign verify-blob --bundle",
+        "tool": tool.name,
+        "version": tool.version,
+        "download_sha256": entry.download.sha256,
+        "bundle_sha256": entry.bundle.sha256,
+        "binary_sha256": entry.binary_sha256,
+        "certificate_identity": sig.certificate_identity,
+        "certificate_oidc_issuer": sig.certificate_oidc_issuer,
+        "github_workflow_repository": sig.github_workflow_repository,
+        "github_workflow_sha": sig.github_workflow_sha,
+    }
+
+
+def tool_signature_verified(tools_dir: Path, tool: PinnedTool, plat: str) -> bool | None:
+    """None when the lock pins no signature for the tool; otherwise True only with a
+    record of a cosign check for exactly the pinned download, and the installed binary
+    still matching its pin. An install with --skip-signature-check leaves no record."""
+    expected = _expected_tool_record(tool, plat)
+    if expected is None:
+        return None
+    try:
+        record = json.loads(tool_record_path(tools_dir, tool.name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    binary = tool_path(tools_dir, tool.name)
+    return record == expected and binary.is_file() and sha256_file(binary) == expected["binary_sha256"]
+
+
 def opengrep_path(tools_dir: Path) -> Path:
     return tools_dir / "opengrep"
 
@@ -228,6 +267,14 @@ def install_opengrep(
     _log(f"opengrep {lock.opengrep_version}: installed, SHA-256 verified")
 
 
+def _member_name(name: str) -> str:
+    """An archive member's name with any leading "./" removed, and nothing else changed:
+    "../gitleaks", "/gitleaks" and ".gitleaks" never match "gitleaks"."""
+    while name.startswith("./"):
+        name = name[2:]
+    return name
+
+
 def extract_member(archive: Path, member: str, dest: Path) -> None:
     """Extract the one regular file `member` from a .tar.gz archive to `dest`.
 
@@ -237,7 +284,7 @@ def extract_member(archive: Path, member: str, dest: Path) -> None:
     found = None
     with tarfile.open(archive, mode="r:gz") as tar:
         for info in tar:
-            if info.name.lstrip("./") != member:
+            if _member_name(info.name) != member:
                 continue
             if found is not None:
                 raise VerificationError(f"{archive.name} holds {member} more than once")
@@ -281,11 +328,21 @@ def install_pinned_tool(
         _fetch_verified(fetch, asset.url, asset.sha256, staged)
         _place(staged, dest, 0o644)
     dest = tool_path(tools_dir, tool.name)
+    signed = tool_signature_verified(tools_dir, tool, plat)
     if dest.is_file() and sha256_file(dest) == entry.binary_sha256:
-        _log(f"{tool.name} {tool.version}: already installed, SHA-256 verified")
-        return
+        if signed is False and cosign is not None:
+            # No record of a signature check: download it again and check it now.
+            _log(f"{tool.name} {tool.version}: installed, but its signature was never verified; verifying it now")
+        else:
+            _log(f"{tool.name} {tool.version}: already installed, SHA-256 verified")
+            if signed is False:
+                _log(f"WARNING: the installed {tool.name}'s signature has not been verified")
+            return
+    record = tool_record_path(tools_dir, tool.name)
+    record.unlink(missing_ok=True)
     download_path = tmp / f"{tool.name}.download"
     _fetch_verified(fetch, entry.download.url, entry.download.sha256, download_path)
+    verified = False
     if tool.signature is not None and entry.bundle is not None:
         if cosign is None:
             _log(
@@ -296,6 +353,7 @@ def install_pinned_tool(
             bundle = tmp / f"{tool.name}.sigstore.json"
             _fetch_verified(fetch, entry.bundle.url, entry.bundle.sha256, bundle)
             verify_bundle(cosign, download_path, bundle, tool.signature)
+            verified = True
             _log(f"{tool.name} {tool.version}: cosign signature verified")
     if tool.member is None:
         binary = download_path
@@ -304,6 +362,13 @@ def install_pinned_tool(
         extract_member(download_path, tool.member, binary)
         verify_sha256(binary, entry.binary_sha256)
     _place(binary, dest, 0o755)
+    if verified:
+        # Written only after a successful check, so `scan` records what really happened.
+        tmp_record = record.with_suffix(".tmp")
+        tmp_record.write_text(
+            json.dumps(_expected_tool_record(tool, plat), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        os.replace(tmp_record, record)
     _log(f"{tool.name} {tool.version}: installed, SHA-256 verified")
 
 

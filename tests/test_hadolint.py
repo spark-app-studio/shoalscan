@@ -190,6 +190,13 @@ class NormaliseTests(unittest.TestCase):
             errors, [{"path": "broken/Dockerfile", "type": "hadolint DL1000", "message": "DL1000 message"}]
         )
 
+    def test_a_parse_error_keeps_no_quoted_line(self):
+        bad = self.result("DL1000", "error", 3, "broken/Dockerfile")
+        bad["message"] = "unexpected 'password=hunter2'\nexpecting '#', ADD or end of input"
+        _, errors = self.normalise([bad])
+        self.assertNotIn("hunter2", errors[0]["message"])
+        self.assertIn("unexpected", errors[0]["message"])
+
     def test_fingerprints_survive_line_shifts_and_name_the_stage(self):
         first = self.normalise([self.result("DL3008", "warning", 5)])[0][0]
         (self.root / "app" / "Dockerfile").write_text("# A comment on top\n\n" + DOCKERFILE)

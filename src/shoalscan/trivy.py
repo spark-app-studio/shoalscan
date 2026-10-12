@@ -10,13 +10,23 @@ checks embedded in the pinned binary are used, and nothing is downloaded),
 `--skip-version-check` and `--disable-telemetry`, and runs Trivy with the
 scanners' allowlisted environment.
 
-Inline ignore comments cannot be turned off in Trivy, so Shoalscan lints
-them (see `shoalscan.suppressions`): each must name one check and an issue,
-or it is a blocking finding, and every one is counted. Checks are left out
-only through `[trivy] ignore` in `.shoalscan.toml`, which is policy.
+Inline ignore comments (the current and the legacy tfsec prefix) cannot be
+turned off in Trivy, so Shoalscan lints them (see `shoalscan.suppressions`):
+each must name one check and an issue, or it is a blocking finding, and
+every one is counted. Each finding Trivy logs as silenced must sit in a file
+with a valid marker, or the scan fails. Checks are left out only through
+`[trivy] ignore` in `.shoalscan.toml`, which is policy.
 
-Trivy finds the configuration files itself. Files it could not parse are
-listed as unscanned errors when Trivy logs them (it does for Terraform); a
+Trivy fetches remote Terraform modules (git, S3, GCS, HTTPS, the registry)
+and 0.74.0 has no flag to stop it (`--tf-exclude-downloaded-modules` only
+filters results). The scanner environment (see `shoalscan.process`) leaves
+it no credentials, no transport and no route: an empty home directory, git
+without configuration or allowed protocols, proxies on a closed port, and
+an operating-system network sandbox where one is available.
+
+Helm charts are not scanned (see `MISCONFIG_SCANNERS`). Trivy finds the
+configuration files itself. Files it could not parse are listed as
+unscanned errors when Trivy logs them (it does for Terraform); a
 YAML or JSON file it cannot parse is not recognised as configuration at all,
 and so is not reported.
 """
@@ -39,13 +49,45 @@ from shoalscan.suppressions import Suppression, find_trivy_suppressions
 
 TOOL = "trivy"
 MAX_OUTPUT_BYTES = 256 * 1024 * 1024
-MAX_STDERR_CHARS = 4 * 1024 * 1024
+MAX_STDERR_BYTES = 16 * 1024 * 1024
 _SEVERITY = {"CRITICAL": "ERROR", "HIGH": "ERROR", "MEDIUM": "WARNING", "LOW": "INFO", "UNKNOWN": "INFO"}
 _CHECK = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d{3,5}$")
 # A log line of a file Trivy could not parse: `<time>\tERROR\t[...] Error parsing file\t... file_path="..."`.
-_PARSE_ERROR = re.compile(r'\tERROR\t[^\n]*?[Ee]rror parsing[^\n]*?file_path="((?:[^"\\\n]|\\.)*)"')
-# Files whose Trivy markers are linted: the kinds of files Trivy reads.
-_CONFIG_SUFFIXES = (".tf", ".tf.json", ".tfvars", ".hcl", ".yaml", ".yml", ".json", ".template", ".bicep")
+_PARSE_ERROR = re.compile(
+    r'\tERROR\t[^\n]*?(?:[Ee]rror parsing|[Ff]ailed to parse)[^\n]*?file_path="((?:[^"\\\n]|\\.)*)"'
+)
+MISCONFIG_SCANNERS = (
+    "azure-arm",
+    "cloudformation",
+    "dockerfile",
+    "kubernetes",
+    "terraform",
+    "terraformplan-json",
+    "terraformplan-snapshot",
+    "ansible",
+)
+# A log line of a finding an inline comment silenced: `<time>\tINFO\t[...] Ignore finding\trule="..." range="..."`.
+_IGNORED = re.compile(r"\tINFO\t\[[^\]\n]*\] Ignore finding\t([^\n]*)")
+# Its range is `path:start-end`, or `path:line` for one line.
+_RANGE = re.compile(r'\brange="((?:[^"\\\n]|\\.)*):(\d+)(?:-(\d+))?"')
+# Files whose Trivy markers are linted: the kinds of files Trivy reads, packaged Helm charts included.
+_CONFIG_SUFFIXES = (
+    ".tf",
+    ".tf.json",
+    ".tofu",
+    ".tofu.json",
+    ".tfvars",
+    ".hcl",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".template",
+    ".tpl",
+    ".bicep",
+    ".tgz",
+    ".tar.gz",
+    ".tar",
+)
 
 
 def build_command(binary: Path, target: Path, work: Path) -> list[str]:
@@ -65,6 +107,10 @@ def build_command(binary: Path, target: Path, work: Path) -> list[str]:
         str(work / "trivyignore"),
         "--module-dir",
         str(work / "modules"),
+        # Every scanner but Helm's: Trivy reads ignore comments from the rendered chart, which a
+        # template can produce at render time where no lint of the source can see them.
+        "--misconfig-scanners",
+        ",".join(MISCONFIG_SCANNERS),
         "--format",
         "json",
         "--exit-code",
@@ -75,15 +121,17 @@ def build_command(binary: Path, target: Path, work: Path) -> list[str]:
 
 def execute(cmd: list[str], cwd: Path, timeout: int) -> tuple[dict, str]:
     """Run Trivy and return its parsed report and its log, or raise ScanError."""
-    returncode, stdout, log = process.run_scanner(TOOL, cmd, cwd, timeout, stderr_chars=MAX_STDERR_CHARS)
+    # The whole log is kept: the findings inline comments silenced are read from it, so a log
+    # too long to keep fails the scan rather than hiding them.
+    returncode, stdout, log = process.run_scanner(
+        TOOL, cmd, cwd, timeout, max_stdout=MAX_OUTPUT_BYTES, max_stderr=MAX_STDERR_BYTES
+    )
     if returncode != 0:
-        raise ScanError(f"trivy failed with exit code {returncode}\n{log[-2000:]}")
-    if len(stdout) > MAX_OUTPUT_BYTES:
-        raise ScanError("trivy output is larger than allowed")
+        raise ScanError(f"trivy failed with exit code {returncode}\n{process.error_summary(log)}")
     try:
         doc = json.loads(stdout)
     except (ValueError, UnicodeDecodeError):
-        raise ScanError(f"trivy output is not valid JSON\n{log[-2000:]}") from None
+        raise ScanError(f"trivy output is not valid JSON\n{process.error_summary(log)}") from None
     if not isinstance(doc, dict) or not isinstance(doc.get("Results", []), list):
         raise ScanError("trivy output has no list of results")
     return doc, log
@@ -194,6 +242,39 @@ def normalise(
     return findings, meta
 
 
+def silenced_findings(log: str, markers: list[Suppression], excludes: tuple[str, ...]) -> int:
+    """How many findings Trivy says inline comments silenced, each checked against the linted markers.
+
+    Trivy logs these for Terraform and CloudFormation. Each must be in a file
+    that holds a valid marker (one check and an issue) at or above its first
+    line; anything else means
+    a comment the lint did not see silenced a finding, and the scan fails.
+    Findings in excluded files and under .git are dropped anyway, and not counted.
+    """
+    matcher = ExcludeMatcher(list(excludes))
+    valid: dict[str, list[int]] = {}
+    for s in markers:
+        if s.valid:
+            valid.setdefault(s.path, []).append(s.line)
+    count = 0
+    for match in _IGNORED.finditer(log):
+        where = _RANGE.search(match.group(1))
+        path = where.group(1).replace('\\"', '"') if where else None
+        if path is not None and (path == ".git" or path.startswith(".git/") or matcher.excluded(path)):
+            continue
+        start = int(where.group(2)) if where else 0
+        # Trivy applies a marker to a block that starts on its line or the next, and to everything
+        # inside that block, so a valid marker must sit at or above the silenced finding.
+        if path not in valid or not any(line <= start for line in valid[path]):
+            raise ScanError(
+                "trivy reports a finding silenced by an inline comment that is not a valid, linted marker "
+                f"({str(path)[:300] if path else 'in an unknown place'}); nothing in the repository may silence a "
+                "check except a marker that names it and an issue"
+            )
+        count += 1
+    return count
+
+
 def config_files(root: Path, excludes: tuple[str, ...], max_bytes: int) -> list[str]:
     """The files whose Trivy markers are linted: every file of a kind Trivy reads, outside .git and the excludes."""
     matcher = ExcludeMatcher(list(excludes))
@@ -239,5 +320,5 @@ def run(
     markers = find_trivy_suppressions(
         root, config_files(root, excludes, limits.max_target_bytes), limits.max_target_bytes
     )
-    silenced = len(re.findall(r"\tINFO\t\[[^\]\n]*\] Ignore finding\t", log))
+    silenced = silenced_findings(log, markers, excludes)
     return findings, {"skipped": [], "errors": parse_errors(log, root, excludes)}, markers, silenced, meta

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -10,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shoalscan import __version__, gitleaks, hadolint, opengrep, trivy, zizmor
+from shoalscan import __version__, gitleaks, hadolint, opengrep, process, trivy, zizmor
 from shoalscan.check import CHECK_JSON
 from shoalscan.config import Config
 from shoalscan.errors import ScanError, SetupError
@@ -54,6 +55,13 @@ class PinnedBinary:
     path: Path
     sha256: str
     files: dict[str, tuple[Path, str]] = field(default_factory=dict)
+    # None when tools.lock pins no signature for it; else whether `install` recorded a cosign check.
+    signature_verified: bool | None = None
+
+    def verification(self) -> str:
+        if self.signature_verified is None:
+            return "sha256"
+        return "sha256 and cosign" if self.signature_verified else "sha256 (signature not verified)"
 
 
 @dataclass
@@ -125,6 +133,8 @@ def run_scan(
         "shoalscan_version": __version__,
         "scanners": {},
         "policy": policy or {"ref": None},
+        # How the scanners were kept apart from this machine (see `shoalscan.process`).
+        "isolation": {"home": "empty, one per scanner run", "network": process.network_sandbox()[1]},
         "worktree": worktree_state(root, baseline_binding_path(repo, baseline) if baseline is not None else None),
     }
     unscanned: dict = {"skipped": [], "errors": []}
@@ -205,7 +215,7 @@ def run_scan(
             if pin is None:
                 raise SetupError("gitleaks is enabled but tools.lock pins no gitleaks")
             config_file, config_sha256 = pin.files["config"]
-            leaks, leak_rules = gitleaks.run(
+            leaks, leak_rules, missed = gitleaks.run(
                 pin.path,
                 pin.sha256,
                 config_file,
@@ -218,14 +228,16 @@ def run_scan(
             )
             findings += leaks
             extra_runs.append((gitleaks.TOOL, pin.version, leaks))
+            unscanned = {kind: [*unscanned.get(kind, []), *missed[kind]] for kind in ("skipped", "errors")}
             meta["rule_ids"] = sorted({*meta.get("rule_ids", []), *leak_rules})
             meta.setdefault("rules", {}).update(gitleaks.rule_metadata(leaks))
             meta["scanners"]["gitleaks"] = {
                 "version": pin.version,
-                "verification": "sha256",
+                "verification": pin.verification(),
                 "config_sha256": config_sha256,
                 "rules": len(leak_rules),
                 "findings": len(leaks),
+                "files_skipped": len(missed["skipped"]),
             }
         if "hadolint" in config.scanners:
             pin = tools.pinned.get("hadolint")
@@ -247,7 +259,7 @@ def run_scan(
             meta.setdefault("rules", {}).update(hadolint.rule_metadata(lints))
             meta["scanners"]["hadolint"] = {
                 "version": pin.version,
-                "verification": "sha256",
+                "verification": pin.verification(),
                 "files_scanned": linted,
                 "ignore": list(config.hadolint.ignore),
                 "findings": len(lints),
@@ -272,7 +284,7 @@ def run_scan(
             meta.setdefault("rules", {}).update(audit_rules)
             meta["scanners"]["zizmor"] = {
                 "version": pin.version,
-                "verification": "sha256",
+                "verification": pin.verification(),
                 "files_scanned": audited,
                 "ignore": list(config.zizmor.ignore),
                 "findings": len(audits),
@@ -303,7 +315,8 @@ def run_scan(
             meta.setdefault("rules", {}).update(misconfig_rules)
             meta["scanners"]["trivy"] = {
                 "version": pin.version,
-                "verification": "sha256 and cosign",
+                "verification": pin.verification(),
+                "signature_verified": bool(pin.signature_verified),
                 "ignore": list(config.trivy.ignore),
                 "findings": len(misconfigs),
                 "inline_suppressions": len(markers),
@@ -314,6 +327,10 @@ def run_scan(
         shutil.rmtree(stage, ignore_errors=True)
 
     sev = Counter(f.severity for f in findings)
+    # Two scanners can skip the same file for the same reason: list it once.
+    unscanned = {
+        kind: list({json.dumps(e, sort_keys=True): e for e in entries}.values()) for kind, entries in unscanned.items()
+    }
     meta.update(
         {
             "excludes": excludes,

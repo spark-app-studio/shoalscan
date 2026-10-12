@@ -150,7 +150,8 @@ class RunTests(unittest.TestCase):
         self.binary = Path(self.tmp.name) / "zizmor"
         out = json.dumps([result(self.root, "template-injection", "High", 7)])
         self.binary.write_text(
-            '#!/bin/sh\nfor a in "$@"; do case "$a" in *broken.yml) echo "failed to load $a" >&2; exit 1;; esac; done\n'
+            '#!/bin/sh\nfor a in "$@"; do case "$a" in *broken.yml) echo "failed to load $a" >&2;'
+            'echo "   |" >&2; echo " 5 |   run: echo token-hunter2" >&2; exit 1;; esac; done\n'
             f"case \"$*\" in *ci.yml*) echo '{out}';; *) echo '[]';; esac\n"
         )
         self.binary.chmod(0o755)
@@ -168,6 +169,9 @@ class RunTests(unittest.TestCase):
         self.assertEqual(audited, 1)
         self.assertEqual([e["path"] for e in unscanned["errors"]], [".github/workflows/broken.yml"])
         self.assertNotIn(str(self.root), unscanned["errors"][0]["message"])
+        # The error class and the file stay; the quoted line from the workflow does not.
+        self.assertIn("failed to load .github/workflows/broken.yml", unscanned["errors"][0]["message"])
+        self.assertNotIn("hunter2", unscanned["errors"][0]["message"])
         self.assertEqual(
             rules["zizmor.template-injection"]["references"], ["https://docs.zizmor.sh/audits/#template-injection"]
         )

@@ -25,6 +25,7 @@ from shoalscan.install import (
     signature_verified,
     tool_file_path,
     tool_path,
+    tool_signature_verified,
     verify_rules_dir,
 )
 from shoalscan.locations import default_out_dir, default_tools_dir, refuse_inside_repo
@@ -139,6 +140,7 @@ def _tools(args: argparse.Namespace, config: Config, lock: Lock) -> Tools:
                 extra: (tool_file_path(tools_dir, name, extra).absolute(), asset.sha256)
                 for extra, asset in tool.files.items()
             },
+            signature_verified=tool_signature_verified(tools_dir, tool, plat),
         )
     return Tools(
         pinned=pinned,
@@ -190,15 +192,15 @@ def cmd_install(args: argparse.Namespace) -> int:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     result, _ = _do_scan(args)
-    opengrep_meta = result.meta["scanners"].get("opengrep")
-    if opengrep_meta is not None and not opengrep_meta.get("signature_verified", False):
-        bar = "!" * 78
-        print(
-            f"{bar}\nshoalscan: WARNING: there is no record that the installed Opengrep's cosign signature was\n"
-            "verified (installed with --skip-signature-check, or copied in by hand). Its SHA-256 matches\n"
-            f"tools.lock. Run `shoalscan install` with cosign available to verify it.\n{bar}",
-            file=sys.stderr,
-        )
+    for name, info in sorted(result.meta["scanners"].items()):
+        if isinstance(info, dict) and info.get("signature_verified") is False:
+            bar = "!" * 78
+            print(
+                f"{bar}\nshoalscan: WARNING: there is no record that the installed {name}'s cosign signature was\n"
+                "verified (installed with --skip-signature-check, or copied in by hand). Its SHA-256 matches\n"
+                f"tools.lock. Run `shoalscan install` with cosign available to verify it.\n{bar}",
+                file=sys.stderr,
+            )
     counts = result.meta["counts"]
     print(
         f"shoalscan scan: {len(result.findings)} findings "

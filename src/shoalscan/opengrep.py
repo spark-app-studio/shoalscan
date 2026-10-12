@@ -143,17 +143,18 @@ _scanner_env = process.scanner_env
 
 def execute(cmd: list[str], cwd: Path, timeout: int) -> dict:
     """Run Opengrep and return its parsed JSON output, or raise ScanError."""
-    returncode, stdout, tail = process.run_scanner("opengrep", cmd, cwd, timeout)
+    returncode, stdout, stderr = process.run_scanner("opengrep", cmd, cwd, timeout, max_stdout=MAX_STDOUT_BYTES)
+    tail = process.error_summary(stderr)
     if returncode not in (0, 1):
         detail = tail
         try:
             reported = json.loads(stdout).get("errors") or []
-            detail = "\n".join(f"- {str(e.get('message', e)).strip()[:400]}" for e in reported[:5]) or tail
+            detail = (
+                "\n".join(f"- {process.error_summary(str(e.get('message', e)), 400)}" for e in reported[:5]) or tail
+            )
         except (ValueError, AttributeError, UnicodeDecodeError):
             pass
         raise ScanError(f"opengrep failed with exit code {returncode}\n{detail}")
-    if len(stdout) > MAX_STDOUT_BYTES:
-        raise ScanError("opengrep output is larger than allowed")
     try:
         doc = json.loads(stdout)
     except (json.JSONDecodeError, UnicodeDecodeError):

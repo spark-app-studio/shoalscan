@@ -99,11 +99,10 @@ def build_command(binary: Path, files: list[Path]) -> list[str]:
 
 def execute(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, list | None, str]:
     """Run zizmor. Returns its exit code, its parsed results (None unless it exited 0) and its error tail."""
-    returncode, stdout, tail = process.run_scanner(TOOL, cmd, cwd, timeout)
+    returncode, stdout, stderr = process.run_scanner(TOOL, cmd, cwd, timeout, max_stdout=MAX_OUTPUT_BYTES)
+    tail = process.error_summary(stderr)
     if returncode != 0:
         return returncode, None, tail
-    if len(stdout) > MAX_OUTPUT_BYTES:
-        raise ScanError("zizmor output is larger than allowed")
     try:
         doc = json.loads(stdout)
     except (ValueError, UnicodeDecodeError):

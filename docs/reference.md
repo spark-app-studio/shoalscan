@@ -44,12 +44,15 @@ What Shoalscan reads and writes, in one place. Each entry links to the guide tha
 
 | File | Written by | What it holds | Guide |
 | --- | --- | --- | --- |
-| `findings.json` | `scan` | The normalised findings of every scanner, with rule metadata, what was not fully scanned and the suppressions. | [Getting started](getting-started.md#the-first-scan), [Triage](triage.md#rule-metadata-in-findingsjson) |
+| `findings.json` | `scan` | The normalised findings of every scanner, with rule metadata, what was not fully scanned, the suppressions, each scanner's version and how it was verified, and how the scanners were isolated (`isolation`). | [Getting started](getting-started.md#the-first-scan), [Triage](triage.md#rule-metadata-in-findingsjson), [Security model](security-model.md#scanner-isolation) |
 | `findings.sarif` | `scan` | SARIF 2.1.0 for code scanning, without code snippets. | [Getting started](getting-started.md#the-first-scan) |
 | `check.json` | `check` | The lists behind the check's counts: new, new blocking and stale. | [Baseline and check](baseline-and-check.md#the-check) |
-| The history database (SQLite) | `record`, the dashboard | Runs, findings, reviews, embeddings and suggestions. | [Dashboard](dashboard.md) |
 | `setup-code`, in the dashboard's state directory (mode 0600) | `serve`, while sign-in is not set up | The one-time setup code for the wizard; it works for 30 minutes, and saving the settings deletes it. | [Dashboard](dashboard.md#signing-in) |
+| The history database (SQLite) | `record`, the dashboard | Runs (with the scanners each used), findings, reviews, embeddings and suggestions. | [Dashboard](dashboard.md) |
+| `opengrep.verified.json`, `<scanner>.verified.json` | `install` | In the tools directory: a record that a scanner's cosign signature was checked, written only after a successful check. `scan` reports the signature as verified only when the record matches the installed binary. | [Scanners](scanners.md) |
 
 ## Environment
 
-Shoalscan reads `XDG_CACHE_HOME` (the tools go under it, in `~/.cache/shoalscan` by default) and `XDG_DATA_HOME` (where the history database is by default, under `~/.local/share`). Scanners run with an allowlisted environment, so nothing else in the environment reaches them; see the [security model](security-model.md).
+Shoalscan reads `XDG_CACHE_HOME` (the tools go under it, in `~/.cache/shoalscan` by default) and `XDG_DATA_HOME` (where the history database is by default, under `~/.local/share`).
+
+Scanners run with an allowlisted environment: only `PATH`, the locale, the user name and the time zone pass through. Shoalscan sets the rest itself for each scanner run: `HOME` and the temporary directory are an empty private directory, git reads no configuration and allows no transport (`GIT_CONFIG_NOSYSTEM`, `GIT_CONFIG_GLOBAL`, `GIT_ALLOW_PROTOCOL`, `GIT_TERMINAL_PROMPT`, `GIT_SSH_COMMAND`), the proxy variables point at a closed local port with `NO_PROXY` empty, and the cloud metadata services are off. Where it can, it also runs each scanner under `sandbox-exec` (macOS) or `unshare --net` (Linux), and warns once when neither is available; see [Scanner isolation](security-model.md#scanner-isolation).
