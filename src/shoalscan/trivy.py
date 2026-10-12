@@ -193,7 +193,8 @@ def normalise(
                 "trivy reported a finding in something that is not a file of the repository: "
                 f"{str(result.get('Target'))[:300]}"
             )
-        if rel == ".git" or rel.startswith(".git/") or matcher.excluded(rel):
+        # A rendered finding is never dropped: its path was chosen (and kept out of the excludes) by helm.render.
+        if origin is None and (rel == ".git" or rel.startswith(".git/") or matcher.excluded(rel)):
             continue
         for m in failures:
             check, severity = m.get("ID"), _SEVERITY.get(str(m.get("Severity")))
@@ -227,7 +228,8 @@ def normalise(
                 item.update(
                     line=1,
                     code="",
-                    context=f"helm:{origin.resource}"[:300],
+                    # The template path too, so no resource name chosen in one template matches another's.
+                    context=f"helm:{origin.path}:{origin.resource}"[:300],
                     message=(
                         f"{item['message']}{where}; found in the chart as Helm renders it, so the line is the "
                         "template's first"
@@ -344,7 +346,7 @@ def _scan_charts(
     timeout = int(deadline - time.monotonic())
     work = stage / "trivy-helm"
     rendered, mapping, errors = helm.render(
-        helm_pin[0], helm_pin[1], root, work / "helm", charts, helm_values, _remaining(deadline, timeout)
+        helm_pin[0], helm_pin[1], root, work / "helm", charts, helm_values, _remaining(deadline, timeout), excludes
     )
     if not mapping:
         return [], errors, {}

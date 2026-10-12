@@ -298,6 +298,9 @@ class DerivedConfigTests(unittest.TestCase):
                     {"regexTarget": "line", "regexes": ["import .* from"]},
                     {"condition": "AND", "paths": ["\\.bb$"], "regexes": ["SRC="]},
                     {"regexes": ["^c{3}$"], "paths": ["x"]},
+                    # The match takes in the variable's name, which the repository writes.
+                    {"regexTarget": "match", "regexes": ["public[_-]?key"]},
+                    {"condition": "AND", "regexTarget": "line", "regexes": ["x"], "stopwords": ["cc"]},
                 ],
             },
         ],
@@ -312,13 +315,22 @@ class DerivedConfigTests(unittest.TestCase):
         self.assertEqual(rules["b"]["allowlists"], [{"stopwords": ["bbbb"]}])
         self.assertEqual(rules["c"]["allowlists"], [{"regexes": ["^c{3}$"]}])
 
+    def test_the_rules_are_parsed_from_the_bytes_that_were_checked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "c.toml"
+            cfg.write_bytes(b'[[rules]]\nid = "a"\nregex = "a+"\n')
+            data = gitleaks.read_verified_config(cfg, sha256_file(cfg))
+            self.assertEqual(gitleaks.rule_ids(data), ["gitleaks.a"])
+            with self.assertRaises(VerificationError):
+                gitleaks.read_verified_config(cfg, "0" * 64)
+
     @unittest.skipUnless(gitleaks_ready(), f"gitleaks is not installed in {TOOLS}; run `shoalscan install`")
     def test_the_pinned_rules_lose_every_path_allowlist(self):
         pinned = tomllib.loads(inst.tool_file_path(TOOLS, "gitleaks", "config").read_text(encoding="utf-8"))
         derived = tomllib.loads(gitleaks.derive_config(pinned))
         self.assertEqual(len(derived["rules"]), len(pinned["rules"]))
         tables = [derived.get("allowlist", {})] + [a for r in derived["rules"] for a in r.get("allowlists", [])]
-        self.assertFalse([a for a in tables if "paths" in a or a.get("regexTarget") == "line"])
+        self.assertFalse([a for a in tables if "paths" in a or a.get("regexTarget", "secret") != "secret"])
         self.assertIn("stopwords", derived["allowlist"])
 
 
@@ -450,6 +462,17 @@ class EndToEndTests(unittest.TestCase):
             sorted(f["path"] for f in doc["findings"]),
             sorted([*paths, "vendor/github.com/a/s.go", "x-1.0.dist-info/s.py"]),
         )
+
+    def test_a_variable_name_cannot_hide_a_secret(self):
+        value = "Zx9Kq2Lm7Pw4" + "Rt8Vb3Nc6Hd1Jf5Qa"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, out = Path(tmp).resolve() / "repo", Path(tmp) / "out"
+            repo.mkdir()
+            # The upstream rules allowlist a match that names a "public key".
+            (repo / "a.py").write_text(f'public_key = "{value}"\n')
+            (repo / ".shoalscan.toml").write_text('scanners = ["gitleaks"]\n')
+            doc = self.scan(repo, out)
+        self.assertEqual([(f["rule"], f["line"]) for f in doc["findings"]], [("gitleaks.generic-api-key", 1)])
 
     def test_a_case_variant_of_the_ignore_file_is_never_read(self):
         with tempfile.TemporaryDirectory() as tmp:

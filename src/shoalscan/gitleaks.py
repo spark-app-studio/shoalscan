@@ -29,9 +29,9 @@ The pinned default rules carry allowlists of path names (`node_modules/`,
 `vendor/...`, lock files, `*.pdf`, anything containing "gitleaks.toml",
 ...), and a repository chooses its own path names. So Gitleaks runs with a
 configuration derived from the pinned one (see `derive_config`): every
-allowlist that matches on paths, or on the line around a secret, is
-removed, and those that match only the secret itself (stopwords, value
-regexes) are kept. Paths are left out only through `excludes`, which is
+path allowlist, and every allowlist pattern aimed at the whole match or
+the line rather than the secret, is removed (an AND allowlist with one,
+whole); stopwords and patterns on the secret value are kept. Paths are left out only through `excludes`, which is
 Shoalscan's policy.
 
 Gitleaks skips files over `--max-target-megabytes` without a word, so they
@@ -48,6 +48,7 @@ Exit codes: 0 means no leaks, LEAKS_EXIT means leaks were found (set with
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -59,7 +60,7 @@ from pathlib import Path
 
 from shoalscan import process
 from shoalscan.config import Limits, component_for
-from shoalscan.errors import ScanError, SetupError
+from shoalscan.errors import ScanError, SetupError, VerificationError
 from shoalscan.excludes import ExcludeMatcher
 from shoalscan.findings import Finding, assign_fingerprints, enclosing_context, split_lines
 from shoalscan.lockfile import verify_sha256
@@ -90,14 +91,19 @@ def _is_ignore_name(name: str) -> bool:
 def _value_only(allowlist: dict) -> dict | None:
     """The part of an allowlist that matches only the secret itself, or None.
 
-    Path lists match names the repository chooses, and a `line` regex target
-    matches text the repository writes next to the secret; with AND, every
-    check must match, so one that needs a path is dropped whole.
+    Kept: `stopwords` (checked against the secret), `commits`, and `regexes`
+    whose target is the secret (the default). Dropped: `paths`, which match
+    names the repository chooses, and `regexes` aimed at the whole match or
+    the line (`regexTarget = "match"` or `"line"`), which take in text the
+    repository writes around the secret, such as a variable's name. An AND
+    allowlist with either is dropped whole, since its other checks would
+    then match alone.
     """
-    if allowlist.get("regexTarget", "secret") == "line":
-        allowlist = {k: v for k, v in allowlist.items() if k not in ("regexes", "regexTarget")}
-    if "paths" in allowlist and str(allowlist.get("condition", "OR")).upper() == "AND":
+    target = allowlist.get("regexTarget", "secret")
+    if str(allowlist.get("condition", "OR")).upper() == "AND" and ("paths" in allowlist or target != "secret"):
         return None
+    if target != "secret":
+        allowlist = {k: v for k, v in allowlist.items() if k not in ("regexes", "regexTarget")}
     kept = {k: v for k, v in allowlist.items() if k != "paths"}
     return kept if any(kept.get(k) for k in _ALLOWLIST_CHECKS) else None
 
@@ -167,26 +173,38 @@ def derive_config(data: dict) -> str:
     return text
 
 
-def write_derived_config(config: Path, dest: Path) -> None:
+def _load_config(data: bytes) -> dict:
     try:
-        with open(config, "rb") as handle:
-            data = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError, RecursionError) as exc:
+        return tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError, RecursionError) as exc:
         raise SetupError(f"the gitleaks configuration is unreadable: {exc}") from None
-    dest.write_text(derive_config(data), encoding="utf-8")
+
+
+def read_verified_config(config: Path, sha256: str) -> dict:
+    """The pinned configuration, parsed from exactly the bytes whose SHA-256 was checked."""
+    try:
+        data = config.read_bytes()
+    except OSError as exc:
+        raise SetupError(f"the gitleaks configuration is unreadable: {exc}") from None
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != sha256:
+        raise VerificationError(f"SHA-256 mismatch for {config.name}: expected {sha256}, got {actual}")
+    return _load_config(data)
 
 
 def rule_name(rule_id: str) -> str:
     return f"{TOOL}.{rule_id}"
 
 
-def rule_ids(config: Path) -> list[str]:
-    """The ids of the rules in the pinned configuration, as finding rule names."""
-    try:
-        with open(config, "rb") as handle:
-            data = tomllib.load(handle)
-    except (OSError, tomllib.TOMLDecodeError, RecursionError) as exc:
-        raise SetupError(f"the gitleaks configuration is unreadable: {exc}") from None
+def rule_ids(config: Path | dict) -> list[str]:
+    """The ids of the rules in the pinned configuration (a file, or its parsed table), as finding rule names."""
+    if isinstance(config, dict):
+        data = config
+    else:
+        try:
+            data = _load_config(config.read_bytes())
+        except OSError as exc:
+            raise SetupError(f"the gitleaks configuration is unreadable: {exc}") from None
     rules = data.get("rules")
     ids = [r.get("id") for r in rules] if isinstance(rules, list) and all(isinstance(r, dict) for r in rules) else []
     if not ids or not all(isinstance(i, str) and _RULE_ID.match(i) for i in ids):
@@ -425,13 +443,13 @@ def run(
     verify_sha256(binary, binary_sha256)
     if not config.is_file():
         raise SetupError(f"the gitleaks configuration is not installed: {config} (run `shoalscan install`)")
-    verify_sha256(config, config_sha256)
-    rules = rule_ids(config)
+    pinned = read_verified_config(config, config_sha256)
+    rules = rule_ids(pinned)
     work = stage / "gitleaks"
     ignore_dir = work / "ignore"
     ignore_dir.mkdir(parents=True)
     derived = work / "gitleaks.toml"
-    write_derived_config(config, derived)
+    derived.write_text(derive_config(pinned), encoding="utf-8")
     max_bytes = max_megabytes(limits) * 1_000_000
     # Every name Gitleaks could open as the ignore file: case variants too, and whatever the file system says.
     ignore_files = sorted(root / name for name in os.listdir(root) if _is_ignore_name(name))

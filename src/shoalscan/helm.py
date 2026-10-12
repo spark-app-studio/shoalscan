@@ -4,8 +4,12 @@ Trivy's own Helm scanner is turned off (see `shoalscan.trivy`): it reads
 ignore comments from the rendered chart, and a template can produce one at
 render time where no check of the source can see it. Instead, Shoalscan
 renders each chart itself with the pinned Helm, offline, and gives Trivy the
-manifests with every comment line removed and every inline ignore marker
-defused, so nothing a template writes can silence a check.
+manifests unchanged (there is no YAML parser here to edit them safely). A
+chart whose output holds anything like an inline ignore marker, in a
+comment or in data, is not scanned at all; it is listed as not fully
+scanned, which blocks a change to it. So nothing a template writes can
+silence a check. CRDs are not rendered: Helm prints `crds/` files verbatim,
+and Trivy reads them directly instead.
 
 Each chart is a directory with a `Chart.yaml`, outside `.git` and the
 excludes. Subcharts in a chart's `charts/` directory are rendered by their
@@ -15,7 +19,8 @@ and plugin directories in the scan's private stage and no Kubernetes
 configuration, so `lookup` finds nothing and no plugin or post-renderer
 runs. Dependencies are never fetched: a chart whose dependencies are not in
 its `charts/` directory is listed as not fully scanned, and so is a chart
-that does not render, a chart that holds a symbolic link (Helm would follow
+that does not render (or not within RENDER_TIMEOUT_SECONDS and
+MAX_RENDER_MEMORY), a chart that holds a symbolic link (Helm would follow
 it out of the repository), or one with a values file that cannot be used.
 Every file of such a chart is listed, so a pull request that changes one
 fails the check, as for any file that was not scanned.
@@ -23,16 +28,19 @@ fails the check, as for any file that was not scanned.
 The values are the chart's own `values.yaml` and the files named for the
 chart under `[trivy] helm_values` in `.shoalscan.toml`, which is policy.
 
-Helm marks each rendered document with `# Source: <chart>/templates/<file>`;
-findings are reported at that template, on its first line, and are
-fingerprinted by the rule, the template and the resource's kind and name,
-so they stay stable when unrelated template lines change.
+Helm puts `# Source: <chart>/templates/<file>` on the first line of every
+rendered document, and only that line is trusted. Findings are reported at
+that template (under the chart's or a subchart's `templates/`, and not
+excluded; otherwise at the chart's Chart.yaml), on its first line, and are
+fingerprinted by the rule, the template path and the resource's kind and
+name, so they stay stable when unrelated template lines change.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,7 +48,7 @@ from shoalscan import process
 from shoalscan.errors import ScanError, SetupError
 from shoalscan.excludes import ExcludeMatcher
 from shoalscan.lockfile import verify_sha256
-from shoalscan.suppressions import neutralise_trivy_markers, parse_trivy_line
+from shoalscan.suppressions import parse_trivy_line
 
 TOOL = "helm"
 CHART_FILE = "Chart.yaml"
@@ -50,6 +58,10 @@ RENDER_FAILED = "helm render failed"
 DEPENDENCIES_MISSING = "helm chart dependencies missing"
 LINK_IN_CHART = "helm chart holds a symbolic link"
 BAD_VALUES = "helm values file unusable"
+MARKER_IN_OUTPUT = "rendered output contains an inline-ignore marker"
+# Each chart renders within these, or it is not scanned. Overridable for tests.
+RENDER_TIMEOUT_SECONDS = 60
+MAX_RENDER_MEMORY = 512 * 1024 * 1024
 _LIBRARY = re.compile(r"^type:\s*['\"]?library['\"]?\s*$", re.MULTILINE)
 _SOURCE = re.compile(r"^# Source: (\S.*?)\s*$")
 _KIND = re.compile(r"^kind:\s*['\"]?([A-Za-z0-9]+)['\"]?\s*$")
@@ -94,7 +106,11 @@ def _join(rel_dir: str, name: str) -> str:
 
 
 def _chart_files(root: Path, chart: str) -> tuple[list[str], bool]:
-    """Every regular file of a chart (up to MAX_LISTED_FILES), and whether it holds a symbolic link."""
+    """Every regular file of a chart, and whether it holds a symbolic link.
+
+    A chart with more files than can be listed fails the scan, so a chart
+    that is not scanned is never only partly listed.
+    """
     files, link = [], False
     for dirpath, dirnames, filenames in os.walk(root / chart, followlinks=False):
         for name in [*dirnames, *filenames]:
@@ -102,24 +118,40 @@ def _chart_files(root: Path, chart: str) -> tuple[list[str], bool]:
                 link = True
         for name in sorted(filenames):
             full = os.path.join(dirpath, name)
-            if not os.path.islink(full) and len(files) < MAX_LISTED_FILES:
+            if not os.path.islink(full):
                 files.append(Path(full).relative_to(root).as_posix())
         dirnames.sort()
+    if len(files) > MAX_LISTED_FILES:
+        raise ScanError(f"the Helm chart {chart or '.'} has more than {MAX_LISTED_FILES} files; exclude it or split it")
     return sorted(files), link
 
 
+def _inside_without_links(root: Path, rel: str) -> Path:
+    """`root/rel` if it is a regular file reached without following any link, else ValueError."""
+    path = root
+    for part in Path(rel).parts:
+        path = path / part
+        try:
+            st = os.lstat(path)
+        except OSError:
+            raise ValueError(f"{rel} is not a regular file in the repository") from None
+        if stat.S_ISLNK(st.st_mode):
+            raise ValueError(f"{rel} is reached through a symbolic link")
+    if not stat.S_ISREG(os.lstat(path).st_mode):
+        raise ValueError(f"{rel} is not a regular file in the repository")
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        raise ValueError(f"{rel} is outside the repository") from None
+    return path
+
+
 def _values_files(root: Path, chart: str, values: dict[str, tuple[str, ...]]) -> list[Path]:
-    out = []
-    for rel in values.get(chart or ".", ()):
-        path = root / rel
-        if path.is_symlink() or not path.is_file():
-            raise ValueError(f"{rel} is not a regular file in the repository")
-        out.append(path)
-    return out
+    return [_inside_without_links(root, rel) for rel in values.get(chart or ".", ())]
 
 
 def helm_env(stage: Path) -> dict[str, str]:
-    """Helm's own directories, all in the private stage; no Kubernetes configuration."""
+    """Helm's own directories, all in the private stage; no Kubernetes configuration; a soft memory limit."""
     env = {}
     for var, sub in (
         ("HELM_CACHE_HOME", "cache"),
@@ -134,44 +166,48 @@ def helm_env(stage: Path) -> dict[str, str]:
     env["HELM_REPOSITORY_CACHE"] = str(stage / "cache" / "repository")
     env["KUBECONFIG"] = os.devnull
     env["HELM_KUBECONTEXT"] = ""
+    env["GOMEMLIMIT"] = f"{MAX_RENDER_MEMORY // (1024 * 1024)}MiB"
     return env
 
 
 def build_command(binary: Path, chart_dir: Path, values: list[Path]) -> list[str]:
-    cmd = [str(binary), "template", "release", str(chart_dir), "--namespace", "default", "--include-crds"]
+    # No --include-crds: Helm prints CRD files verbatim, so they could forge a document header.
+    # Trivy reads the chart's crds/ files directly, as plain files of the repository.
+    cmd = [str(binary), "template", "release", str(chart_dir), "--namespace", "default"]
     for path in values:
         cmd += ["--values", str(path)]
     return cmd
 
 
-def split_documents(text: str) -> list[tuple[str | None, list[str]]]:
-    """The rendered output as (source template, lines) per YAML document."""
-    docs: list[tuple[str | None, list[str]]] = []
-    source, lines = None, []
-    for line in text.split("\n"):
-        if line.rstrip() == "---":
-            docs.append((source, lines))
-            source, lines = None, []
-            continue
-        match = _SOURCE.match(line)
-        if match and source is None:
-            source = match.group(1)
-        lines.append(line)
-    docs.append((source, lines))
-    return [(s, ls) for s, ls in docs if any(ln.strip() and not ln.lstrip().startswith("#") for ln in ls)]
+def split_documents(text: str) -> list[tuple[str | None, str]]:
+    """The rendered output as (source template, text) per YAML document.
+
+    Helm splits every template's output at each `---` and puts its own
+    `# Source:` header on the first line of every piece, so only that first
+    line is trusted; a `# Source:` line further down is the template's own text.
+    """
+    docs: list[tuple[str | None, str]] = []
+    for chunk in re.split(r"(?m)^---[ \t]*$\n?", text):
+        lines = chunk.split("\n")
+        first = next((line for line in lines if line.strip()), "")
+        match = _SOURCE.match(first)
+        if any(line.strip() and not line.lstrip().startswith("#") for line in lines):
+            docs.append((match.group(1) if match else None, chunk))
+    return docs
 
 
-def clean(lines: list[str]) -> str:
-    """A document Trivy may read: no comment lines, and no inline ignore marker left working."""
-    kept = [neutralise_trivy_markers(line) for line in lines if not line.lstrip().startswith("#")]
-    if any(parse_trivy_line(line) for line in kept):
-        raise ScanError("a rendered Helm chart still holds a Trivy marker after cleaning")
-    return "\n".join(kept).strip("\n") + "\n"
+# A deliberate superset of what Trivy 0.74.0 reads as an inline ignore: either prefix, then
+# "ignore" anywhere later on the line, in any case and with any spacing.
+_MARKER_LIKE = re.compile(r"(?i)(?:trivy|tf\s*sec)\s*:.*?ignore")
 
 
-def resource(lines: list[str]) -> str:
+def holds_marker(text: str) -> bool:
+    return any(_MARKER_LIKE.search(line) or parse_trivy_line(line) for line in text.split("\n"))
+
+
+def resource(text: str) -> str:
     kind, name, in_metadata = "", "", False
-    for line in lines:
+    for line in text.split("\n"):
         if match := _KIND.match(line):
             kind = kind or match.group(1)
         if line.startswith("metadata:"):
@@ -184,17 +220,21 @@ def resource(lines: list[str]) -> str:
     return f"{kind}/{name}" if kind or name else ""
 
 
-def template_path(root: Path, chart: str, source: str | None) -> str:
-    """The repository path of a document's template, or the chart's Chart.yaml when it cannot be told."""
+_TEMPLATE = re.compile(r"^[^/]+/((?:charts/[^/]+/)*templates/.+)$")
+
+
+def template_path(root: Path, chart: str, source: str | None, excludes: tuple[str, ...] = ()) -> str:
+    """The repository path of a document's template: a file under the chart's (or a subchart's)
+    `templates/`, not excluded. Anything else, or no header, is the chart's Chart.yaml."""
     fallback = _join(chart, CHART_FILE)
-    if not source:
+    match = _TEMPLATE.match(source or "")
+    if not match or any(p in ("", ".", "..") for p in match.group(1).split("/")):
         return fallback
-    parts = source.split("/")
-    if len(parts) < 2 or any(p in ("", ".", "..") for p in parts):
-        return fallback
-    rel = _join(chart, "/".join(parts[1:]))
+    rel = _join(chart, match.group(1))
     path = root / rel
-    return rel if path.is_file() and not path.is_symlink() else fallback
+    if ExcludeMatcher(list(excludes)).excluded(rel) or path.is_symlink() or not path.is_file():
+        return fallback
+    return rel
 
 
 def render(
@@ -205,12 +245,13 @@ def render(
     charts: list[str],
     values: dict[str, tuple[str, ...]],
     timeout: int,
+    excludes: tuple[str, ...] = (),
 ) -> tuple[Path, dict[str, Rendered], list[dict]]:
-    """Render every chart into `stage/rendered`.
+    """Render every chart into `stage/rendered`, unchanged.
 
     Returns that directory, where each rendered document came from (by its
     path under the directory), and the unscanned entries of charts that
-    could not be rendered.
+    could not be rendered or whose output holds anything like an ignore marker.
     """
     if not binary.is_file():
         raise SetupError(f"helm is not installed: {binary} (run `shoalscan install`)")
@@ -234,14 +275,20 @@ def render(
         except ValueError as exc:
             unscanned(BAD_VALUES, str(exc))
             continue
-        code, stdout, stderr = process.run_scanner(
-            TOOL,
-            build_command(binary, root / chart if chart else root, value_files),
-            stage,
-            timeout,
-            max_stdout=MAX_RENDER_BYTES,
-            extra_env=env,
-        )
+        try:
+            code, stdout, stderr = process.run_scanner(
+                TOOL,
+                build_command(binary, root / chart if chart else root, value_files),
+                stage,
+                min(timeout, RENDER_TIMEOUT_SECONDS),
+                max_stdout=MAX_RENDER_BYTES,
+                extra_env=env,
+                max_memory=MAX_RENDER_MEMORY,
+            )
+        except ScanError as exc:
+            # Too slow, too big or killed: this chart is not scanned, and says why.
+            unscanned(RENDER_FAILED, process.error_summary(str(exc).replace(f"{root}/", ""), 400))
+            continue
         if code != 0:
             summary = process.error_summary(stderr.replace(f"{root}/", ""), 400)
             missing = "missing in charts/" in stderr or ("dependencies" in stderr and "charts/" in stderr)
@@ -250,11 +297,16 @@ def render(
         try:
             text = stdout.decode("utf-8")
         except UnicodeDecodeError:
-            raise ScanError(f"helm rendered {chart or 'the root chart'} as text that is not UTF-8") from None
-        chart_dir = out / str(index)
-        chart_dir.mkdir()
-        for number, (source, lines) in enumerate(split_documents(text)):
+            unscanned(RENDER_FAILED, "Helm rendered text that is not UTF-8")
+            continue
+        if holds_marker(text):
+            unscanned(
+                MARKER_IN_OUTPUT, "the rendered output contains an inline-ignore marker, so Trivy is not run on it"
+            )
+            continue
+        (out / str(index)).mkdir()
+        for number, (source, doc) in enumerate(split_documents(text)):
             name = f"{index}/{number}.yaml"
-            (out / name).write_text(clean(lines), encoding="utf-8")
-            mapping[name] = Rendered(template_path(root, chart, source), resource(lines), chart)
+            (out / name).write_text(doc, encoding="utf-8")
+            mapping[name] = Rendered(template_path(root, chart, source, excludes), resource(doc), chart)
     return out, mapping, errors

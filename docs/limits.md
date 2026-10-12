@@ -21,7 +21,7 @@ Trivy reports the Terraform files it cannot parse, but not YAML or JSON files it
 
 ### Trivy's inline comments
 
-Shoalscan lints every Trivy inline ignore comment, and fails a scan when Trivy logs a silenced finding without a valid comment at or above it in its file. Trivy logs silenced findings only for Terraform and CloudFormation; in Dockerfiles it drops them without a trace, so only the lint guards those. A valid comment above a finding in the same file is taken to explain it, as Trivy does not say which comment silenced which finding. Helm charts are checked as Shoalscan renders them, with their comments removed, so inline ignore comments have no effect there. A finding in a chart is reported at its template's first line, not the exact line, and a chart is checked with its default values and the extra values files you name, not every combination of values it supports.
+Shoalscan lints every Trivy inline ignore comment, and fails a scan when Trivy logs a silenced finding without a valid comment at or above it in its file. Trivy logs silenced findings only for Terraform and CloudFormation; in Dockerfiles it drops them without a trace, so only the lint guards those. A valid comment above a finding in the same file is taken to explain it, as Trivy does not say which comment silenced which finding. Helm charts are checked as Shoalscan renders them; a chart whose output holds anything like an inline ignore marker is not checked at all and blocks instead, so such comments never take effect there. A finding in a chart is reported at its template's first line, not the exact line, and a chart is checked with its default values and the extra values files you name, not every combination of values it supports.
 
 ### The network
 

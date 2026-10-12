@@ -196,6 +196,55 @@ class _Reader(threading.Thread):
         return b"".join(self.chunks)
 
 
+def _rss(pid: int) -> int | None:
+    """A process's resident memory in bytes, or None when it cannot be read."""
+    try:
+        with open(f"/proc/{pid}/status", encoding="ascii", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) * 1024
+        return None
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(
+            ["/bin/ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True, timeout=5, check=False
+        ).stdout.strip()
+        return int(out) * 1024 if out.isdigit() else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+class _MemoryWatch(threading.Thread):
+    """Kills the scanner when its resident memory passes `cap`, checked every quarter second."""
+
+    def __init__(self, proc: subprocess.Popen, cap: int) -> None:
+        super().__init__(daemon=True)
+        self.proc, self.cap = proc, cap
+        self.exceeded = False
+        self.done = threading.Event()
+
+    def run(self) -> None:
+        while not self.done.wait(0.25):
+            rss = _rss(self.proc.pid)
+            if rss is not None and rss > self.cap:
+                self.exceeded = True
+                _kill(self.proc)
+                return
+
+
+def _limit_address_space(limit: int):
+    """On Linux, a hard cap on the child's address space as well (macOS does not enforce one)."""
+    if not sys.platform.startswith("linux"):
+        return None
+    import resource
+
+    def apply() -> None:
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+
+    return apply
+
+
 def _kill(proc: subprocess.Popen) -> None:
     try:
         os.killpg(proc.pid, signal.SIGKILL)
@@ -214,12 +263,15 @@ def run_scanner(
     max_stdout: int = DEFAULT_MAX_STDOUT,
     max_stderr: int = DEFAULT_MAX_STDERR,
     extra_env: dict[str, str] | None = None,
+    max_memory: int | None = None,
 ) -> tuple[int, bytes, str]:
     """Run `cmd` and return its exit code, its standard output and its standard error.
 
     Both streams are read as the scanner writes them; one that grows past its
     cap kills the scanner, and the scan fails. `extra_env` adds variables the
-    caller sets itself (never ones taken from the environment).
+    caller sets itself (never ones taken from the environment). With
+    `max_memory`, a scanner whose resident memory passes it is killed and the
+    scan fails; on Linux its address space is also capped at eight times that.
     """
     home = Path(tempfile.mkdtemp(prefix="shoalscan-home-"))
     try:
@@ -234,6 +286,7 @@ def run_scanner(
                 stdin=subprocess.DEVNULL,
                 env={**scanner_env(home), **(extra_env or {})},
                 start_new_session=True,
+                preexec_fn=_limit_address_space(8 * max_memory) if max_memory else None,
             )
         except OSError as exc:
             raise ScanError(f"{name} could not start: {exc}") from None
@@ -243,6 +296,9 @@ def run_scanner(
         ]
         for reader in readers:
             reader.start()
+        watch = _MemoryWatch(proc, max_memory) if max_memory else None
+        if watch is not None:
+            watch.start()
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -251,6 +307,14 @@ def run_scanner(
             for reader in readers:
                 reader.join(timeout=10)
             raise ScanError(f"{name} timed out after {timeout}s") from None
+        finally:
+            if watch is not None:
+                watch.done.set()
+                watch.join(timeout=10)
+        if watch is not None and watch.exceeded:
+            for reader in readers:
+                reader.join(timeout=10)
+            raise ScanError(f"{name} used more than {max_memory} bytes of memory; it was stopped")
         for reader in readers:
             # A child that left the process group may still hold a pipe open. Its reader is
             # left to finish on its own (it closes its pipe then); the scan fails.
