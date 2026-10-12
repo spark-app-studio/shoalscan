@@ -13,6 +13,7 @@ import re
 import tempfile
 import threading
 import unittest
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
@@ -42,6 +43,7 @@ class FakeOllama:
     def __init__(self):
         self.requests: list[dict] = []
         self.mode = "ok"
+        self.redirect_to = ""
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -53,6 +55,12 @@ class FakeOllama:
                 owner.requests.append({"path": self.path, **body})
                 if owner.mode == "missing-model":
                     return self.reply(404, {"error": f'model "{body["model"]}" not found, try pulling it first'})
+                if owner.mode == "redirect":
+                    self.send_response(307)
+                    self.send_header("Location", owner.redirect_to + self.path)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return None
                 if owner.mode == "garbage":
                     return self.reply(200, "not json", raw=True)
                 vectors = [fake_vector(t) for t in body["input"]]
@@ -203,6 +211,23 @@ class OllamaClientTests(unittest.TestCase):
         with self.assertRaisesRegex(embeddings.OllamaError, "not reachable"):
             embeddings.embed(["a"], "embeddinggemma", closed_port(), timeout=5)
 
+    def test_redirects_are_never_followed(self):
+        other = FakeOllama()
+        self.addCleanup(other.close)
+        self.ollama.mode, self.ollama.redirect_to = "redirect", other.host
+        with self.assertRaisesRegex(embeddings.OllamaError, "redirect"):
+            embeddings.embed(["a"], "embeddinggemma", self.ollama.host, timeout=5)
+        self.assertEqual(other.requests, [], "the finding text must not reach the redirect's target")
+        handlers = [type(h) for h in embeddings._opener().handlers]
+        self.assertIn(embeddings._RefuseRedirects, handlers)
+        self.assertNotIn(urllib.request.HTTPRedirectHandler, handlers)
+
+    def test_the_answer_is_bounded_by_what_a_batch_can_need(self):
+        # A batch of the longest vectors, with every number at its longest, fits; the cap stays near 32 MiB.
+        self.assertLessEqual(embeddings.MAX_RESPONSE_BYTES, 32 * 1024 * 1024)
+        longest = json.dumps({"embeddings": [[-1.2345678901234567e-05] * embeddings.MAX_DIMS] * embeddings.BATCH})
+        self.assertLess(len(longest), embeddings.MAX_RESPONSE_BYTES)
+
     def test_proxies_are_never_used(self):
         with mock.patch.dict(
             "os.environ", {"http_proxy": "http://203.0.113.1:9", "HTTP_PROXY": "http://203.0.113.1:9", "no_proxy": ""}
@@ -301,8 +326,18 @@ class StorageTests(HistoryCase):
         decided = {f["key"][2]: f["decision"] for f in z_like}
         self.assertEqual(
             decided["src/z.py"],
-            {"source": "baseline", "status": "baselined", "issue": "#7", "description": "Accepted: test client only"},
+            {
+                "source": "baseline",
+                "status": "baselined",
+                "issue": "#7",
+                "description": "Accepted: test client only",
+                "run": self.conn.execute("SELECT MAX(id) FROM runs").fetchone()[0],
+                "commit": "a" * 40,
+                "at": "2026-09-29T02:00:00Z",
+            },
         )
+        self.assertEqual(found[0]["decision"]["by"], "me")
+        self.assertRegex(found[0]["decision"]["at"], r"^\d{4}-\d\d-\d\dT")
         self.assertIsNone(embeddings.similar(self.conn, self.key_id("src/x.py"), "other-model"))
 
     def test_other_repositories_only_when_asked(self):
@@ -370,7 +405,7 @@ class SuggestionTests(HistoryCase):
         self.assertEqual(rows["src/y.py"]["suggestion"]["description"], "Input is a constant.")
         self.assertEqual(rows["src/z.py"]["suggestion"]["like"][2], "src/w.py")
         self.assertEqual(rows["src/z.py"]["suggestion"]["source"], "baseline")
-        self.assertEqual(rows["src/z.py"]["suggestion"]["by"], "#7")
+        self.assertEqual(rows["src/z.py"]["suggestion"]["issue"], "#7")
         for decided in ("src/x.py", "src/w.py"):
             self.assertIsNone(rows[decided]["suggestion"])
         self.assertEqual(set(self.rows(review="suggested")), {"src/y.py", "src/z.py", "src/v.py"})
@@ -584,3 +619,137 @@ class RecordEmbedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProvenanceTests(HistoryCase):
+    """Suggestions come only from dashboard reviews and the baseline of scheduled runs, never from a pull
+    request's baseline, and say where they come from."""
+
+    def setUp(self):
+        super().setUp()
+        self.a = finding("community.python.eval", "src/x.py", "x0:0", message="Eval of user input allows injection")
+        self.b = finding("community.python.eval", "src/y.py", "y0:0", message="Eval of user input allows injection!")
+        self.c = finding("community.python.eval", "src/n.py", "n0:0", message="Eval of user input allows injection?")
+        record(self.conn, self.dir, "acme/app", "a" * 40, 27, [self.a, self.b])
+
+    def planted(self):
+        """A pull-request run whose own baseline calls `a` a false positive, with a new finding `c`."""
+        from shoalscan.baseline import Entry
+
+        plant = Entry(self.a.tool, self.a.rule, self.a.path, self.a.fingerprint, "#66", "False positive: trust me")
+        record(self.conn, self.dir, "acme/app", "f" * 40, 28, [self.a, self.b, self.c], kind="pr", baseline=[plant])
+
+    def suggest(self):
+        self.embed()
+        return embeddings.suggest_repository(self.conn, "acme/app", "embeddinggemma", 0.6, "2026-10-01T00:00:00Z")
+
+    def stored(self):
+        return dict(
+            self.conn.execute(
+                "SELECT fk.path, nk.path FROM finding_suggestions s JOIN finding_keys fk ON fk.id = s.key_id "
+                "JOIN finding_keys nk ON nk.id = s.neighbour_id"
+            ).fetchall()
+        )
+
+    def dashboard(self, **kw):
+        from shoalscan.dashboard.data import Data
+
+        data = Data(history.open_read_only(self.db))
+        self.addCleanup(data.conn.close)
+        repo_id = data.repo_id("acme/app")
+        run = data.resolve_run(repo_id, None)
+        return {f["path"]: f for f in data.findings(repo_id, run, limit=500, **kw)["findings"]}
+
+    def test_a_pull_request_baseline_never_suggests(self):
+        self.planted()
+        self.assertEqual(self.suggest(), 0)
+        self.assertEqual(self.stored(), {})
+        self.assertIsNone(self.dashboard()["src/y.py"]["suggestion"])
+        self.assertEqual(self.dashboard(review="suggested"), {})
+        like_b = embeddings.similar(self.conn, self.key_id("src/y.py"), "embeddinggemma", threshold=0.5, limit=5)
+        self.assertIsNone({f["key"][2]: f for f in like_b}["src/x.py"]["decision"])
+        # Even a suggestion stored before (by an older version) shows nothing for the planted reason.
+        self.conn.execute(
+            "INSERT INTO finding_suggestions VALUES (?, 'embeddinggemma', ?, 0.99, 'then')",
+            (self.key_id("src/y.py"), self.key_id("src/x.py")),
+        )
+        self.conn.commit()
+        self.assertIsNone(self.dashboard()["src/y.py"]["suggestion"])
+        self.assertEqual(self.dashboard(review="suggested"), {})
+
+    def test_the_scheduled_baseline_suggests_with_its_provenance(self):
+        from shoalscan.baseline import Entry
+
+        self.planted()
+        accepted = Entry(self.a.tool, self.a.rule, self.a.path, self.a.fingerprint, "#7", "False positive: test data")
+        record(self.conn, self.dir, "acme/app", "b" * 40, 29, [self.a, self.b], baseline=[accepted])
+        run = self.conn.execute("SELECT id FROM runs WHERE commit_sha = ?", ("b" * 40,)).fetchone()[0]
+        self.assertEqual(self.suggest(), 1)
+        got = self.dashboard()["src/y.py"]["suggestion"]
+        self.assertEqual(
+            {k: got[k] for k in ("status", "source", "description", "issue", "run", "commit", "at", "by")},
+            {
+                "status": "false_positive",
+                "source": "baseline",
+                "description": "False positive: test data",
+                "issue": "#7",
+                "run": run,
+                "commit": "b" * 40,
+                "at": "2026-09-29T02:00:00Z",
+                "by": None,
+            },
+        )
+
+    def test_a_review_suggests_with_who_and_when(self):
+        self.planted()
+        history.set_reviews(
+            self.db, "acme/app", [list(self.a.key())], "wont_fix", "Legacy module, retired soon.", "alice@example.com"
+        )
+        self.suggest()
+        got = self.dashboard()["src/y.py"]["suggestion"]
+        self.assertEqual((got["source"], got["status"], got["by"]), ("review", "wont_fix", "alice@example.com"))
+        self.assertRegex(got["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertIsNone(got["run"])
+
+    def test_suggestions_are_for_the_latest_trend_run(self):
+        self.planted()  # the newest run is a pull request's, and only it has `c`
+        history.set_reviews(
+            self.db, "acme/app", [list(self.a.key())], "false_positive", "Input is a constant.", "alice@example.com"
+        )
+        self.suggest()
+        self.assertEqual(self.stored(), {"src/y.py": "src/x.py"})  # b is in the scheduled run; c is not
+
+    def test_the_decided_and_untriaged_sets_are_bounded(self):
+        history.set_reviews(
+            self.db, "acme/app", [list(self.a.key())], "false_positive", "Input is a constant.", "alice@example.com"
+        )
+        history.set_reviews(
+            self.db, "acme/app", [list(self.b.key())], "accepted_risk", "Behind the admin login.", "bob@example.com"
+        )
+        self.conn.execute("UPDATE finding_reviews SET updated_at = '2026-01-01T00:00:00Z' WHERE path = 'src/x.py'")
+        self.conn.commit()
+        record(self.conn, self.dir, "acme/app", "c" * 40, 29, [self.a, self.b, self.c])
+        with mock.patch.object(embeddings, "MAX_DECIDED", 1):
+            self.suggest()
+        self.assertEqual(self.stored(), {"src/n.py": "src/y.py"})  # only the most recently decided is compared
+        with mock.patch.object(embeddings, "MAX_SUGGESTED", 0):
+            self.assertEqual(self.suggest(), 0)
+
+    def test_groups_version_follows_embeddings_and_reviews(self):
+        from shoalscan.dashboard.data import Data
+
+        def version():
+            data = Data(history.open_read_only(self.db))
+            try:
+                repo_id = data.repo_id("acme/app")
+                return data.groups_version(repo_id, data.resolve_run(repo_id, None))
+            finally:
+                data.conn.close()
+
+        before = version()
+        self.embed()
+        embedded = version()
+        self.assertNotEqual(before, embedded)
+        self.assertEqual(version(), embedded)
+        history.set_reviews(self.db, "acme/app", [list(self.a.key())], "open", "Looked at it, still open.", "me")
+        self.assertNotEqual(version(), embedded)

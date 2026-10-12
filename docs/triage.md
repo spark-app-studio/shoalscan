@@ -71,12 +71,14 @@ shoalscan triage suggest-similar 3f2a1b4c --repo-name owner/project
 
 `triage embed` reads the repository's findings from the history database and stores one vector per finding. Only findings that are new, or whose message changed, are sent again. `shoalscan record --embed` does the same right after recording a run; if Ollama is not running or the model is not pulled, `record` prints a warning and still records the run.
 
-`triage suggest-similar` takes a finding's fingerprint (the whole of it, or its first 8 characters or more) and lists the three findings most like it, at a cosine similarity of 0.85 or more. Each comes with what was decided about it: its dashboard review (with who and when) or its baseline entry's issue and reason. Use it to apply one decision to a whole group, still finding by finding:
+`triage suggest-similar` takes a finding's fingerprint (the whole of it, or its first 8 characters or more) and lists the three findings most like it, at a cosine similarity of 0.85 or more. Each comes with what was decided about it and where that decision comes from: its dashboard review (with who and when), or its baseline entry's issue and reason as the newest scheduled run that holds the finding recorded them (with the run, the commit and the day). A pull-request run's baseline never counts as a decision: it is the change under review, not yet accepted. Paths, rules and descriptions are printed on one line each, with control characters and bidirectional formatting characters removed. Use the list to apply one decision to a whole group, still finding by finding:
 
 ```text
 Findings like community.python.lang.security.audit.dangerous-subprocess-use-audit in src/shoalscan/gitref.py (61da0a83d820), similarity at least 0.85:
   0.995  ERROR   src/shoalscan/install.py:131  community.python.lang.security.audit.dangerous-subprocess-use-audit
          reviewed false_positive by alice on 2026-10-02: Fixed argument list, no shell.
+  0.981  ERROR   src/shoalscan/scan.py:88  community.python.lang.security.audit.dangerous-subprocess-use-audit
+         baselined (#41) in scheduled run 212 at 3f2a1b4c5d6e on 2026-10-01: Accepted: pinned binary, fixed arguments.
 ```
 
 | Option | Meaning |
@@ -92,11 +94,15 @@ The dashboard shows the same list under **Similar findings** on each finding's r
 
 ### Suggestions on the Findings page
 
-After embedding, `triage embed` (and `record --embed`) also works out a suggestion for each untriaged finding of the latest run: the most similar finding that has a decision, if it is at least as alike as `--threshold` (0.85 by default). Untriaged means no dashboard review and no baseline entry. Only decisions that hold for a pattern make suggestions: false positive, accepted risk and won't fix, from a dashboard review or from a baseline reason that starts with "False positive:" or "Accepted:". "Fixed" never does, because a fix is about one place in the code.
+After embedding, `triage embed` (and `record --embed`) also works out a suggestion for each untriaged finding of the latest trend run (the newest scheduled run, the one the dashboard's trends end with; for a repository without scheduled runs, the newest run): the most similar finding that has a decision, if it is at least as alike as `--threshold` (0.85 by default). Untriaged means no dashboard review and no baseline entry. Only decisions that hold for a pattern make suggestions: false positive, accepted risk and won't fix, from a dashboard review or from a baseline reason that starts with "False positive:" or "Accepted:". "Fixed" never does, because a fix is about one place in the code.
 
-The Findings page shows it in the **Suggestion** column, such as *False positive? 0.97*; it links to the similar finding, and its tooltip gives that finding's decision and description. The status filter **Untriaged, with a suggestion** lists them all.
+Decisions come only from places a reviewer has accepted: dashboard reviews, which are made by a signed-in person and audited, and the baseline as a **scheduled run** of the default branch recorded it. A pull-request run's baseline is part of the change under review, so a reason written there never becomes a suggestion, on the dashboard or in `suggest-similar`, even after the run is recorded.
 
-To act on suggestions, select findings that share one and choose **Use the suggestion**. It fills in the bulk review form, with the status and a description that names the similar finding and its decision; check and edit them, then **Apply**. Nothing changes until you do, and the review is recorded under your name like any other.
+To keep the work bounded, the comparison uses at most the 1,000 most recently decided findings, and at most 5,000 untriaged findings of the run, the most important first (by severity, then path). Similarity is a dot product of the stored unit vectors, computed in plain Python.
+
+The Findings page shows it in the **Suggestion** column, such as *False positive? 0.97*; it links to the similar finding, and its tooltip gives that finding's decision, where the decision comes from (a review by whom and when, or the baseline of scheduled run N at commit C), and its description. The status filter **Untriaged, with a suggestion** lists them all.
+
+To act on suggestions, select findings that share one and choose **Use the suggestion**. It sets the status in the bulk review form and shows the similar finding's reason, read-only and with its provenance, for reference. It never copies that reason into your review: write your own description of why the status fits these findings (10 to 2000 characters, as for any review), then **Apply**. Nothing changes until you do, and every finding reviewed gets its own entry in its history, under your name, like any other review. `triage export` then carries your words, not the similar finding's, into the baseline.
 
 The dashboard always shows the similar finding's decision as it is now, so a later change to it shows at once; which finding is the most similar is worked out again at the next `triage embed`.
 
@@ -104,7 +110,7 @@ The dashboard always shows the similar finding's decision as it is now, so a lat
 
 Many untriaged findings are the same problem in different places. The **Groups** page (from the Overview's **Similar findings** panel) puts the latest trend run's untriaged findings into groups that are at least 85% alike, or 80%, 90% or 95% if you choose. The most important finding not yet in a group leads the next one and takes every finding that alike to it, so a group never drifts through a chain of findings that are each only a little like the next. Groups of two or more are listed, largest first, each with its rules, severities, components, any suggestions its findings have, and its first ten findings.
 
-**Review these together** opens the Findings page filtered to that group. Select them all, check that one decision fits every one, and apply it with the bulk review (or **Use the suggestion**). Groups are worked out again each time from the stored vectors and the reviews as they are now, so reviewed findings leave their group. The dashboard never calls Ollama: findings without an embedding are left out until the next `triage embed`, and at most the first 500 untriaged findings, by severity, are grouped.
+**Review these together** opens the Findings page filtered to that group. Select them all, check that one decision fits every one, and apply it with the bulk review (or **Use the suggestion**). Groups are worked out from the stored vectors and the reviews as they are now, so reviewed findings leave their group. The server keeps each run's groups for each similarity it was asked for until the runs, the run's embeddings or the repository's reviews change, so opening a group again, or its findings, does not compare the vectors again. The dashboard never calls Ollama: findings without an embedding are left out until the next `triage embed`, and at most the first 500 untriaged findings, by severity, are grouped.
 
 ### The Similar findings panel
 
@@ -113,7 +119,7 @@ The Overview's **Similar findings** panel says how much of the latest trend run 
 What is embedded and where it goes:
 
 - **The finding's text, never its code:** the tool, the rule id, the component, the path and the message.
-- **Only to Ollama on this machine.** The host must be `127.0.0.1`, `::1` or `localhost`, proxy settings are ignored, and the host is a command-line setting. It is never read from `.shoalscan.toml`, because that file belongs to the scanned repository, which must not be able to send its findings anywhere.
+- **Only to Ollama on this machine.** The host must be `127.0.0.1`, `::1` or `localhost`, proxy settings are ignored, a redirect is refused rather than followed, an answer larger than a batch can need (about 26 MiB) is refused, and the host is a command-line setting. It is never read from `.shoalscan.toml`, because that file belongs to the scanned repository, which must not be able to send its findings anywhere.
 - **Never during `scan` or `check`.** Similarity is advice for triage; it cannot change what blocks CI.
 
 Vectors are stored as packed float32 in the `finding_embeddings` table of the history database (schema version 12), and go when their finding's identity is pruned from the history. Similarity is computed in plain Python, so there are no new dependencies.

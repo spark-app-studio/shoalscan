@@ -12,7 +12,7 @@ Open the finding from the Findings table (the Review link), or select several fi
 
 ## Descriptions and timestamps
 
-Every change needs a description of 10 to 2000 characters, and is kept in the finding's history with who made it, when (in UTC) and on which run. When a finding enters a resolved status (false positive, accepted risk, won't fix, fixed or verified fixed), the time is stored; going back to open or regression clears it. When a finding moves between resolved statuses, its resolution time stays the time it was first resolved. The dashboard shows times in your local time, with the exact UTC time on hover.
+Every change needs a description of 10 to 2000 characters (control characters and bidirectional formatting characters are replaced with U+FFFD and do not count), and is kept in the finding's history with who made it, when (in UTC) and on which run. When a finding enters a resolved status (false positive, accepted risk, won't fix, fixed or verified fixed), the time is stored; going back to open or regression clears it. When a finding moves between resolved statuses, its resolution time stays the time it was first resolved. The dashboard shows times in your local time, with the exact UTC time on hover.
 
 ## Automatic verification and regressions
 
@@ -28,7 +28,11 @@ A finding that the baseline accepts shows its baseline entry's reason and issue,
 
 ## Similar findings
 
-The review page of a finding lists the findings most like it, with the decision made about each, when the repository's findings have been embedded with a local model ([Similar findings](triage.md#similar-findings-with-a-local-embedding-model)). It is a hint for triage, never a decision. The Findings page also shows a suggestion for each untriaged finding and can fill in a bulk review from it ([Suggestions on the Findings page](triage.md#suggestions-on-the-findings-page)).
+The review page of a finding lists the findings most like it, with the decision made about each and where it comes from, when the repository's findings have been embedded with a local model ([Similar findings](triage.md#similar-findings-with-a-local-embedding-model)). It is a hint for triage, never a decision. The Findings page also shows a suggestion for each untriaged finding, and **Use the suggestion** sets the bulk review's status from it ([Suggestions on the Findings page](triage.md#suggestions-on-the-findings-page)).
+
+A decision counts only when it comes from a dashboard review or from the baseline of a **scheduled run**. A reason in a pull request's baseline is part of the change under review, so it never suggests a status for other findings. Each suggestion says where its decision comes from: a review, by whom and when, or the baseline of a scheduled run, with the run, the commit and the day.
+
+The similar finding's reason is shown for reference only. **Use the suggestion** never copies it into the description: you write your own, of 10 characters or more, and the review is recorded for each finding with your name, as any review is. This keeps every review, and every baseline entry that `triage export` makes from it, in the words of the person who checked it.
 
 ## Carrying reviews into the baseline: `triage export`
 

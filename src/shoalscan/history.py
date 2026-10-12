@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from shoalscan import markdown as md
 from shoalscan.check import SUMMARY_PREFIX
 from shoalscan.errors import SetupError
 from shoalscan.findings import Finding, load_findings
@@ -412,17 +413,21 @@ def parse_timestamp(value: str | None) -> str:
 
 
 def _text(value: str, limit: int) -> str:
-    # Control characters other than newline and tab are dropped; the dashboard
-    # escapes everything anyway, this only keeps the stored data tidy.
-    cleaned = "".join(c for c in value if c >= " " or c in "\n\t")
+    # C0 control characters other than newline and tab are dropped; DEL, C1
+    # controls and bidirectional formatting characters become U+FFFD, so that
+    # text read on the dashboard or in a terminal shows they were there and
+    # cannot reorder what is around them. The dashboard escapes everything
+    # anyway; this keeps the stored data tidy.
+    cleaned = "".join("\ufffd" if md.is_format_control(c) else c for c in value if c >= " " or c in "\n\t")
     return cleaned[:limit]
 
 
 def _label(value: str, limit: int) -> str:
     """A rule id or component name: a single line of text. Control characters
-    (tabs and newlines included) become U+FFFD, so they can never break a
-    link or a page on the dashboard."""
-    return "".join("\ufffd" if c < " " or c == "\x7f" else c for c in value)[:limit]
+    (tabs and newlines included, and C1 controls) and bidirectional formatting
+    characters become U+FFFD, so they can never break a link or a page on the
+    dashboard."""
+    return "".join("\ufffd" if c < " " or md.is_format_control(c) else c for c in value)[:limit]
 
 
 @dataclass(frozen=True)
@@ -1006,7 +1011,7 @@ def clean_description(value: object) -> str:
     than newlines and tabs are replaced, never silently dropped."""
     if not isinstance(value, str):
         raise SetupError(f"a description of {MIN_DESCRIPTION} to {MAX_DESCRIPTION} characters is required")
-    text = "".join("\ufffd" if (c < " " and c not in "\n\t") or c == "\x7f" else c for c in value).strip()
+    text = "".join("\ufffd" if (c < " " and c not in "\n\t") or md.is_format_control(c) else c for c in value).strip()
     # Only visible characters count toward the minimum: not spaces, not replaced control characters.
     visible = sum(1 for c in text if not c.isspace() and c != "\ufffd")
     if visible < MIN_DESCRIPTION or len(text) > MAX_DESCRIPTION:

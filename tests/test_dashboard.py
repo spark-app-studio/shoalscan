@@ -675,6 +675,49 @@ class DashboardServerTests(unittest.TestCase):
         reviews = self.get_json("/api/overview?repo=acme/app", cookie)["reviews"]
         self.assertEqual(set(reviews), {"run", "untriaged_blocking", "regressions"})
 
+    def test_a_bulk_review_needs_typed_text_and_is_audited(self):
+        cookie = self.session()
+        csrf = self.get_json("/api/session", cookie)["csrf"]
+        keys = [f["key"] for f in self.get_json("/api/findings?repo=acme/other", cookie)["findings"]]
+        bulk = {"repo": "acme/other", "finding_keys": keys, "status": "wont_fix"}
+        for description in ("", "          ", "\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e"):
+            with self.subTest(description=description):
+                self.assertEqual(self.post_json({**bulk, "description": description}, cookie, csrf)[0], 400)
+        status, body = self.post_json({**bulk, "description": "Retired service, removed next sprint."}, cookie, csrf)
+        self.assertEqual((status, body["reviewed"]), (200, len(keys)))
+        for key in keys:
+            q = urlencode({"repo": "acme/other", "finding_key": json.dumps(key)})
+            event = self.get_json(f"/api/review/history?{q}", cookie)["history"][0]
+            self.assertEqual(
+                (event["who"], event["to_status"], event["description"]),
+                (self.ADMIN, "wont_fix", "Retired service, removed next sprint."),
+            )
+
+    def test_groups_are_cached(self):
+        from shoalscan.dashboard.data import Data
+
+        cookie = self.session()
+        calls = []
+        original = Data.group_members
+
+        def counting(self_, *args, **kw):
+            calls.append(args)
+            return original(self_, *args, **kw)
+
+        Data.group_members = counting
+        try:
+            first = self.get_json("/api/groups?repo=acme/app&threshold=0.9137", cookie)
+            again = self.get_json("/api/groups?repo=acme/app&threshold=0.9137", cookie)
+            group = json.dumps(["opengrep", "community.python.eval", "src/d.py", "dddd:0"])
+            self.get_json(
+                f"/api/findings?{urlencode({'repo': 'acme/app', 'group': group, 'threshold': '0.9137'})}", cookie
+            )
+            self.get_json("/api/groups?repo=acme/app&threshold=0.9213", cookie)
+        finally:
+            Data.group_members = original
+        self.assertEqual(first, again)
+        self.assertEqual(len(calls), 2, "the same run and threshold are grouped once; another threshold again")
+
     def test_a_malicious_message_is_only_ever_json(self):
         cookie = self.session()
         status, headers, body = self.request("GET", "/api/findings?repo=acme/app&severity=INFO", cookie=cookie)

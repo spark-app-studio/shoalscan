@@ -6,6 +6,7 @@ import json
 from collections import Counter
 from dataclasses import dataclass, field
 
+from shoalscan import markdown as md
 from shoalscan.baseline import Entry
 from shoalscan.config import component_for, under_prefix
 from shoalscan.excludes import ExcludeMatcher, FileGlobMatcher
@@ -293,6 +294,10 @@ def summary_line(result: CheckResult) -> str:
 
 
 def render_report(result: CheckResult, max_items: int = 200) -> str:
+    """The check's report for a terminal or a CI log. Text from the scanned repository (paths, rules,
+    messages, issues) is folded onto one line with control and bidirectional characters removed, so it
+    can neither add lines that look like Shoalscan's own nor send escape sequences to the terminal."""
+    t = md.one_line
     s = summary(result)
     sev = s["by_severity"]
     no_file = "" if result.baseline_found else " (no baseline file)"
@@ -318,10 +323,10 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         out.append("")
         out.append(f"{title} ({len(items)}):")
         for f in items[:max_items]:
-            out.append(f"  {f.severity:<7} {f.path}:{f.line}  {f.rule}")
+            out.append(f"  {f.severity:<7} {t(f.path)}:{f.line}  {t(f.rule)}")
             if f.message:
-                out.append(f"          {f.message.splitlines()[0][:200]}")
-            out.append(f"          fingerprint {f.fingerprint}")
+                out.append(f"          {t(f.message.splitlines()[0], 200)}")
+            out.append(f"          fingerprint {t(f.fingerprint)}")
         if len(items) > max_items:
             out.append(f"  ... and {len(items) - max_items} more (see findings.json)")
 
@@ -329,7 +334,7 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
     if result.non_blocking_paths:
         out.insert(
             5,
-            f"  Non-blocking paths: {', '.join(result.non_blocking_paths)}"
+            f"  Non-blocking paths: {t(', '.join(result.non_blocking_paths))}"
             f" ({sum(1 for f in result.new if result.in_non_blocking_path(f))} new findings there)",
         )
     finding_lines(
@@ -341,13 +346,13 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         out.append("")
         out.append(f"Stale baseline entries ({len(result.stale)}): these no longer match a finding; remove them.")
         for e in result.stale[:max_items]:
-            out.append(f"  {e.path}  {e.rule}  fingerprint {e.fingerprint}  issue {e.issue}")
+            out.append(f"  {t(e.path)}  {t(e.rule)}  fingerprint {t(e.fingerprint)}  issue {t(e.issue)}")
     skipped, errored = result.unscanned.get("skipped", []), result.unscanned.get("errors", [])
     if skipped or errored:
         out.append("")
         out.append(f"Files not fully scanned: {len(skipped)} skipped, {len(errored)} with scanner errors.")
         for e in (skipped + errored)[:50]:
-            out.append(f"  {e['path']}  ({e.get('reason') or e.get('type')})")
+            out.append(f"  {t(e['path'])}  ({t(e.get('reason') or e.get('type'))})")
         if len(skipped) + len(errored) > 50:
             out.append(f"  ... and {len(skipped) + len(errored) - 50} more (see findings.json)")
     if result.changed_unscanned:
@@ -357,8 +362,8 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
             "Make them scannable (smaller, parseable) or exclude them in the configuration on the base branch."
         )
         for e in result.changed_unscanned[:max_items]:
-            why = f"; {e['why']}" if e.get("why") else ""
-            out.append(f"  {e['path']}  ({e.get('reason') or e.get('type')}{why})")
+            why = f"; {t(e['why'])}" if e.get("why") else ""
+            out.append(f"  {t(e['path'])}  ({t(e.get('reason') or e.get('type'))}{why})")
     if result.excluded_changed:
         bar = "!" * 78
         out.append("")
@@ -368,7 +373,7 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         )
         out.append("They were not checked. Make sure that is intended.")
         for p in result.excluded_changed[:max_items]:
-            out.append(f"  {p}")
+            out.append(f"  {t(p)}")
         out.append(bar)
     if result.partial_warnings:
         out.append("")
@@ -377,7 +382,7 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
             f"({len(result.partial_warnings)}):"
         )
         for e in result.partial_warnings[:max_items]:
-            out.append(f"  {e['path']}  unparsed lines {e.get('spans')}")
+            out.append(f"  {t(e['path'])}  unparsed lines {t(e.get('spans'))}")
     if result.partial_warn_only:
         bar = "!" * 78
         out.append("")
@@ -389,7 +394,7 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         for e in result.partial_warn_only[:max_items]:
             overlap = "yes" if e["overlaps_added_lines"] else "no"
             out.append(
-                f"  PARTIALLY PARSED (warn-only by policy): {e['path']} \u2014 {e['unparsed_percent']}% unparsed, "
+                f"  PARTIALLY PARSED (warn-only by policy): {t(e['path'])} \u2014 {e['unparsed_percent']}% unparsed, "
                 f"overlaps added lines: {overlap}"
             )
         out.append(bar)
@@ -403,8 +408,8 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         )
         for e in result.syntax_warn_only[:max_items]:
             out.append(
-                f"  SYNTAX ERROR (warn-only by policy): {e['path']} \u2014 {e.get('type')}; the whole file could not "
-                "be parsed"
+                f"  SYNTAX ERROR (warn-only by policy): {t(e['path'])} \u2014 {t(e.get('type'))}; the whole file "
+                "could not be parsed"
             )
         out.append(bar)
     if result.moves:
@@ -413,7 +418,7 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         out.append(bar)
         out.append("BASELINE MOVES: git reports these renames, and every baseline entry moved unchanged:")
         for m in result.moves:
-            out.append(f"  {m['from']}  ->  {m['to']}  ({m['entries']} entries)")
+            out.append(f"  {t(m['from'])}  ->  {t(m['to'])}  ({m['entries']} entries)")
         out.append(bar)
     if result.baseline_additions:
         out.append("")
@@ -423,7 +428,7 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
             "reviewed change on the base branch."
         )
         for e in result.baseline_additions[:max_items]:
-            out.append(f"  {e.path}  {e.rule}  fingerprint {e.fingerprint}  issue {e.issue}")
+            out.append(f"  {t(e.path)}  {t(e.rule)}  fingerprint {t(e.fingerprint)}  issue {t(e.issue)}")
     if not result.passed:
         out.append("")
         out.append(

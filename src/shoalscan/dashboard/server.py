@@ -440,6 +440,12 @@ class App:
     def overview(self, data: Data, repo_id: int) -> dict:
         return self._cached(("overview", repo_id, data.version(repo_id)), lambda: data.overview(repo_id))
 
+    def group_members(self, data: Data, repo_id: int, run_id: int, threshold: float) -> tuple:
+        """A run's groups of similar untriaged findings. Grouping compares hundreds of vectors in Python, so
+        the result is kept until the runs, the run's embeddings or the repository's reviews change."""
+        key = ("groups", repo_id, run_id, threshold, data.version(repo_id), data.groups_version(repo_id, run_id))
+        return self._cached(key, lambda: data.group_members(repo_id, run_id, threshold))
+
     def change_keys(self, data: Data, repo_id: int, week: str, change: str) -> list:
         return self._cached(
             ("changes", repo_id, data.version(repo_id), week, change), lambda: data.change_keys(repo_id, week, change)
@@ -1178,7 +1184,9 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("kind")
                 return self.send_json(200, {"repo": repo, **data.files(run_id, kind or None, limit, offset)})
             if path == "/api/groups":
-                return self.send_json(200, {"repo": repo, **data.groups(repo_id, run_id, _threshold(query))})
+                threshold = _threshold(query)
+                grouped = self.app.group_members(data, repo_id, run_id, threshold)
+                return self.send_json(200, {"repo": repo, **data.groups(repo_id, run_id, threshold, grouped=grouped)})
             if path in ("/api/findings", "/api/rule"):
                 if path == "/api/rule":
                     rule = _one(query, "rule")
@@ -1207,7 +1215,13 @@ class Handler(BaseHTTPRequestHandler):
                     baselined=_flag(query, "baselined"),
                     sort=_sort(query),
                     review=_review_filter(query),
-                    keys=data.group_keys(repo_id, run_id, _finding_key(query, "group"), _threshold(query))
+                    keys=data.group_keys(
+                        repo_id,
+                        run_id,
+                        _finding_key(query, "group"),
+                        _threshold(query),
+                        grouped=self.app.group_members(data, repo_id, run_id, _threshold(query)),
+                    )
                     if _one(query, "group", 5000)
                     else None,
                     limit=limit,

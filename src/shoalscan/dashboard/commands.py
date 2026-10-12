@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from shoalscan import embeddings, history
+from shoalscan import markdown as md
 from shoalscan.check import CHECK_JSON
 from shoalscan.errors import SetupError
 from shoalscan.locations import default_out_dir
@@ -178,23 +179,29 @@ def cmd_triage_suggest_similar(args: argparse.Namespace) -> int:
             json.dumps({"finding": key, "model": args.model, "threshold": args.threshold, "similar": found}, indent=2)
         )
         return 0
-    print(f"Findings like {key[1]} in {key[2]} ({key[3][:12]}), similarity at least {args.threshold}:")
+    # Paths, rules and descriptions come from scanned repositories and reviews: one line each, without
+    # control or bidirectional characters, so they cannot add lines or reach the terminal as escape sequences.
+    t = md.one_line
+    print(f"Findings like {t(key[1])} in {t(key[2])} ({t(key[3][:12])}), similarity at least {args.threshold}:")
     if not found:
         print("  none")
     for f in found:
-        where = f"{f['key'][2]}:{f['line']}" if f["line"] else f["key"][2]
-        repo = "" if f["repo"] == args.repo_name else f" [{f['repo']}]"
-        print(f"  {f['score']:.3f}  {f['severity'] or '-':<7} {where}  {f['key'][1]}{repo}")
+        where = t(f"{f['key'][2]}:{f['line']}" if f["line"] else f["key"][2])
+        repo = "" if f["repo"] == args.repo_name else f" [{t(f['repo'])}]"
+        print(f"  {f['score']:.3f}  {t(f['severity'] or '-'):<7} {where}  {t(f['key'][1])}{repo}")
         d = f["decision"]
         if d is None:
             print("         no decision yet")
         elif d["source"] == "review":
             print(
-                f"         reviewed {d['status']} by {d['by']} on {d['at'][:10]}: "
-                f"{' '.join(d['description'].split())[:200]}"
+                f"         reviewed {t(d['status'])} by {t(d['by'])} on {t((d['at'] or '')[:10])}: "
+                f"{t(d['description'], 200)}"
             )
         else:
-            print(f"         baselined ({d['issue']}): {' '.join(d['description'].split())[:200]}")
+            print(
+                f"         baselined ({t(d['issue'])}) in scheduled run {d['run']} at {t((d['commit'] or '')[:12])} "
+                f"on {t((d['at'] or '')[:10])}: {t(d['description'], 200)}"
+            )
     return 0
 
 
@@ -214,7 +221,8 @@ def _embedding_options(p: argparse.ArgumentParser, host: bool = True) -> None:
 
 def _describe(run: dict) -> str:
     return (
-        f"run {run['id']}: {run['kind']} {run['ref']} at {run['commit'][:12]}, scanned {run['scanned_at']}, "
+        f"run {run['id']}: {run['kind']} {md.one_line(run['ref'], 200)} at {run['commit'][:12]}, "
+        f"scanned {run['scanned_at']}, "
         f"{run['outcome']}, {run['findings']} findings"
     )
 
@@ -251,11 +259,13 @@ def cmd_triage_export(args: argparse.Namespace) -> int:
     entries = []
     suppressions = []
     for tool, rule, path, fingerprint, status, description, who, resolved_at, line in rows:
-        summary = " ".join(description.split())
+        summary = md.one_line(description)
         reason = f"{EXPORT_LABELS[status]}: {summary} (reviewed in dashboard by {who} on {resolved_at})"
         entries.append(Entry(tool, rule, path, fingerprint, issue, reason))
         # The path is quoted, so no character in a file name (a newline, say) can end the comment.
-        suppressions.append(f"# {json.dumps(path)} line {line or '?'}:  # nosemgrep: {rule} {issue} {summary[:80]}")
+        suppressions.append(
+            f"# {json.dumps(path)} line {line or '?'}:  # nosemgrep: {md.one_line(rule)} {issue} {summary[:80]}"
+        )
     print(render_baseline(entries), end="")
     if args.suppressions and suppressions:
         print(
@@ -286,7 +296,7 @@ def cmd_history_list_runs(args: argparse.Namespace) -> int:
     for r in runs:
         print(
             f"{r['id']:>6}  {r['scanned_at']:<20}  {r['kind']:<9}  {r['commit'][:12]:<12}  {r['outcome'] or '-':<10}  "
-            f"{r['findings']:>8}  {r['ref']}"
+            f"{r['findings']:>8}  {md.one_line(r['ref'], 200)}"
         )
     return 0
 

@@ -9,6 +9,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from shoalscan import markdown as md
 from shoalscan.errors import SetupError
 from shoalscan.findings import Finding
 
@@ -101,7 +102,7 @@ def toml_string(value: str) -> str:
             out.append("\\n")
         elif ch == "\t":
             out.append("\\t")
-        elif code < 0x20 or code == 0x7F:
+        elif code < 0x20 or md.is_format_control(ch):
             out.append(f"\\u{code:04x}")
         else:
             out.append(ch)

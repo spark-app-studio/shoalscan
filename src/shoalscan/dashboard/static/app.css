@@ -316,6 +316,8 @@ td.actions { white-space: nowrap; }
 .bulk-review { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.6rem 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.9rem; margin-bottom: 0.75rem; }
 .bulk-review label { display: flex; flex-direction: column; gap: 0.2rem; color: var(--text-2); font-size: 0.85rem; flex: 1; min-width: 12rem; }
 .bulk-review textarea { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.3rem; }
+.bulk-reference { flex-basis: 100%; color: var(--text-2); }
+.bulk-reference blockquote { margin: 0.2rem 0 0; padding-left: 0.6rem; border-left: 3px solid var(--border); }
 /* A suggestion is a hint from a similar finding, never a status: lighter, and dashed. */
 .suggestion { color: var(--text-2); font-style: italic; text-decoration: underline dashed; text-underline-offset: 0.2em; white-space: nowrap; }
 /* Sign-in: the button is a link to /oidc/start, styled like a primary button. */
