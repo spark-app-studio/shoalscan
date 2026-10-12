@@ -72,6 +72,28 @@ ENV_ALLOW = (
 )
 _RUN_ID = re.compile(r"\brun (\d+)\b")
 MAX_POLICY_BYTES = 1024 * 1024
+WORK_PREFIX = "shoalscan-scan-"
+OWNER_FILE = ".shoalscan-state-dir"
+
+
+def sweep_stale_work(state_dir: Path) -> int:
+    """Remove work directories an earlier worker of this state directory left behind (killed, say).
+
+    Called with the scan lock held, so no other worker of this state directory is running.
+    """
+    removed = 0
+    owner = str(state_dir.resolve())
+    for path in Path(tempfile.gettempdir()).glob(WORK_PREFIX + "*"):
+        try:
+            if path.is_symlink() or not path.is_dir() or path.stat().st_uid != os.getuid():
+                continue
+            if (path / OWNER_FILE).read_text(encoding="utf-8") != owner:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        removed += 1
+    return removed
 
 
 class ScanTimeout(Exception):  # noqa: N818 - a signal to stop the scan, not an error
@@ -136,10 +158,17 @@ class Job:
         self.who = who
         self.log = log
         self.deadline = time.monotonic() + targets.timeout_seconds
-        self.work = Path(tempfile.mkdtemp(prefix="shoalscan-scan-"))
+        self.work = Path(tempfile.mkdtemp(prefix=WORK_PREFIX))
+        # Which state directory this work belongs to, so a later worker can sweep it if it is left behind.
+        (self.work / OWNER_FILE).write_text(str(state_dir.resolve()), encoding="utf-8")
         self.db = targets.history_db or history.default_db_path()
         self.clone = targets.clone_dir(target)
         self.env = child_env()
+        # The scan's own temporary files (its stage holds Gitleaks's report) live in the work
+        # directory, which is removed on every exit path, even when the scan is killed at the deadline.
+        tmp = self.work / "tmp"
+        tmp.mkdir(mode=0o700)
+        self.env["TMPDIR"] = str(tmp)
         self.logged = 0
         self.log_full = False
 
@@ -435,7 +464,8 @@ class Job:
         # A rescan of an earlier commit keeps that run's time, so it replaces the run where it
         # was and never becomes the newest point of the trend.
         started = self.pinned[2] if self.pinned else history.parse_timestamp(None)
-        code = self.run(self.shoalscan("scan", "--repo", str(src), "--out", str(out), *tools, *config))
+        sandbox = ["--require-network-sandbox"] if self.targets.require_network_sandbox else []
+        code = self.run(self.shoalscan("scan", "--repo", str(src), "--out", str(out), *tools, *config, *sandbox))
         check_txt = self.work / "check.txt"
         if code == 0:
             code = self.run(
@@ -549,6 +579,7 @@ def run_one(
     outcome, run_id, detail = "failed", None, None
     started = history.parse_timestamp(None)
     try:
+        sweep_stale_work(state_dir)
         job = Job(state_dir, targets, target, who, log, pinned)
         conn = history.open_for_write(job.db)
         trigger_id = history.start_trigger(conn, name, who, started, trigger)

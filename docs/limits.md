@@ -25,7 +25,7 @@ Shoalscan lints every Trivy inline ignore comment, and fails a scan when Trivy l
 
 ### The network
 
-Without an operating-system network sandbox (see [Scanner isolation](security-model.md#scanner-isolation)), a scanner is kept off the network by its environment alone: no credentials, no git transport and proxies that go nowhere. A program that ignores proxy variables could still open a connection of its own. Run untrusted scans where the platform cuts the network off.
+Without an operating-system network sandbox (see [Scanner isolation](security-model.md#scanner-isolation)), a scanner is kept off the network by its environment alone: no credentials, no git transport and proxies that go nowhere. That does not cover this machine's own loopback interface, which Go programs reach without a proxy, nor a program that ignores proxy variables. Pass `--require-network-sandbox` (the dashboard's worker does by default), or run untrusted scans where the platform cuts the network off.
 
 ### Fingerprints
 

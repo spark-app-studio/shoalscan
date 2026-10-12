@@ -45,6 +45,7 @@ _MACOS_PROFILE = (
     '(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))'
 )
 _TRUE = next((p for p in ("/usr/bin/true", "/bin/true") if os.path.isfile(p)), "true")
+NO_SANDBOX = "environment only"
 _sandbox: tuple[tuple[str, ...], str] | None = None
 _sandbox_lock = threading.Lock()
 
@@ -124,7 +125,7 @@ def network_sandbox() -> tuple[tuple[str, ...], str]:
         if _sandbox is None:
             found = next(((p, n) for p, n in _candidates() if _works(p)), None)
             if found is None:
-                _sandbox = ((), "environment only")
+                _sandbox = ((), NO_SANDBOX)
                 print(
                     "shoalscan: WARNING: no operating-system network sandbox is available here (sandbox-exec on "
                     "macOS, unshare --net with user namespaces on Linux), so scanners are kept off the network by "

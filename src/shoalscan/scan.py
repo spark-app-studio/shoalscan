@@ -104,6 +104,7 @@ def run_scan(
     rule_root: Path | None = None,
     policy: dict | None = None,
     baseline: Path | None = None,
+    require_network_sandbox: bool = False,
 ) -> ScanResult:
     """Scan `repo`. Repository rule dirs are read under `rule_root` (default: the repo).
 
@@ -115,6 +116,12 @@ def run_scan(
     with that file left out (see `gitref.worktree_state`).
     """
     started = time.monotonic()
+    network = process.network_sandbox()[1]
+    if require_network_sandbox and network == process.NO_SANDBOX:
+        raise SetupError(
+            "a network sandbox is required (--require-network-sandbox, or require_network_sandbox in "
+            "scan_targets.toml) but neither sandbox-exec nor unshare --net works here; nothing was scanned"
+        )
     root = repo.resolve()
     if not root.is_dir():
         raise SetupError(f"repository directory not found: {repo}")
@@ -134,7 +141,11 @@ def run_scan(
         "scanners": {},
         "policy": policy or {"ref": None},
         # How the scanners were kept apart from this machine (see `shoalscan.process`).
-        "isolation": {"home": "empty, one per scanner run", "network": process.network_sandbox()[1]},
+        "isolation": {
+            "home": "empty, one per scanner run",
+            "network": network,
+            "network_sandbox_required": require_network_sandbox,
+        },
         "worktree": worktree_state(root, baseline_binding_path(repo, baseline) if baseline is not None else None),
     }
     unscanned: dict = {"skipped": [], "errors": []}

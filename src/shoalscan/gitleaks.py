@@ -20,6 +20,20 @@ no ignore file. Without one, the tree is scanned in place, and Gitleaks has
 nothing to read. Either way no ignore file a repository writes is ever
 read, by construction rather than by trusting a flag.
 
+On a case-insensitive file system (macOS, by default) Gitleaks opens a
+`.GitleaksIgnore` as `.gitleaksignore`, so every case variant at the top is
+treated as the ignore file, and the view is checked to hold none before
+Gitleaks runs.
+
+The pinned default rules carry allowlists of path names (`node_modules/`,
+`vendor/...`, lock files, `*.pdf`, anything containing "gitleaks.toml",
+...), and a repository chooses its own path names. So Gitleaks runs with a
+configuration derived from the pinned one (see `derive_config`): every
+allowlist that matches on paths, or on the line around a secret, is
+removed, and those that match only the secret itself (stopwords, value
+regexes) are kept. Paths are left out only through `excludes`, which is
+Shoalscan's policy.
+
 Gitleaks skips files over `--max-target-megabytes` without a word, so they
 are listed here as skipped (not fully scanned), like Hadolint's.
 
@@ -63,6 +77,103 @@ FIX = (
 _RULE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]{0,199}$")
 _MASK = "\0secret\0"
 IGNORE_FILE = ".gitleaksignore"
+# A cross-device staging copy (no hard links) of more than this fails the scan.
+MAX_VIEW_COPY_BYTES = 4 * 1024 * 1024 * 1024
+# The keys by which an allowlist matches; one with none left is dropped (Gitleaks refuses it).
+_ALLOWLIST_CHECKS = ("commits", "paths", "regexes", "stopwords")
+
+
+def _is_ignore_name(name: str) -> bool:
+    return name.casefold() == IGNORE_FILE
+
+
+def _value_only(allowlist: dict) -> dict | None:
+    """The part of an allowlist that matches only the secret itself, or None.
+
+    Path lists match names the repository chooses, and a `line` regex target
+    matches text the repository writes next to the secret; with AND, every
+    check must match, so one that needs a path is dropped whole.
+    """
+    if allowlist.get("regexTarget", "secret") == "line":
+        allowlist = {k: v for k, v in allowlist.items() if k not in ("regexes", "regexTarget")}
+    if "paths" in allowlist and str(allowlist.get("condition", "OR")).upper() == "AND":
+        return None
+    kept = {k: v for k, v in allowlist.items() if k != "paths"}
+    return kept if any(kept.get(k) for k in _ALLOWLIST_CHECKS) else None
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        # A JSON string is a valid TOML basic string.
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, list) and all(not isinstance(v, (dict, list)) for v in value):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    raise SetupError(f"the gitleaks configuration has a value Shoalscan cannot rewrite: {str(value)[:100]}")
+
+
+def _is_table_list(value: object) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(v, dict) for v in value)
+
+
+def _toml_table(table: dict, path: list[str], out: list[str]) -> None:
+    for key, value in table.items():
+        if not isinstance(value, dict) and not _is_table_list(value):
+            out.append(f"{json.dumps(key)} = {_toml_value(value)}")
+    for key, value in table.items():
+        sub = [*path, json.dumps(key)]
+        if isinstance(value, dict):
+            out.append(f"\n[{'.'.join(sub)}]")
+            _toml_table(value, sub, out)
+        elif _is_table_list(value):
+            for item in value:
+                out.append(f"\n[[{'.'.join(sub)}]]")
+                _toml_table(item, sub, out)
+
+
+def _strip_allowlists(table: dict) -> dict:
+    table = dict(table)
+    if isinstance(table.get("allowlist"), dict):
+        kept = _value_only(table["allowlist"])
+        if kept is None:
+            del table["allowlist"]
+        else:
+            table["allowlist"] = kept
+    if isinstance(table.get("allowlists"), list):
+        table["allowlists"] = [k for k in (_value_only(a) for a in table["allowlists"]) if k is not None]
+        if not table["allowlists"]:
+            del table["allowlists"]
+    return table
+
+
+def derive_config(data: dict) -> str:
+    """The pinned configuration, without allowlists of paths or of the line around a secret, as TOML text."""
+    data = _strip_allowlists(data)
+    rules = []
+    for rule in data.get("rules") or []:
+        # A rule's own `path` chooses the files it applies to (`.tf`, `.php`); it widens nothing, so it stays.
+        if not isinstance(rule, dict):
+            raise SetupError("the gitleaks configuration has a rule that is not a table")
+        rules.append(_strip_allowlists(rule))
+    data["rules"] = rules
+    out: list[str] = ["# Derived by Shoalscan from the pinned Gitleaks rules: path and line allowlists removed."]
+    _toml_table(data, [], out)
+    text = "\n".join(out) + "\n"
+    if tomllib.loads(text) != data:
+        raise SetupError("the derived gitleaks configuration does not round-trip")
+    return text
+
+
+def write_derived_config(config: Path, dest: Path) -> None:
+    try:
+        with open(config, "rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError, RecursionError) as exc:
+        raise SetupError(f"the gitleaks configuration is unreadable: {exc}") from None
+    dest.write_text(derive_config(data), encoding="utf-8")
 
 
 def rule_name(rule_id: str) -> str:
@@ -93,10 +204,12 @@ def walk(root: Path, excludes: tuple[str, ...], max_bytes: int, view: Path | Non
     Gitleaks never follows links and skips files over `max_bytes`; `.git` and
     excluded paths are left out (their findings are dropped anyway). With
     `view`, every other regular file is hard-linked (or copied) into it at the
-    same relative path, except the top-level `.gitleaksignore` (deeper ones are ordinary files to Gitleaks).
+    same relative path, except the top-level `.gitleaksignore` in any letter case (deeper ones are ordinary
+    files to Gitleaks). Copies (where hard links fail) past MAX_VIEW_COPY_BYTES fail the scan.
     """
     matcher = ExcludeMatcher(list(excludes))
     skipped = []
+    copied = 0
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         rel_dir = Path(dirpath).relative_to(root).as_posix()
         rel_dir = "" if rel_dir == "." else rel_dir
@@ -121,12 +234,17 @@ def walk(root: Path, excludes: tuple[str, ...], max_bytes: int, view: Path | Non
             if st.st_size > max_bytes:
                 skipped.append({"path": rel, "reason": "exceeded_size_limit"})
                 continue
-            if view is None or rel == IGNORE_FILE or st.st_size == 0:
+            if view is None or (not rel_dir and _is_ignore_name(name)) or st.st_size == 0:
                 continue
             target = view / rel
             try:
                 os.link(full, target)
             except OSError:
+                copied += st.st_size
+                if copied > MAX_VIEW_COPY_BYTES:
+                    raise ScanError(
+                        f"the gitleaks staging copy would pass {MAX_VIEW_COPY_BYTES} bytes; exclude large paths"
+                    ) from None
                 shutil.copyfile(full, target, follow_symlinks=False)
     return skipped
 
@@ -312,16 +430,24 @@ def run(
     work = stage / "gitleaks"
     ignore_dir = work / "ignore"
     ignore_dir.mkdir(parents=True)
+    derived = work / "gitleaks.toml"
+    write_derived_config(config, derived)
     max_bytes = max_megabytes(limits) * 1_000_000
-    ignore_file = root / IGNORE_FILE
+    # Every name Gitleaks could open as the ignore file: case variants too, and whatever the file system says.
+    ignore_files = sorted(root / name for name in os.listdir(root) if _is_ignore_name(name))
+    if os.path.lexists(root / IGNORE_FILE) and not ignore_files:
+        ignore_files.append(root / IGNORE_FILE)
     # The targets: (what Gitleaks scans, the view it stands for). See the module docstring.
-    if os.path.lexists(ignore_file):
+    if ignore_files:
         view = work / "view"
         skipped = walk(root, excludes, max_bytes, view)
+        if os.path.lexists(view / IGNORE_FILE) or any(_is_ignore_name(n) for n in os.listdir(view)):
+            raise ScanError("the gitleaks staging view holds an ignore file; nothing was scanned")
         targets: list[tuple[Path, Path | None]] = [(view, view)]
-        if ignore_file.is_file() and not ignore_file.is_symlink() and 0 < ignore_file.stat().st_size <= max_bytes:
-            # A file as the source: Gitleaks looks for "<file>/.gitleaksignore", which cannot exist.
-            targets.append((ignore_file, None))
+        for ignore_file in ignore_files:
+            if ignore_file.is_file() and not ignore_file.is_symlink() and 0 < ignore_file.stat().st_size <= max_bytes:
+                # A file as the source: Gitleaks looks for "<file>/.gitleaksignore", which cannot exist.
+                targets.append((ignore_file, None))
     else:
         skipped = walk(root, excludes, max_bytes)
         targets = [(root, None)]
@@ -332,7 +458,7 @@ def run(
         if remaining <= 0:
             raise ScanError(f"gitleaks timed out after {limits.scan_timeout_seconds}s")
         report_path = work / f"report-{number}.json"
-        cmd = build_command(binary, target, config, ignore_dir, report_path, limits)
+        cmd = build_command(binary, target, derived, ignore_dir, report_path, limits)
         report = execute(cmd, work, report_path, remaining)
         try:
             findings += normalise(report, root, components, excludes, scanned)

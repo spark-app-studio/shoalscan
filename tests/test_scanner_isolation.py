@@ -19,7 +19,7 @@ from test_lock_and_install import PLAT, Assets, sha, tool_tarball
 
 from shoalscan import install as inst
 from shoalscan import process
-from shoalscan.errors import ScanError, VerificationError
+from shoalscan.errors import ScanError, SetupError, VerificationError
 from shoalscan.lockfile import parse_lock
 from shoalscan.scan import PinnedBinary
 
@@ -155,6 +155,41 @@ class SandboxTests(unittest.TestCase):
             )
             _, out, _ = process.run_scanner("t", [str(script(Path(tmp), body))], Path(tmp), 30)
         self.assertTrue(out.startswith(b"refused"), out)
+
+
+class RequireSandboxTests(unittest.TestCase):
+    def test_a_required_sandbox_that_is_missing_fails_the_scan_before_anything_runs(self):
+        from shoalscan.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, out = Path(tmp) / "repo", Path(tmp) / "out"
+            repo.mkdir()
+            (repo / ".shoalscan.toml").write_text('scanners = ["gitleaks"]\n')
+            err = io.StringIO()
+            with (
+                mock.patch.object(process, "network_sandbox", return_value=((), process.NO_SANDBOX)),
+                mock.patch.object(process, "run_scanner", side_effect=AssertionError("a scanner ran")),
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(err),
+            ):
+                code = main(["scan", "--repo", str(repo), "--out", str(out), "--require-network-sandbox"])
+        self.assertEqual(code, 2)
+        self.assertIn("a network sandbox is required", err.getvalue())
+        self.assertFalse((out / "findings.json").exists())
+
+    def test_targets_require_it_unless_turned_off(self):
+        from shoalscan.dashboard import scanning
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            path = state / scanning.TARGETS_FILE
+            for body, expected in (("", True), ("require_network_sandbox = false\n", False)):
+                path.write_text(body, encoding="utf-8")
+                path.chmod(0o600)
+                self.assertIs(scanning.load_targets(state).require_network_sandbox, expected)
+            path.write_text('require_network_sandbox = "no"\n', encoding="utf-8")
+            with self.assertRaises(SetupError):
+                scanning.load_targets(state)
 
 
 class MemberTests(unittest.TestCase):

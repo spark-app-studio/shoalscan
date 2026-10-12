@@ -171,12 +171,28 @@ def _do_scan(args: argparse.Namespace):
             _print_adoption(policy)
         # Without a policy ref, `check` may accept an edit to the baseline it reads.
         baseline = _baseline_path(args, policy.config) if policy.ref is None else None
-        result = run_scan(Path(args.repo), policy.config, tools, out, policy=policy.record(), baseline=baseline)
+        result = run_scan(
+            Path(args.repo),
+            policy.config,
+            tools,
+            out,
+            policy=policy.record(),
+            baseline=baseline,
+            require_network_sandbox=getattr(args, "require_network_sandbox", False),
+        )
         return result, policy.config
     # The repository's own rules also come from the policy ref.
     with tempfile.TemporaryDirectory(prefix="shoalscan-policy-rules-") as tmp:
         gitref.archive_dirs(Path(args.repo), policy.commit, list(policy.config.opengrep.rule_dirs), Path(tmp))
-        result = run_scan(Path(args.repo), policy.config, tools, out, rule_root=Path(tmp), policy=policy.record())
+        result = run_scan(
+            Path(args.repo),
+            policy.config,
+            tools,
+            out,
+            rule_root=Path(tmp),
+            policy=policy.record(),
+            require_network_sandbox=getattr(args, "require_network_sandbox", False),
+        )
     return result, policy.config
 
 
@@ -415,6 +431,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("scan", help="run the scanners and write findings.json and findings.sarif")
     _scan_options(p)
+    p.add_argument(
+        "--require-network-sandbox",
+        action="store_true",
+        help="fail unless the scanners can run in an operating-system network sandbox (sandbox-exec or unshare --net)",
+    )
     _policy_option(p)
     p.set_defaults(func=cmd_scan)
 

@@ -18,6 +18,7 @@ timeout_minutes = 30         # a scan that runs longer is stopped and records no
 max_scans_per_hour = 6       # for all repositories together
 min_free_mb = 2048           # refuse to start a scan with less free disk space than this
 max_clone_mb = 2048          # a clone or fetch that grows past this is stopped and cleaned up
+require_network_sandbox = true  # the default: a scan fails unless the scanners run without network access
 
 [[target]]
 name = "owner/project"                               # the name on the dashboard
@@ -52,6 +53,10 @@ Each target has exactly one source:
 - **`clone`**, an absolute path to a clone, set only by editing the file. Shoalscan fetches it with your own git setup, as `examples/scheduled-scan.sh` does.
 
 A repository added on the Configuration page gets its policy and baseline in `targets/<name>/` in the state directory: `shoalscan.toml` is the policy text from the page, and `baseline.toml` is its baseline.
+
+### The network sandbox
+
+The worker passes `--require-network-sandbox` to every scan, so a scan fails, and records nothing, unless the scanners can run in an operating-system network sandbox: `sandbox-exec` on macOS, or `unshare --net` with unprivileged user namespaces on Linux ([Scanner isolation](security-model.md#scanner-isolation)). A dashboard runs on a long-lived machine, often next to other services on its loopback interface, so a scanner that fetches something a repository names (Trivy fetches remote Terraform modules) must not reach them. To scan on a machine without a sandbox, set `require_network_sandbox = false` at the top of `scan_targets.toml`; scans then rely on the scanner environment alone, and `findings.json` records that under `isolation`.
 
 ### Which policy a scan uses
 

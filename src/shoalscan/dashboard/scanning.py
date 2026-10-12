@@ -231,6 +231,8 @@ class Targets:
     max_scans_per_hour: int = 6
     min_free_mb: int = 2048
     max_clone_mb: int = 2048
+    # Scans fail unless the scanners can run without network access (see shoalscan.process).
+    require_network_sandbox: bool = True
     mirrors: dict[str, Path] = field(default_factory=dict)
     allowed_hosts: tuple[str, ...] = DEFAULT_HOSTS
     state_dir: Path = Path(".")
@@ -479,6 +481,7 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
         "max_scans_per_hour",
         "min_free_mb",
         "max_clone_mb",
+        "require_network_sandbox",
     }
     unknown = set(data) - top
     if unknown:
@@ -557,6 +560,7 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
         max_scans_per_hour=_int(data.get("max_scans_per_hour", 6), "max_scans_per_hour", 1, 60),
         min_free_mb=_int(data.get("min_free_mb", 2048), "min_free_mb", 0, 10_000_000),
         max_clone_mb=_int(data.get("max_clone_mb", 2048), "max_clone_mb", 1, 10_000_000),
+        require_network_sandbox=_bool(data.get("require_network_sandbox", True), "require_network_sandbox"),
         mirrors=mirrors,
         allowed_hosts=hosts,
         state_dir=state_dir,
@@ -584,6 +588,8 @@ def dump_targets(t: Targets, raw_top: dict) -> str:
     for key in ("cooldown_minutes", "timeout_minutes", "max_scans_per_hour", "min_free_mb", "max_clone_mb"):
         if key in raw_top:
             lines.append(f"{key} = {int(raw_top[key])}")
+    if "require_network_sandbox" in raw_top:
+        lines.append(f"require_network_sandbox = {'true' if raw_top['require_network_sandbox'] else 'false'}")
     for target in t.targets.values():
         lines += ["", "[[target]]", f"name = {_toml_string(target.name)}"]
         if target.kind == "url":

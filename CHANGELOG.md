@@ -37,6 +37,7 @@ All notable changes to Shoalscan are recorded here.
 - `install` matches a release archive's member by its exact name (only a leading `./` is ignored), so a differently named member can never stand in for the scanner.
 - The dashboard's run page lists the scanners each run used, with their versions.
 - Files Trivy logs as failing to parse (a Dockerfile it cannot read, say), not only Terraform files, are listed as not fully scanned.
+- Each Helm chart directory is listed as not fully scanned in every Trivy run, with the reason, so the gap is visible.
 
 ### Security
 
@@ -63,6 +64,10 @@ All notable changes to Shoalscan are recorded here.
 - Trivy no longer scans Helm charts, because it reads ignore comments from the rendered chart, where a template can produce them out of sight of any check. Render charts and scan the manifests instead.
 - Scanners are isolated from the machine: each run gets an empty private home and temporary directory, git with no configuration and no allowed transport, proxies on a closed local port, the cloud metadata services turned off, and, where available, an operating-system network sandbox (`sandbox-exec` on macOS, `unshare --net` on Linux), with a warning when there is none. Remote Terraform modules can no longer be fetched during a scan, and the user's SSH keys, git credentials and cloud credentials are out of reach. `findings.json` records the isolation used.
 - Scans started from the dashboard or at night always pass their policy explicitly: the managed policy, or else the `.shoalscan.toml` at the head of the registered branch, so the commit being scanned (an older commit, on a rescan) never chooses its own scanners.
+- Gitleaks runs with its pinned rules minus every allowlist that matches on path names (`node_modules/`, `vendor/`, lock files, `*.pdf`, paths containing `gitleaks.toml` and others) or on the line around a secret, so a repository cannot place a secret where Gitleaks does not report it. Allowlists that match only the secret's value are kept. Leave paths out with `excludes`, which is policy.
+- Every letter-case variant of `.gitleaksignore` at the top of the tree is treated as the ignore file, as a case-insensitive file system makes Gitleaks read it, and the staging copy is checked to hold none before Gitleaks runs. A cross-device staging copy is limited to 4 GiB.
+- `shoalscan scan --require-network-sandbox` fails unless the scanners can run in an operating-system network sandbox. The dashboard's worker requires it by default (`require_network_sandbox = false` in `scan_targets.toml` turns it off), and so does `examples/scheduled-scan.sh` (`SHOALSCAN_REQUIRE_NETWORK_SANDBOX=0`). Without a sandbox, a scanner can still reach services on this machine's loopback interface; the documentation now says so.
+- The scan worker keeps each scan's temporary files in its own work directory, which is removed even when the scan is stopped at the deadline, and removes work directories an earlier, killed worker left behind.
 - Scanner error messages (a Dockerfile that does not parse, a workflow zizmor cannot read, any scanner failure) no longer quote the scanned files: code frames and quoted text are removed, keeping the kind of error and the file path.
 
 ### Project

@@ -11,6 +11,7 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import helpers
 from test_lock_and_install import GITLEAKS_BINARY, PLAT, Assets, sha, tool_tarball
@@ -283,6 +284,44 @@ class NormaliseTests(unittest.TestCase):
                 self.normalise(report)
 
 
+class DerivedConfigTests(unittest.TestCase):
+    PINNED = {
+        "title": "t",
+        "allowlist": {"description": "global", "paths": ["node_modules"], "regexes": ["^true$"], "stopwords": ["x"]},
+        "rules": [
+            {"id": "a", "regex": "a+", "path": "(?i)\\.tf$", "entropy": 3.5, "keywords": ["a"]},
+            {"id": "b", "regex": "b+", "allowlists": [{"paths": ["README\\.md$"]}, {"stopwords": ["bbbb"]}]},
+            {
+                "id": "c",
+                "regex": "c+",
+                "allowlists": [
+                    {"regexTarget": "line", "regexes": ["import .* from"]},
+                    {"condition": "AND", "paths": ["\\.bb$"], "regexes": ["SRC="]},
+                    {"regexes": ["^c{3}$"], "paths": ["x"]},
+                ],
+            },
+        ],
+    }
+
+    def test_only_allowlists_on_the_secret_itself_are_kept(self):
+        derived = tomllib.loads(gitleaks.derive_config(copy.deepcopy(self.PINNED)))
+        self.assertEqual(derived["allowlist"], {"description": "global", "regexes": ["^true$"], "stopwords": ["x"]})
+        rules = {r["id"]: r for r in derived["rules"]}
+        # A rule's own path chooses where it applies, and stays.
+        self.assertEqual(rules["a"], self.PINNED["rules"][0])
+        self.assertEqual(rules["b"]["allowlists"], [{"stopwords": ["bbbb"]}])
+        self.assertEqual(rules["c"]["allowlists"], [{"regexes": ["^c{3}$"]}])
+
+    @unittest.skipUnless(gitleaks_ready(), f"gitleaks is not installed in {TOOLS}; run `shoalscan install`")
+    def test_the_pinned_rules_lose_every_path_allowlist(self):
+        pinned = tomllib.loads(inst.tool_file_path(TOOLS, "gitleaks", "config").read_text(encoding="utf-8"))
+        derived = tomllib.loads(gitleaks.derive_config(pinned))
+        self.assertEqual(len(derived["rules"]), len(pinned["rules"]))
+        tables = [derived.get("allowlist", {})] + [a for r in derived["rules"] for a in r.get("allowlists", [])]
+        self.assertFalse([a for a in tables if "paths" in a or a.get("regexTarget") == "line"])
+        self.assertIn("stopwords", derived["allowlist"])
+
+
 class WalkTests(unittest.TestCase):
     def test_the_view_holds_no_ignore_file_and_large_files_are_listed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -305,6 +344,27 @@ class WalkTests(unittest.TestCase):
             # Gitleaks reads only the top-level ignore file; deeper ones are ordinary files to scan.
             self.assertEqual(staged, ["app.py", "sub/.gitleaksignore"])
             self.assertEqual(gitleaks.walk(root, ("vendor",), 2_000_000), skipped)
+
+    def test_case_variants_of_the_ignore_file_stay_out_of_the_view(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, view = Path(tmp) / "repo", Path(tmp) / "view"
+            root.mkdir()
+            (root / ".GitleaksIgnore").write_text("a:b:1\n")
+            (root / "app.py").write_text("x = 1\n")
+            gitleaks.walk(root, (), 2_000_000, view)
+            self.assertEqual(sorted(p.name for p in view.iterdir()), ["app.py"])
+
+    def test_a_cross_device_copy_has_a_byte_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, view = Path(tmp) / "repo", Path(tmp) / "view"
+            root.mkdir()
+            (root / "a.txt").write_text("x" * 100)
+            with (
+                mock.patch.object(gitleaks.os, "link", side_effect=OSError("cross-device")),
+                mock.patch.object(gitleaks, "MAX_VIEW_COPY_BYTES", 50),
+                self.assertRaises(ScanError),
+            ):
+                gitleaks.walk(root, (), 2_000_000, view)
 
 
 class ConfigTests(unittest.TestCase):
@@ -375,6 +435,37 @@ class EndToEndTests(unittest.TestCase):
                 text = (out / name).read_text()
                 self.assertNotIn(SECRET, text, name)
                 self.assertNotIn(AWS, text, name)
+
+    def test_the_built_in_path_allowlist_cannot_hide_a_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, out = Path(tmp).resolve() / "repo", Path(tmp) / "out"
+            paths = ["real.py", "my-gitleaks.toml-notes/s.py", "node_modules/x/s.js", "notes.pdf", "go.mod"]
+            for rel in [*paths, "vendor/github.com/a/s.go", "x-1.0.dist-info/s.py", "yarn.lock"]:
+                (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+                (repo / rel).write_text(f'k = "{AWS}"\n')
+            # Shoalscan's own excludes still leave paths out, as policy.
+            (repo / ".shoalscan.toml").write_text('scanners = ["gitleaks"]\nexcludes = ["yarn.lock"]\n')
+            doc = self.scan(repo, out)
+        self.assertEqual(
+            sorted(f["path"] for f in doc["findings"]),
+            sorted([*paths, "vendor/github.com/a/s.go", "x-1.0.dist-info/s.py"]),
+        )
+
+    def test_a_case_variant_of_the_ignore_file_is_never_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, out = Path(tmp).resolve() / "repo", Path(tmp) / "out"
+            repo.mkdir()
+            (repo / "c.py").write_text(f'k = "{AWS}"\n')
+            (repo / ".GitleaksIgnore").write_text(f"{repo}/c.py:aws-access-token:1\n# {SECRET}\n")
+            (repo / ".shoalscan.toml").write_text('scanners = ["gitleaks"]\n')
+            # On a case-insensitive file system Gitleaks would open this as its ignore file.
+            insensitive = (repo / ".gitleaksignore").exists()
+            doc = self.scan(repo, out)
+        self.assertEqual(
+            sorted((f["rule"], f["path"]) for f in doc["findings"]),
+            [("gitleaks.aws-access-token", "c.py"), ("gitleaks.github-pat", ".GitleaksIgnore")],
+            f"case-insensitive file system: {insensitive}",
+        )
 
     def test_without_an_ignore_file_the_tree_is_scanned_in_place(self):
         with tempfile.TemporaryDirectory() as tmp:

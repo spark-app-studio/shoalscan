@@ -12,7 +12,7 @@ SHOALSCAN_REPO_NAME=owner/project \
 examples/scheduled-scan.sh ~/scans/project
 ```
 
-The script makes its virtual environment with `python3`. Set `SHOALSCAN_PYTHON` to use another interpreter, for example `SHOALSCAN_PYTHON=/usr/local/bin/python3.12` on a machine whose `python3` is older. The script stops with a clear message, and records nothing, when that Python is older than 3.11. The other settings are listed at the top of the script.
+The script makes its virtual environment with `python3`. Set `SHOALSCAN_PYTHON` to use another interpreter, for example `SHOALSCAN_PYTHON=/usr/local/bin/python3.12` on a machine whose `python3` is older. The script stops with a clear message, and records nothing, when that Python is older than 3.11. By default the script passes `--require-network-sandbox`, so the scan fails unless the scanners can run without network access ([Scanner isolation](security-model.md#scanner-isolation)); set `SHOALSCAN_REQUIRE_NETWORK_SANDBOX=0` to scan on a machine without a sandbox. The other settings are listed at the top of the script.
 
 ### Running it every night
 

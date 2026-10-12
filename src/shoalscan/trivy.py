@@ -275,6 +275,24 @@ def silenced_findings(log: str, markers: list[Suppression], excludes: tuple[str,
     return count
 
 
+HELM_REASON = "Helm charts are not scanned; render and scan the manifests"
+
+
+def helm_charts(root: Path, excludes: tuple[str, ...]) -> list[dict]:
+    """Every Helm chart directory (one holding a Chart.yaml), as a skipped entry, so the gap shows in each run."""
+    matcher = ExcludeMatcher(list(excludes))
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        rel_dir = Path(dirpath).relative_to(root).as_posix()
+        rel_dir = "" if rel_dir == "." else rel_dir
+        dirnames[:] = sorted(
+            d for d in dirnames if d != ".git" and not matcher.excluded(f"{rel_dir}/{d}" if rel_dir else d)
+        )
+        if "Chart.yaml" in filenames and not matcher.excluded(f"{rel_dir}/Chart.yaml" if rel_dir else "Chart.yaml"):
+            found.append({"path": f"{rel_dir}/" if rel_dir else "./", "reason": HELM_REASON})
+    return found
+
+
 def config_files(root: Path, excludes: tuple[str, ...], max_bytes: int) -> list[str]:
     """The files whose Trivy markers are linted: every file of a kind Trivy reads, outside .git and the excludes."""
     matcher = ExcludeMatcher(list(excludes))
@@ -321,4 +339,5 @@ def run(
         root, config_files(root, excludes, limits.max_target_bytes), limits.max_target_bytes
     )
     silenced = silenced_findings(log, markers, excludes)
-    return findings, {"skipped": [], "errors": parse_errors(log, root, excludes)}, markers, silenced, meta
+    unscanned = {"skipped": helm_charts(root, excludes), "errors": parse_errors(log, root, excludes)}
+    return findings, unscanned, markers, silenced, meta

@@ -384,6 +384,18 @@ class OversizeMarkerTests(unittest.TestCase):
         self.assertEqual([(s.path, s.line, s.valid) for s in found], [("Dockerfile", 200_002, False)])
 
 
+class HelmTests(unittest.TestCase):
+    def test_chart_directories_are_listed_as_not_scanned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel in ("charts/web/Chart.yaml", "Chart.yaml", "vendor/c/Chart.yaml", ".git/x/Chart.yaml"):
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text("name: x\n")
+            found = trivy.helm_charts(root, ("vendor",))
+        self.assertEqual([e["path"] for e in found], ["./", "charts/web/"])
+        self.assertTrue(all(e["reason"] == trivy.HELM_REASON for e in found))
+
+
 class SilencedTests(unittest.TestCase):
     LOG = (
         '2026-10-12T11:58:41-05:00\tINFO\t[terraform executor] Ignore finding\trule="a" range="infra/main.tf:6-8"\n'
