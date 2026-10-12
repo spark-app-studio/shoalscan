@@ -36,7 +36,7 @@ A shoal is a hidden hazard under the water. A lighthouse warns ships about it; S
 Shoalscan needs Python 3.11 or later, git, and Linux or macOS. Install it from the release, then install the pinned scanners:
 
 ```sh
-python3 -m pip install https://github.com/spark-app-studio/shoalscan/releases/download/v0.1.1/shoalscan-0.1.1-py3-none-any.whl
+python3 -m pip install https://github.com/spark-app-studio/shoalscan/releases/download/v0.2.0/shoalscan-0.2.0-py3-none-any.whl
 shoalscan install
 ```
 
