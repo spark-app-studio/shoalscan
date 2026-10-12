@@ -31,7 +31,7 @@ from shoalscan.install import (
 from shoalscan.locations import default_out_dir, default_tools_dir, refuse_inside_repo
 from shoalscan.lockfile import Lock, current_platform, load_lock
 from shoalscan.resources import default_lock_path, shoalscan_rules_dir
-from shoalscan.scan import FINDINGS_JSON, PinnedBinary, Tools, run_scan, write_atomic
+from shoalscan.scan import FINDINGS_JSON, PinnedBinary, Tools, check_network_sandbox, run_scan, write_atomic
 
 TOOLS_HELP = "installed tools (default: $XDG_CACHE_HOME/shoalscan/tools or ~/.cache/shoalscan/tools)"
 OUT_HELP = "output directory, outside the repository (default: a private directory under the system temp directory)"
@@ -163,6 +163,8 @@ def _baseline_path(args: argparse.Namespace, config: Config) -> Path:
 
 
 def _do_scan(args: argparse.Namespace):
+    # Checked first: a required sandbox that is missing must stop the scan before anything else runs.
+    check_network_sandbox(getattr(args, "require_network_sandbox", False))
     out = _out_dir(args)
     _tools_dir(args)
     policy = _policy(args)

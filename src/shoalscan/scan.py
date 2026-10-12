@@ -96,6 +96,17 @@ def write_atomic(path: Path, text: str) -> None:
         raise
 
 
+def check_network_sandbox(required: bool) -> str:
+    """The network sandbox scanners will run in; a SetupError when one is required and none works."""
+    network = process.network_sandbox()[1]
+    if required and network == process.NO_SANDBOX:
+        raise SetupError(
+            "a network sandbox is required (--require-network-sandbox, or require_network_sandbox in "
+            "scan_targets.toml) but neither sandbox-exec nor unshare --net works here; nothing was scanned"
+        )
+    return network
+
+
 def run_scan(
     repo: Path,
     config: Config,
@@ -116,12 +127,7 @@ def run_scan(
     with that file left out (see `gitref.worktree_state`).
     """
     started = time.monotonic()
-    network = process.network_sandbox()[1]
-    if require_network_sandbox and network == process.NO_SANDBOX:
-        raise SetupError(
-            "a network sandbox is required (--require-network-sandbox, or require_network_sandbox in "
-            "scan_targets.toml) but neither sandbox-exec nor unshare --net works here; nothing was scanned"
-        )
+    network = check_network_sandbox(require_network_sandbox)
     root = repo.resolve()
     if not root.is_dir():
         raise SetupError(f"repository directory not found: {repo}")
