@@ -441,6 +441,7 @@ class DashboardServerTests(unittest.TestCase):
             "duration_seconds",
             "blocking_class",
             "rescanned",
+            "test_scoped",
         }
         self.assertEqual(set(o["latest_run"]), run_keys)
         # Which scanners the run used, by name and version, for the run's detail.
@@ -467,6 +468,7 @@ class DashboardServerTests(unittest.TestCase):
                 "blocking_class",
                 "key",
                 "review",
+                "test_scope",
                 "suggestion",
             },
         )
@@ -678,7 +680,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(self.get_json("/api/findings?repo=acme/app&review=false_positive", cookie)["total"], 1)
         self.get_json("/api/findings?repo=acme/app&review=bogus", cookie, 400)
         reviews = self.get_json("/api/overview?repo=acme/app", cookie)["reviews"]
-        self.assertEqual(set(reviews), {"run", "untriaged_blocking", "regressions"})
+        self.assertEqual(set(reviews), {"run", "untriaged_blocking", "regressions", "test_scoped"})
 
     def test_a_bulk_review_needs_typed_text_and_is_audited(self):
         cookie = self.session()

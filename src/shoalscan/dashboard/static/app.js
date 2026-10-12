@@ -619,7 +619,7 @@
           el("td", { "class": "path mono" }, f.path + ":" + f.line),
           el("td", null, fmtDate(f.first_seen)),
           el("td", null, f.new_blocking ? "new, blocking" : (f["new"] ? "new" : "")),
-          el("td", null, badge(f.review)),
+          el("td", null, badge(f.review), f.test_scope ? el("div", { "class": "muted small", title: f.test_scope.description }, "test-only: " + f.test_scope.kind) : ""),
           el("td", null, suggestionCell(f.suggestion)),
           el("td", null, localTime(f.review && f.review.source === "review" ? f.review.resolved_at : null)),
           el("td", null, reviewHref ? internalLink(reviewHref, "Review", "Review " + f.rule + " in " + f.path + " line " + f.line) : "-")));
@@ -703,7 +703,8 @@
       $("finding-title").textContent = f.rule;
       var facts = clear($("finding-facts"));
       [["Severity", f.severity], ["Location", f.path + ":" + f.line], ["Component", f.component], ["Fingerprint", f.fingerprint],
-       ["First seen", fmtDate(f.first_seen)]].forEach(function (p) { facts.appendChild(el("dt", null, p[0])); facts.appendChild(el("dd", null, p[1])); });
+       ["First seen", fmtDate(f.first_seen)],
+       ["Test scope", f.test_scope ? f.test_scope.description + " (never blocking under [test_scope])" : "not in proven test-only code"]].forEach(function (p) { facts.appendChild(el("dt", null, p[0])); facts.appendChild(el("dd", null, p[1])); });
       $("finding-message").textContent = f.message;
       var r = f.review;
       var current = clear($("review-current"));

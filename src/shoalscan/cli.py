@@ -366,6 +366,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         components=config.components,
         adoption=policy.adoption,
         parse_warn_only=config.parse_warn_only,
+        test_scope=config.test_scope.non_blocking,
     )
     write_atomic(out / CHECK_JSON, json.dumps(details(result, findings_sha256), sort_keys=True) + "\n")
     print(render_report(result))
@@ -397,6 +398,48 @@ def cmd_baseline_rename_path(args: argparse.Namespace) -> int:
         raise SetupError(f"no baseline entries have the path {args.old}")
     write_baseline(baseline_path, renamed, force=True)
     print(f"shoalscan baseline rename-path: moved {changed} entries from {args.old} to {args.new} in {baseline_path}")
+    return 0
+
+
+def cmd_baseline_prune(args: argparse.Namespace) -> int:
+    """Remove the baseline entries whose findings the configuration's [test_scope] now accepts."""
+    if not args.test_scope:
+        raise SetupError("say what to prune: --test-scope is the only kind for now")
+    config = _config(args)
+    if not config.test_scope.non_blocking:
+        raise SetupError(f"{CONFIG_NAME} has no [test_scope] non_blocking rules, so nothing is test-scoped")
+    repo = Path(args.repo)
+    out = _out_dir(args)
+    baseline_path = _baseline_path(args, config)
+    entries = load_baseline(baseline_path)
+    if entries is None:
+        raise SetupError(f"baseline not found: {baseline_path}")
+    findings, meta = load_findings(out / FINDINGS_JSON)
+    policy = _policy(args)
+    recorded = meta.get("policy") or {}
+    if recorded.get("commit") is not None or recorded.get("config_sha256") != policy.config_sha256:
+        raise SetupError(
+            "the findings were produced with another configuration; run `shoalscan scan` (without --policy-ref) "
+            "with this configuration first"
+        )
+    leave_out = gitref.baseline_binding_path(repo, baseline_path)
+    state = gitref.worktree_state(repo.resolve(), leave_out)
+    if state is None and not args.no_git:
+        raise SetupError(f"{repo} is not inside a git work tree; pass --no-git to prune without one")
+    if not _same_tree(meta, state, findings, leave_out):
+        raise SetupError("the findings do not match the current tree; run the scan again")
+    result = compare(findings, entries, config.blocking, test_scope=config.test_scope.non_blocking)
+    remove = {e for _, e in result.baseline_test_scoped}
+    if not remove:
+        print(f"shoalscan baseline prune: no entries of {baseline_path} are covered by test scope")
+        return 0
+    write_baseline(baseline_path, [e for e in entries if e not in remove], force=True)
+    print(
+        f"shoalscan baseline prune: removed {len(remove)} entries covered by test scope from {baseline_path}; "
+        "commit the change as its own reviewed pull request"
+    )
+    for f, e in sorted(result.baseline_test_scoped, key=lambda pair: (pair[1].path, pair[1].rule)):
+        print(f"  {md.one_line(e.path)}  {md.one_line(e.rule)}  ({md.one_line(f.test_scope.description())})")
     return 0
 
 
@@ -472,6 +515,18 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--config", help=f"configuration file (default: <repo>/{CONFIG_NAME})")
     r.add_argument("--baseline", help="baseline file (default: from the configuration)")
     r.set_defaults(func=cmd_baseline_rename_path)
+    pr = bsub.add_parser("prune", help="remove baseline entries that the policy no longer needs")
+    pr.add_argument(
+        "--test-scope",
+        action="store_true",
+        help="remove the entries whose findings are in test-only code that [test_scope] accepts",
+    )
+    pr.add_argument("--repo", default=".", help="repository root (default: the current directory)")
+    pr.add_argument("--config", help=f"configuration file (default: <repo>/{CONFIG_NAME})")
+    pr.add_argument("--out", help="directory with findings.json (default: the same default as `scan`)")
+    pr.add_argument("--baseline", help="baseline file (default: from the configuration)")
+    pr.add_argument("--no-git", action="store_true", help="allow a repository directory that is not a git work tree")
+    pr.set_defaults(func=cmd_baseline_prune)
 
     add_dashboard_commands(sub)
     return parser

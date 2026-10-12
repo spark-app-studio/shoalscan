@@ -59,6 +59,12 @@ categories = ["security"]
 # Rules to leave out, by exact id or by prefix ending in ".*".
 exclude_rules = ["community.python.lang.security.audit.dangerous-subprocess-use-audit"]
 
+[test_scope]
+# Opengrep rules whose findings in proven test-only Rust code never block, by
+# exact id or by prefix ending in ".*", as in opengrep.exclude_rules. Off when
+# empty (the default). Gitleaks rules and other scanners' rules are refused.
+non_blocking = ["community.rust.lang.security.temp-dir", "shoalscan.rust-plain-http-url"]
+
 [limits]
 scan_timeout_seconds = 1800
 rule_timeout_seconds = 30       # per rule and file
@@ -89,6 +95,10 @@ Use it only for languages whose parser is experimental: Dockerfiles, shell scrip
 Each entry must name the files it covers. It is a file name (`Dockerfile`), a file name with any extension (`Dockerfile.*`), an extension (`*.sh`, `*.yaml`), or a path with `/` whose last part is one of those (`deploy/**/templates/*.yaml`). An entry without `/` matches a file's own name only, never a directory on its path. Patterns that could cover any file, such as `*e*`, `**` or `src/*`, are refused.
 
 The setting only protects pull requests that run under `--policy-ref`: then the list comes from the base branch, like the rest of the policy, and a change cannot make its own files warn-only. Without `--policy-ref`, or in adoption mode (the first run, before the base branch has a configuration), the configuration in the change itself applies, including its `parse_warn_only`.
+
+## Test scope
+
+`[test_scope] non_blocking` lists Opengrep rules whose findings Shoalscan accepts automatically when it can prove they are in Rust code compiled only for tests: a `#[cfg(test)]` module or item, a `#[test]`, `#[tokio::test]` or `#[rstest]` function, a file a `#[cfg(test)] mod NAME;` loads, or a crate's `tests/` and `benches/`. Such findings stay in every output, marked with their scope, and never block. Only Opengrep findings in `.rs` files are eligible; listing a Gitleaks rule, or another scanner's, is an error. [Test scope](test-scope.md) explains what counts, what does not, and why it is safe.
 
 How `check` treats partial parses and other unscanned files is described in [The baseline and the check](baseline-and-check.md#the-check).
 

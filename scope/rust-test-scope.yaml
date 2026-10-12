@@ -1,0 +1,64 @@
+# Shoalscan's internal scope rules: they prove, with Opengrep's own Rust
+# parser, which code is compiled only for tests. They run in the same scan as
+# the security rules when `[test_scope] non_blocking` lists a rule, and their
+# matches are never findings: Shoalscan reads their line ranges and removes
+# them from the output. See docs/test-scope.md.
+#
+# Each pattern names the attribute exactly. `#[cfg(any(test, ...))]`,
+# `#[cfg(all(test, ...))]`, `#[cfg(not(test))]`, `#[cfg_attr(test, ...)]` and
+# `#[cfg(feature = "test")]` do not match, so they are never test scope.
+#
+# Opengrep's Rust parser keeps the attributes of top-level items only; inside
+# a module body they are dropped. So these rules see top-level items only, and
+# an attributed item nested in another module is not test scope (fail closed).
+#
+# The rules for `#[cfg(test)] mod NAME` are not in this file: Opengrep binds
+# no metavariable to a module's name, so Shoalscan writes one pattern per
+# module name found in the scanned files (see shoalscan/testscope.py).
+rules:
+  - id: rust-cfg-test-item
+    message: An item compiled only for tests (#[cfg(test)]).
+    severity: INFO
+    languages: [rust]
+    metadata:
+      category: test-scope
+    pattern-either:
+      - pattern: |
+          #[cfg(test)]
+          fn $F(...) { ... }
+      - pattern: |
+          #[cfg(test)]
+          impl $T { ... }
+      - pattern: |
+          #[cfg(test)]
+          impl $TRAIT for $T { ... }
+      - pattern: |
+          #[cfg(test)]
+          const $C: $TY = $V;
+      - pattern: |
+          #[cfg(test)]
+          static $C: $TY = $V;
+
+  # #[tokio::test] and #[rstest] expand to #[test] functions (rstest's
+  # parametrised cases to a #[cfg(test)] module and function). #[test_case] is
+  # left out on purpose: it keeps the original function, with its body, as a
+  # plain function outside cfg(test).
+  - id: rust-test-fn
+    message: A test function (#[test], #[tokio::test] or #[rstest]).
+    severity: INFO
+    languages: [rust]
+    metadata:
+      category: test-scope
+    pattern-either:
+      - pattern: |
+          #[test]
+          fn $F(...) { ... }
+      - pattern: |
+          #[tokio::test]
+          fn $F(...) { ... }
+      - pattern: |
+          #[tokio::test(...)]
+          fn $F(...) { ... }
+      - pattern: |
+          #[rstest]
+          fn $F(...) { ... }

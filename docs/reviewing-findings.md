@@ -20,6 +20,10 @@ Automatic changes are made by "shoalscan" with a description such as "No longer 
 
 A finding that is missing from a run counts as fixed only when that run could have seen it: its scanner ran (a scanner can be turned off in `scanners`), for Opengrep and Gitleaks its rule was among the rules that ran, its file was not excluded, skipped or unreadable, and no parse gap covered its line.
 
+## Automatic reviews for test-only code
+
+When the policy's [`[test_scope]`](test-scope.md) accepts a finding because it is in proven test-only Rust code, the newest scheduled run gives it a review of its own, unless it already has one: **Accepted risk**, made by "shoalscan (test scope)", with the description "test-only code: <kind> at <path>:<line>", the time and the run. The dashboard labels it **Accepted: test-only code (automatic)**, so it never looks like a person's decision. A person's review always wins: it is never replaced, and a person can change an automatic review like any other. When the code moves out of test scope, the next scheduled run sets the automatic review back to **Open** ("No longer in test-only code ...; the automatic test-scope review is superseded."), and the finding is treated like any other again. Automatic reviews, like every review, never change what blocks CI; the policy does.
+
 ## How reviews follow a finding
 
 Reviews follow a finding by its repository's name and its identity (tool, rule, path and fingerprint), not by run. They stay when runs are deleted, even all of a repository's runs, and apply again if the repository is recorded under the same name. A moved file starts without its reviews.

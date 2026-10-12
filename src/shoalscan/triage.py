@@ -422,6 +422,7 @@ def run(args: argparse.Namespace) -> int:
         config.non_blocking_paths,
         unscanned=meta.get("unscanned"),
         components=config.components,
+        test_scope=config.test_scope.non_blocking,
     )
     warnings = _warnings(repo, meta, config_path, baseline_path, baseline is not None)
     doc = build(findings, meta, result, blocking_only=args.blocking_only, warnings=warnings)

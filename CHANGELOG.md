@@ -2,6 +2,15 @@
 
 All notable changes to Shoalscan are recorded here.
 
+## Unreleased
+
+### Added
+
+- Rust test scope: a finding Shoalscan can prove is in Rust code compiled only for tests is accepted automatically, for the Opengrep rules listed under the new `[test_scope] non_blocking` (off by default; read from the base branch under `--policy-ref`). Test-only code is a `#[cfg(test)]` module, function, `impl`, constant or static, a `#[test]`, `#[tokio::test]` or `#[rstest]` function, the file a `#[cfg(test)] mod NAME;` loads, or a crate's `tests/` and `benches/`. Opengrep's own Rust parser proves it, with a rule pack shipped and pinned with Shoalscan that runs in the same scan; a text search can only take scope away (a `mod`, `#[path]`, `include!`, link or Cargo target that could load the file into shipped code). `cfg(any(test, ...))`, `cfg(not(test))`, `cfg_attr(test, ...)`, features, `#[test_case]`, nested attributed items, `examples/`, `build.rs` and `src/bin/` are never test scope. Such a finding stays in `findings.json` and the SARIF file, marked with its `test_scope` (kind, path and line), never blocks `check`, and is counted as `test_scoped` in the summary line and `check.json`. Gitleaks rules, and other scanners' rules, are refused in the policy. See [Test scope](docs/test-scope.md).
+- The newest scheduled run gives each test-scoped finding without a review an automatic **accepted risk** review by "shoalscan (test scope)", saying which scope proves it, and sets it back to open, superseded, when the code moves out of test scope. A person's review is never replaced. History schema version 14 stores each finding's scope.
+- The dashboard shows an **Accepted: test-only code** tile and filter, marks such findings in the Findings table, and shows the proving scope on the review page.
+- `check` lists baseline entries whose findings are now test-scoped as guidance, without failing (`baseline_test_scoped` in the summary), and `shoalscan baseline prune --test-scope` removes them, for a reviewed change of their own.
+
 ## 0.2.0 (2026-10-12)
 
 ### Added

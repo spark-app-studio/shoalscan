@@ -65,6 +65,20 @@ class TrivySettings:
 
 
 @dataclass(frozen=True)
+class TestScopeSettings:
+    """Rules whose findings in proven test-only Rust code do not block (see docs/test-scope.md)."""
+
+    __test__ = False  # not a unittest class
+
+    # Exact Opengrep rule ids, or `prefix.*`, as in opengrep.exclude_rules. Empty: the feature is off.
+    non_blocking: tuple[str, ...] = ()
+
+
+# Rule id namespaces whose findings can be test-scoped: Opengrep's rule sources.
+TEST_SCOPE_NAMESPACES = ("community", "shoalscan", "repo")
+
+
+@dataclass(frozen=True)
 class Limits:
     scan_timeout_seconds: int = 1800
     rule_timeout_seconds: int = 30
@@ -87,6 +101,7 @@ class Config:
     hadolint: HadolintSettings = HadolintSettings()
     zizmor: ZizmorSettings = ZizmorSettings()
     trivy: TrivySettings = TrivySettings()
+    test_scope: TestScopeSettings = TestScopeSettings()
     limits: Limits = Limits()
     source: str = "defaults"
 
@@ -196,6 +211,7 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
             "hadolint",
             "zizmor",
             "trivy",
+            "test_scope",
             "limits",
         },
         "the top level",
@@ -317,6 +333,8 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
         helm_values.append((chart_dir, paths))
     trivy = TrivySettings(ignore=tuple(sorted(set(checks))), helm_values=tuple(helm_values))
 
+    test_scope = _test_scope(data.get("test_scope", {}))
+
     lim_raw = data.get("limits", {})
     if not isinstance(lim_raw, dict):
         raise SetupError(f"{CONFIG_NAME}: [limits] must be a table")
@@ -353,9 +371,43 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
         hadolint=hadolint,
         zizmor=zizmor,
         trivy=trivy,
+        test_scope=test_scope,
         limits=limits,
         source=source,
     )
+
+
+def _test_scope(raw: object) -> TestScopeSettings:
+    """`[test_scope]`: Opengrep rules only. A secret is a leak wherever it is, so Gitleaks rules are refused."""
+    from shoalscan.suppressions import LINT_RULE
+
+    if not isinstance(raw, dict):
+        raise SetupError(f"{CONFIG_NAME}: [test_scope] must be a table")
+    _check_keys(raw, {"non_blocking"}, "[test_scope]")
+    rules = _str_list(raw.get("non_blocking", []), "test_scope.non_blocking")
+    for pattern in rules:
+        namespace = pattern.split(".", 1)[0]
+        if namespace == "gitleaks" or pattern.startswith("gitleaks"):
+            raise SetupError(
+                f"{CONFIG_NAME}: test_scope.non_blocking cannot list the Gitleaks rule {pattern!r}: a real secret in "
+                "test code is still a leaked secret. Rotate it, or record a false positive in the baseline"
+            )
+        if not _RULE_PATTERN_RE.match(pattern) or "*" in pattern[:-2]:
+            raise SetupError(
+                f"{CONFIG_NAME}: test_scope.non_blocking entries must be a rule id or `prefix.*`: {pattern!r}"
+            )
+        if namespace not in TEST_SCOPE_NAMESPACES or "." not in pattern:
+            raise SetupError(
+                f"{CONFIG_NAME}: test_scope.non_blocking lists {pattern!r}, which is not an Opengrep rule; only "
+                f"Opengrep rules ({', '.join(n + '.' for n in TEST_SCOPE_NAMESPACES)}...) are eligible, and only "
+                "their findings in Rust files"
+            )
+        if pattern == LINT_RULE:
+            raise SetupError(
+                f"{CONFIG_NAME}: test_scope.non_blocking cannot list {LINT_RULE}: an inline suppression must name a "
+                "rule and an issue in test code too"
+            )
+    return TestScopeSettings(non_blocking=tuple(sorted(set(rules))))
 
 
 def config_from_bytes(data: bytes, source: str) -> Config:
