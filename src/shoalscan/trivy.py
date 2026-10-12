@@ -94,7 +94,10 @@ def _inside(root: Path, rel: object) -> str | None:
     if not isinstance(rel, str) or not rel or rel.startswith("/") or "\\" in rel or ".." in rel.split("/"):
         return None
     path = root / rel
-    return rel if path.is_file() and not path.is_symlink() else None
+    try:
+        return rel if path.is_file() and not path.is_symlink() else None
+    except OSError:  # a name the file system refuses (too long, for example) is not a file of the repository
+        return None
 
 
 def parse_errors(log: str, root: Path, excludes: tuple[str, ...]) -> list[dict]:
