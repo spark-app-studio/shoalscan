@@ -22,9 +22,11 @@ cosine similarity is then their dot product, computed in pure Python.
 
 A decision suggests a status for findings like it only when it comes from a
 trusted place: a dashboard review (made by a signed-in person and audited),
-or the baseline as a scheduled run of the default branch recorded it. A
-pull-request run's baseline is the change under review, not yet the policy,
-so its reasons never become suggestions.
+or the baseline as a scheduled run recorded it. A scheduled run is whatever
+was recorded with `record --kind scheduled` (the dashboard's worker records
+its scans of each target's configured branch that way); recording one is an
+operator action, and is trusted. A pull-request run's baseline is the change
+under review, not yet the policy, so its reasons never become suggestions.
 """
 
 from __future__ import annotations
@@ -331,8 +333,9 @@ def group(items: list[tuple[int, list[float]]], threshold: float) -> list[list[i
     return groups
 
 
-# The run whose baseline reason stands as a finding's decision: the newest scheduled run (the nightly scan of
-# the default branch) that holds the finding and whose check ran. `{key}` names the finding's key id column.
+# The run whose baseline reason stands as a finding's decision: the newest scheduled run (recorded with
+# `--kind scheduled`, an operator action that is trusted) that holds the finding and whose check ran.
+# `{key}` names the finding's key id column.
 # A pull-request run never counts: its baseline is the change under review, not the accepted policy.
 DECISION_RUN = (
     "(SELECT drf.run_id FROM run_findings drf JOIN runs drun ON drun.id = drf.run_id WHERE drf.key_id = {key} "

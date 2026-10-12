@@ -395,7 +395,7 @@
   }
 
   // Where a similar finding's decision comes from, in words: a review (by whom, when) or the baseline as a
-  // scheduled run of the default branch recorded it (which run, commit and day). A pull-request run's
+  // scheduled run recorded it (which run, commit and day). A pull-request run's
   // baseline never makes a decision, so it never appears here.
   function decisionSource(d) {
     if (!d) return "";
