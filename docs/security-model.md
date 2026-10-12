@@ -14,7 +14,7 @@ This guide collects how Shoalscan protects itself: the scan, the dashboard and t
 - The tools directory and the output directory must be outside the repository, so a pull request cannot plant files in them.
 - A scan that fails in any way fails the command; it is never read as "no findings".
 - On a pull request with `--policy-ref`, the configuration, the baseline and the rule directories come from the base branch, so a change cannot relax its own checks ([details](baseline-and-check.md#pull-requests-the-policy-comes-from-the-base-branch)).
-- [Test scope](test-scope.md) accepts a finding automatically only for the Opengrep rules the policy lists (read from the base branch under `--policy-ref`), only in Rust files, and only where Opengrep's own parser proves the code is compiled for tests alone; a text search can only take that scope away, never add it. Gitleaks rules are refused: a secret in test code is still a leak. Accepted findings stay in every output, and their automatic reviews are recorded as "shoalscan (test scope)".
+- [Test scope](test-scope.md) accepts a finding automatically only for the Opengrep rules the policy lists (read from the base branch under `--policy-ref`), only in Rust files, and only inside an item that Opengrep's own parser proves is compiled for tests alone; whole files never count. Text searches can only take that scope away: a file that may shadow `#[test]` loses its test functions, and a repository that can set `cfg(test)` itself (a build script's `rustc-cfg`, `--cfg test` in its Cargo configuration) gets no scope at all. `RUSTFLAGS` and Cargo configuration outside the repository cannot be seen; building without `--cfg test` is the operator's responsibility. Secret rules and Gitleaks rules are refused: a secret in test code is still a leak. Accepted findings stay in every output, and their automatic reviews are recorded as "shoalscan (test scope)".
 - Scanning and recording need no token or secret. The dashboard holds one, the client secret for your identity provider, in a 0600 file in its state directory.
 - Similar-finding suggestions use an embedding model on this machine only: finding text (never code) goes to Ollama on the loopback interface, without proxies, at a host set on the command line and never by the scanned repository ([details](triage.md#similar-findings-with-a-local-embedding-model)).
 
@@ -47,7 +47,7 @@ For the strongest isolation, which we recommend for scans of untrusted code, als
 - Requests with an unknown `Host` header are refused, which defeats DNS rebinding.
 - Static files come from a fixed list, so a request path can never reach another file.
 - Requests and connections are bounded. A request URL may be 4,096 bytes and a body 2,048 bytes; a chunked body is refused and the connection closed. The server holds at most 64 connections, 16 from one address, and only 4 from one address that have not finished the TLS handshake. A handshake must finish within 5 seconds, and a connection lives at most 60 seconds. Errors the HTTP parser raises carry the same security headers as every other response.
-- The database is opened read-only, and every query is parameterised. Finding messages and paths are shown as text, never as HTML.
+- The database is opened read-only, and every query is parameterised. The one write is at start: an older database is migrated, after a backup copy, as `record` does. Finding messages and paths are shown as text, never as HTML.
 
 ### The certificate
 

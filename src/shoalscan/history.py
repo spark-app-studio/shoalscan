@@ -973,8 +973,8 @@ def record_run(
         # Only a scan of the branch's tip moves reviews; a rescan of an earlier commit never does.
         if review_transitions and info.kind == "scheduled" and outcome != "scan_error":
             apply_review_transitions(conn, info, run_id, {k for k in seen}, meta)
-            if details is not None:
-                apply_test_scope_reviews(conn, info, run_id, seen, test_scoped)
+            # Without check details nothing is proved, so every automatic review of a present finding is superseded.
+            apply_test_scope_reviews(conn, info, run_id, seen, test_scoped)
         pruned = prune(conn, repo_id, max_runs, keep_pr_days)
         conn.execute("COMMIT")
     except BaseException:

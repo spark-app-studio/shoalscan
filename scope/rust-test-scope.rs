@@ -1,6 +1,6 @@
 // Tests for the scope rules: `opengrep scan --test scope/`.
 
-// ok: rust-cfg-test-item, rust-test-fn
+// ok: rust-cfg-test-item, rust-test-fn, rust-tokio-test-fn, rust-rstest-fn
 fn shipped() {}
 
 // ruleid: rust-cfg-test-item
@@ -81,24 +81,24 @@ fn panics() {}
 #[test]
 fn ignored() {}
 
-// ruleid: rust-test-fn
+// ruleid: rust-tokio-test-fn
 #[tokio::test]
 async fn async_test() {}
 
-// ruleid: rust-test-fn
+// ruleid: rust-tokio-test-fn
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn async_test_with_arguments() {}
 
-// ruleid: rust-test-fn
+// ruleid: rust-rstest-fn
 #[rstest]
 #[case(1)]
 fn parametrised(#[case] x: u8) {}
 
-// ok: rust-test-fn
+// ok: rust-test-fn, rust-rstest-fn
 #[test_case(1; "one")]
 fn test_case_keeps_its_function(x: u8) {}
 
-// ok: rust-test-fn
+// ok: rust-tokio-test-fn
 #[tokio::main]
 async fn main() {}
 

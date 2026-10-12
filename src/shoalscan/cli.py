@@ -221,6 +221,29 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 f"tools.lock. Run `shoalscan install` with cosign available to verify it.\n{bar}",
                 file=sys.stderr,
             )
+    scope = result.meta.get("test_scope")
+    if isinstance(scope, dict):
+        bar = "!" * 78
+        if scope.get("off"):
+            print(
+                f"{bar}\nshoalscan: WARNING: TEST SCOPE IS OFF for this repository: {md.one_line(scope['off'])}.\n"
+                "Code may be compiled with cfg(test) outside tests, so no finding is accepted as test-only.\n"
+                f"{bar}",
+                file=sys.stderr,
+            )
+        if scope.get("module_names_dropped"):
+            print(
+                f"{bar}\nshoalscan: WARNING: {scope['module_names_dropped']} #[cfg(test)] module names were left "
+                f"out of the test-scope rules (the limit is {scope['module_names']}); findings in those modules are "
+                f"not accepted as test-only.\n{bar}",
+                file=sys.stderr,
+            )
+        if scope.get("test_fn_off"):
+            print(
+                "shoalscan: test scope: no #[test] function is accepted as test-only: "
+                f"{md.one_line(scope['test_fn_off'])}",
+                file=sys.stderr,
+            )
     counts = result.meta["counts"]
     print(
         f"shoalscan scan: {len(result.findings)} findings "

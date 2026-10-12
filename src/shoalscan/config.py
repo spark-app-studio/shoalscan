@@ -378,8 +378,9 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
 
 
 def _test_scope(raw: object) -> TestScopeSettings:
-    """`[test_scope]`: Opengrep rules only. A secret is a leak wherever it is, so Gitleaks rules are refused."""
+    """`[test_scope]`: specific Opengrep rules only. A secret is a leak wherever it is, so secret rules are refused."""
     from shoalscan.suppressions import LINT_RULE
+    from shoalscan.testscope import secret_rule
 
     if not isinstance(raw, dict):
         raise SetupError(f"{CONFIG_NAME}: [test_scope] must be a table")
@@ -401,6 +402,16 @@ def _test_scope(raw: object) -> TestScopeSettings:
                 f"{CONFIG_NAME}: test_scope.non_blocking lists {pattern!r}, which is not an Opengrep rule; only "
                 f"Opengrep rules ({', '.join(n + '.' for n in TEST_SCOPE_NAMESPACES)}...) are eligible, and only "
                 "their findings in Rust files"
+            )
+        if secret_rule(pattern):
+            raise SetupError(
+                f"{CONFIG_NAME}: test_scope.non_blocking cannot list {pattern!r}: it finds secrets (tokens, keys, "
+                "passwords), and a real secret in test code is still a leaked secret"
+            )
+        if pattern.endswith(".*") and len(pattern[:-2].split(".")) < 3:
+            raise SetupError(
+                f"{CONFIG_NAME}: test_scope.non_blocking entry {pattern!r} is too broad; name a rule, or a narrow "
+                "family with at least three dotted parts before the `*`, such as community.rust.lang.security.*"
             )
         if pattern == LINT_RULE:
             raise SetupError(

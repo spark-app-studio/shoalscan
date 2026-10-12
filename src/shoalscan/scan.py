@@ -190,10 +190,21 @@ def run_scan(
             scope_on = bool(config.test_scope.non_blocking)
             scope_ids: set[str] = set()
             if scope_on:
-                tree = testscope.read_tree(root)
-                module_names = testscope.module_names(tree.texts)
-                testscope.stage(rules_stage / testscope.NAMESPACE, scope_rules_file(), module_names)
-                scope_ids = testscope.rule_ids(module_names)
+                repository = testscope.read_repository(root)
+                meta["test_scope"] = {
+                    "non_blocking": list(config.test_scope.non_blocking),
+                    "off": repository.off,
+                    "module_names": len(repository.module_names),
+                    "module_names_dropped": repository.names_dropped,
+                    "test_fn_shadowed_files": len(repository.shadowed),
+                    "test_fn_off": repository.shadowed_everywhere,
+                    "findings": 0,
+                }
+                # Something in the repository can set cfg(test) outside tests: no scope can be proved.
+                scope_on = repository.off is None
+            if scope_on:
+                testscope.stage(rules_stage / testscope.NAMESPACE, scope_rules_file(), repository.module_names)
+                scope_ids = testscope.rule_ids(repository.module_names)
                 namespaces.append(testscope.NAMESPACE)
             sarif_source = stage / "opengrep.sarif"
             cmd = opengrep.build_command(tools.opengrep, namespaces, root, config.limits, excludes, sarif_source)
@@ -219,7 +230,7 @@ def run_scan(
                 errored = frozenset(e["path"] for e in unscanned["errors"]) | frozenset(
                     e["path"] for e in unscanned["skipped"]
                 )
-                scopes = testscope.build(root, scope_results, tree, module_names, errored)
+                scopes = testscope.build(root, scope_results, repository, errored)
                 listed = RuleIdFilter(config.test_scope.non_blocking)
                 og_findings = [
                     replace(f, test_scope=scopes.scope_for(f.path, f.line))
@@ -228,11 +239,9 @@ def run_scan(
                     for f in og_findings
                 ]
                 scoped = {(f.rule, f.path, f.fingerprint): f.test_scope for f in og_findings if f.test_scope}
-                meta["test_scope"] = {
-                    "non_blocking": list(config.test_scope.non_blocking),
-                    "findings": len(scoped),
-                    **scopes.summary(),
-                }
+                meta["test_scope"].update(
+                    {"findings": len(scoped), "scopes": scopes.counts(), "test_fn_dropped": scopes.test_fn_dropped}
+                )
             findings += og_findings
             if not sarif_source.is_file():
                 raise ScanError("opengrep did not write its SARIF output")

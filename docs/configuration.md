@@ -62,7 +62,8 @@ exclude_rules = ["community.python.lang.security.audit.dangerous-subprocess-use-
 [test_scope]
 # Opengrep rules whose findings in proven test-only Rust code never block, by
 # exact id or by prefix ending in ".*", as in opengrep.exclude_rules. Off when
-# empty (the default). Gitleaks rules and other scanners' rules are refused.
+# empty (the default). Secret rules, Gitleaks rules, other scanners' rules and
+# wildcards such as community.* are refused.
 non_blocking = ["community.rust.lang.security.temp-dir", "shoalscan.rust-plain-http-url"]
 
 [limits]
@@ -98,7 +99,7 @@ The setting only protects pull requests that run under `--policy-ref`: then the 
 
 ## Test scope
 
-`[test_scope] non_blocking` lists Opengrep rules whose findings Shoalscan accepts automatically when it can prove they are in Rust code compiled only for tests: a `#[cfg(test)]` module or item, a `#[test]`, `#[tokio::test]` or `#[rstest]` function, a file a `#[cfg(test)] mod NAME;` loads, or a crate's `tests/` and `benches/`. Such findings stay in every output, marked with their scope, and never block. Only Opengrep findings in `.rs` files are eligible; listing a Gitleaks rule, or another scanner's, is an error. [Test scope](test-scope.md) explains what counts, what does not, and why it is safe.
+`[test_scope] non_blocking` lists Opengrep rules whose findings Shoalscan accepts automatically when it can prove they are in a Rust item compiled only for tests: a top-level `#[cfg(test)]` module, function, `impl`, constant or static, or a `#[test]`, `#[tokio::test]` or `#[rstest]` function. Whole files, such as a crate's `tests/`, are not. Such findings stay in every output, marked with their scope, and never block. Only Opengrep findings in `.rs` files are eligible. Rules that find secrets, Gitleaks rules, other scanners' rules and wildcards broader than three dotted parts are refused. When the repository can set `cfg(test)` itself (a build script's `rustc-cfg`, or `--cfg test` in Cargo configuration), test scope is off for the run. [Test scope](test-scope.md) explains what counts, what does not, and why it is safe.
 
 How `check` treats partial parses and other unscanned files is described in [The baseline and the check](baseline-and-check.md#the-check).
 

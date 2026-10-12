@@ -12,9 +12,10 @@
 # a module body they are dropped. So these rules see top-level items only, and
 # an attributed item nested in another module is not test scope (fail closed).
 #
-# The rules for `#[cfg(test)] mod NAME` are not in this file: Opengrep binds
-# no metavariable to a module's name, so Shoalscan writes one pattern per
-# module name found in the scanned files (see shoalscan/testscope.py).
+# The rule for `#[cfg(test)] mod NAME { ... }` is not in this file: Opengrep
+# binds no metavariable to a module's name, so Shoalscan writes one pattern per
+# module name that follows a #[cfg(test)] in the scanned files (see
+# shoalscan/testscope.py).
 rules:
   - id: rust-cfg-test-item
     message: An item compiled only for tests (#[cfg(test)]).
@@ -42,23 +43,38 @@ rules:
   # #[tokio::test] and #[rstest] expand to #[test] functions (rstest's
   # parametrised cases to a #[cfg(test)] module and function). #[test_case] is
   # left out on purpose: it keeps the original function, with its body, as a
-  # plain function outside cfg(test).
+  # plain function outside cfg(test). One rule per attribute, because each name
+  # can be shadowed in its own way (see shoalscan/testscope.py).
   - id: rust-test-fn
-    message: A test function (#[test], #[tokio::test] or #[rstest]).
+    message: A test function (#[test]).
+    severity: INFO
+    languages: [rust]
+    metadata:
+      category: test-scope
+    pattern: |
+      #[test]
+      fn $F(...) { ... }
+
+  - id: rust-tokio-test-fn
+    message: A test function (#[tokio::test]).
     severity: INFO
     languages: [rust]
     metadata:
       category: test-scope
     pattern-either:
       - pattern: |
-          #[test]
-          fn $F(...) { ... }
-      - pattern: |
           #[tokio::test]
           fn $F(...) { ... }
       - pattern: |
           #[tokio::test(...)]
           fn $F(...) { ... }
-      - pattern: |
-          #[rstest]
-          fn $F(...) { ... }
+
+  - id: rust-rstest-fn
+    message: A test function (#[rstest]).
+    severity: INFO
+    languages: [rust]
+    metadata:
+      category: test-scope
+    pattern: |
+      #[rstest]
+      fn $F(...) { ... }

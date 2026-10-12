@@ -7,8 +7,8 @@ and are skipped without them; the rest run anywhere.
 import contextlib
 import io
 import json
-import os
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -72,12 +72,38 @@ class PolicyTests(unittest.TestCase):
     def test_lists_opengrep_rules_like_exclude_rules(self):
         config = self.parse(
             '[test_scope]\nnon_blocking = ["community.rust.lang.security.temp-dir", '
-            '"shoalscan.rust-plain-http-url", "repo.rules.*"]\n'
+            '"shoalscan.rust-plain-http-url", "community.rust.lang.security.*"]\n'
         )
         self.assertEqual(
             config.test_scope.non_blocking,
-            ("community.rust.lang.security.temp-dir", "repo.rules.*", "shoalscan.rust-plain-http-url"),
+            (
+                "community.rust.lang.security.*",
+                "community.rust.lang.security.temp-dir",
+                "shoalscan.rust-plain-http-url",
+            ),
         )
+
+    def test_secret_rules_are_refused(self):
+        for rule in (
+            "community.generic.secrets.security.detected-aws-access-key",
+            "community.generic.secrets.gitleaks.generic-api-key",
+            "community.rust.lang.security.hardcoded-SECRET",
+            "community.generic.secrets.security.detected-github-token",
+            "community.generic.secrets.security.detected-private-key",
+            "community.generic.secrets.security.detected-jwt-token",
+            "repo.rules.detected-slack-token",
+            "repo.rules.stripe-api-key",
+            "repo.rules.private-key",
+            "repo.rules.jwt",
+            "community.generic.secrets.*",
+        ):
+            with self.assertRaisesRegex(SetupError, "it finds secrets", msg=rule):
+                self.parse(f'[test_scope]\nnon_blocking = ["{rule}"]\n')
+
+    def test_broad_wildcards_are_refused(self):
+        for rule in ("community.*", "shoalscan.*", "repo.*", "repo.rules.*", "community.rust.*"):
+            with self.assertRaisesRegex(SetupError, "too broad", msg=rule):
+                self.parse(f'[test_scope]\nnon_blocking = ["{rule}"]\n')
 
     def test_gitleaks_rules_are_refused(self):
         for rule in ("gitleaks.generic-api-key", "gitleaks.*"):
@@ -129,11 +155,11 @@ class CheckTests(unittest.TestCase):
             finding("src/lib.rs", 10, tool="gitleaks", rule="gitleaks.x", test_scope=self.SCOPE),
             finding("examples/a.rs", 10, test_scope=self.SCOPE),
             finding("src/bin/tool.rs", 10, test_scope=self.SCOPE),
+            finding("src/lib.rs", 10, rule="repo.rules.family.hardcoded-secret", test_scope=self.SCOPE),
         ]
         for f in cases:
-            result = compare(
-                [f], [], ("ERROR", "WARNING"), test_scope=("repo.rules.other",) if f.rule == RULE else (RULE,)
-            )
+            listed = ("repo.rules.other",) if f.rule == RULE else (RULE, "repo.rules.family.*")
+            result = compare([f], [], ("ERROR", "WARNING"), test_scope=listed)
             self.assertEqual(result.new_blocking, [f], f)
 
     def test_a_baselined_scoped_finding_is_guidance_not_a_failure(self):
@@ -161,126 +187,137 @@ class CheckTests(unittest.TestCase):
                 load_findings(path)
 
 
-# ---------------------------------------------------------------- file-level scope (no Opengrep needed)
+# ---------------------------------------------------------------- the repository (no Opengrep needed)
 
 
-class FileScopeTests(unittest.TestCase):
+class RepositoryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()
         write(self.root, "Cargo.toml", '[package]\nname = "demo"\n')
-        write(self.root, "src/lib.rs", "pub fn shipped() {}\n")
-        write(self.root, "tests/it.rs", f"fn t() {{ {CALL} }}\n")
+        write(self.root, "src/lib.rs", "#[cfg(test)]\nmod tests {}\n")
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def scopes(self, results=()):
-        tree = testscope.read_tree(self.root)
-        return testscope.build(self.root, list(results), tree, [])
+    def repo(self) -> testscope.Repository:
+        return testscope.read_repository(self.root)
 
-    def test_integration_tests_and_benches(self):
-        write(self.root, "benches/b.rs", "fn b() {}\n")
-        write(self.root, "tests/common/mod.rs", "pub fn c() {}\n")
-        scopes = self.scopes()
-        self.assertEqual(scopes.scope_for("tests/it.rs", 1), TestScope("test_target", "tests", 0))
-        self.assertEqual(scopes.scope_for("tests/common/mod.rs", 1).kind, "test_target")
-        self.assertEqual(scopes.scope_for("benches/b.rs", 1), TestScope("test_target", "benches", 0))
-        self.assertIsNone(scopes.scope_for("src/lib.rs", 1))
+    def test_a_clean_repository(self):
+        repo = self.repo()
+        self.assertIsNone(repo.off)
+        self.assertEqual(repo.module_names, ["tests"])
 
-    def test_a_workspace_manifest_without_package_is_not_a_crate(self):
-        write(self.root, "Cargo.toml", '[workspace]\nmembers = ["a"]\n')
-        self.assertIsNone(self.scopes().scope_for("tests/it.rs", 1))
-
-    def test_a_cargo_target_inside_tests_drops_the_directory(self):
-        for manifest in (
-            '[package]\nname = "demo"\n[lib]\npath = "tests/lib.rs"\n',
-            '[package]\nname = "demo"\n[[bin]]\nname = "x"\npath = "tests/main.rs"\n',
-            '[package]\nname = "demo"\nbuild = "tests/build.rs"\n',
+    def test_a_build_script_that_may_set_cfg_test_turns_scope_off(self):
+        for text in (
+            'fn main() { println!("cargo:rustc-cfg=test"); }',
+            'fn main() { println!("cargo::rustc-cfg=test_utils"); }',
+            'fn main() { let n = "test"; println!("cargo:rustc-cfg={n}"); }',
+            'fn main() { println!("cargo:rustc-cfg={}", name()); }',
+            'fn main() { println!(concat!("cargo:rustc-cfg=", "te", "st")); }',
+            "fn main() { autocfg::new().emit_rustc_cfg(NAME); }",
+            "fn main() { cfg_aliases::cfg_aliases! { x: { unix } } }",
         ):
-            write(self.root, "Cargo.toml", manifest)
-            self.assertIsNone(self.scopes().scope_for("tests/it.rs", 1), manifest)
+            write(self.root, "build.rs", text)
+            self.assertIn("rustc-cfg", self.repo().off or "", text)
+        for text in ('fn main() { println!("cargo:rustc-cfg=has_foo"); }', 'fn main() { ac.emit_cfg("has_x"); }'):
+            write(self.root, "build.rs", text)
+            self.assertIsNone(self.repo().off, text)
+        # Any Rust file can be a build script's helper, under any name.
+        (self.root / "build.rs").unlink()
+        write(self.root, "build/helper.rs", 'pub fn emit() { println!("cargo:rustc-cfg=test"); }')
+        self.assertIsNotNone(self.repo().off)
 
-    def test_another_crate_naming_a_tests_file_drops_it(self):
-        write(self.root, "other/Cargo.toml", '[package]\nname = "o"\n[lib]\npath = "../tests/it.rs"\n')
-        self.assertIsNone(self.scopes().scope_for("tests/it.rs", 1))
-
-    def test_an_unreadable_manifest_turns_test_targets_off(self):
-        write(self.root, "other/Cargo.toml", "[package\n")
-        self.assertIsNone(self.scopes().scope_for("tests/it.rs", 1))
-
-    def test_a_fake_crate_cannot_make_shipped_modules_test_targets(self):
-        # src/lib.rs compiles src/tests/mod.rs; a Cargo.toml planted in src/ must not make it test-only.
-        write(self.root, "src/lib.rs", "mod tests;\n")
-        write(self.root, "src/Cargo.toml", '[package]\nname = "fake"\n')
-        write(self.root, "src/tests/mod.rs", f"pub fn shipped() {{ {CALL} }}\n")
-        scopes = self.scopes()
-        self.assertIsNone(scopes.scope_for("src/tests/mod.rs", 1))
-        self.assertEqual(scopes.dropped_files, 1)
-
-    def test_path_include_and_links_drop_file_scopes(self):
+    def test_cargo_configuration_that_passes_cfg_test_turns_scope_off(self):
         cases = {
-            "path": '#[path = "../tests/it.rs"]\nmod shared;\n',
-            "include": 'include!("../tests/it.rs");\n',
-            "unknown include": 'include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/it.rs"));\n',
-            "raw path": '#[path = r"../tests/it.rs"]\nmod shared;\n',
-            "cfg_attr path": '#[cfg_attr(not(test), path = "../tests/it.rs")]\nmod shared;\n',
-            "macro include": 'macro_rules! inc { ($p:literal) => { include!($p) } }\ninc!("../tests/it.rs");\n',
+            ".cargo/config.toml": '[build]\nrustflags = ["--cfg", "test"]\n',
+            "crates/a/.cargo/config": '[target.x86_64-unknown-linux-gnu]\nrustflags = "--cfg test"\n',
+            "Cargo.toml": '[package]\nname = "demo"\n[profile.release]\nrustflags = ["--cfg=test"]\n',
+            "a/target/evil/Cargo.toml": '[package]\nname = "x"\n[profile.dev]\nrustflags = ["--cfg", "test"]\n',
         }
-        for name, text in cases.items():
-            write(self.root, "src/lib.rs", text)
-            self.assertIsNone(self.scopes().scope_for("tests/it.rs", 1), name)
-        write(self.root, "src/lib.rs", "pub fn shipped() {}\n")
-        os.symlink("../tests/it.rs", self.root / "src/linked.rs")
-        self.assertIsNone(self.scopes().scope_for("tests/it.rs", 1))
+        for path, text in cases.items():
+            write(self.root, path, text)
+            self.assertIn("--cfg test", self.repo().off or "", path)
+            if path == "Cargo.toml":
+                write(self.root, path, '[package]\nname = "demo"\n')
+            else:
+                (self.root / path).unlink()
+        write(self.root, ".cargo/config.toml", '[build]\nrustflags = ["--cfg", "tokio_unstable"]\n')
+        self.assertIsNone(self.repo().off)
+
+    def test_shadowed_test_attributes(self):
+        shadowing = [
+            "use test_log::test;",
+            "use x::passthrough as test;",
+            "use x::{passthrough as rstest};",
+            "use other::{test, b};",
+            "mod tokio { }",
+            "extern crate fake as tokio;",
+            "macro_rules! test { () => {} }",
+            "fn rstest() {}",
+        ]
+        for line in shadowing:
+            self.assertTrue(testscope.shadows_test_attributes(testscope.strip_code(line)), line)
+        for line in (
+            "use tokio::sync::Mutex;",
+            "use tokio::test;",
+            "use rstest::rstest;",
+            "use rstest::{fixture, rstest};",
+            "use super::*;",
+            "fn test_helper() {}",
+            "// use test_log::test;",
+            'const S: &str = "use x as test;";',
+        ):
+            self.assertFalse(testscope.shadows_test_attributes(testscope.strip_code(line)), line)
+        write(self.root, "src/a.rs", "use test_log::test;\n")
+        self.assertEqual(self.repo().shadowed, {"src/a.rs"})
+
+    def test_a_renamed_tokio_or_macro_use_turns_test_fn_off(self):
+        write(self.root, "Cargo.toml", '[package]\nname = "demo"\n[dev-dependencies]\ntokio = { path = "fake" }\n')
+        self.assertIn("tokio", self.repo().shadowed_everywhere or "")
+        write(self.root, "Cargo.toml", '[package]\nname = "demo"\n[dev-dependencies]\ntokio = "1"\n')
+        self.assertIsNone(self.repo().shadowed_everywhere)
+        write(self.root, "src/lib.rs", "#[macro_use]\nextern crate test_log;\n")
+        self.assertIn("macro_use", self.repo().shadowed_everywhere or "")
+
+    def test_module_names_come_only_after_cfg_test(self):
+        write(
+            self.root,
+            "src/lib.rs",
+            "// #[cfg(test)]\nmod commented {}\n"
+            '#[cfg(not(test))]\nmod not_test {}\nconst S: &str = "#[cfg(test)] mod in_a_string {}";\n'
+            "#[cfg(test)]\n/// doc\n#[allow(dead_code)]\npub(crate) mod real {}\n"
+            "#[cfg(test)] /* a comment */ mod after_comment {}\n#[cfg(test)]\nmod r#type {}\n",
+        )
+        self.assertEqual(self.repo().module_names, ["after_comment", "real"])
+
+    def test_the_module_name_cap(self):
+        with unittest.mock.patch.object(testscope, "MAX_MODULE_NAMES", 1):
+            write(self.root, "src/more.rs", "#[cfg(test)]\nmod a {}\n#[cfg(test)]\nmod b {}\n")
+            repo = self.repo()
+        self.assertEqual((len(repo.module_names), repo.names_dropped), (1, 2))
+
+    def test_strip_code(self):
+        code = testscope.strip_code("a /* x /* nested */ y */ b // c\n\"s\\\"t\" r#\"raw \" x\"# 'q' '\\'' &'a str\n")
+        self.assertEqual(code.split(), ["a", "b", "&'a", "str"])
+        self.assertEqual(code.count("\n"), 2)
 
     def test_matches_in_a_file_opengrep_could_not_parse_are_not_used(self):
-        write(self.root, "src/lib.rs", "#[cfg(test)]\nfn helper() {}\n")
         match = {
             "check_id": testscope.ITEM_RULE,
             "path": str(self.root / "src/lib.rs"),
             "start": {"line": 1, "col": 1, "offset": 0},
             "end": {"line": 2, "col": 15, "offset": 27},
         }
-        tree = testscope.read_tree(self.root)
-        self.assertEqual(testscope.build(self.root, [match], tree, []).scope_for("src/lib.rs", 2).kind, "cfg_test_item")
+        repo = self.repo()
+        self.assertEqual(testscope.build(self.root, [match], repo).scope_for("src/lib.rs", 2).kind, "cfg_test_item")
         unparsed = frozenset({"src/lib.rs"})
-        self.assertIsNone(testscope.build(self.root, [match], tree, [], unparsed).scope_for("src/lib.rs", 2))
-
-    def test_test_files_may_load_each_other(self):
-        write(self.root, "tests/it.rs", "mod common;\n")
-        write(self.root, "tests/common/mod.rs", "pub fn c() {}\n")
-        self.assertEqual(self.scopes().scope_for("tests/common/mod.rs", 1).kind, "test_target")
+        self.assertIsNone(testscope.build(self.root, [match], repo, unparsed).scope_for("src/lib.rs", 2))
 
     def test_never_test_scope(self):
-        write(self.root, "examples/demo/Cargo.toml", '[package]\nname = "d"\n')
-        write(self.root, "examples/demo/tests/t.rs", "fn t() {}\n")
-        scopes = self.scopes()
-        self.assertIsNone(scopes.scope_for("examples/demo/tests/t.rs", 1))
         for path in ("examples/x.rs", "build.rs", "crate/build.rs", "src/bin/tool.rs", "crate/src/bin/a/main.rs"):
             self.assertTrue(testscope.never_test_scope(path), path)
         self.assertFalse(testscope.never_test_scope("src/binary.rs"))
-
-    def test_too_large_a_tree_turns_file_scopes_off(self):
-        with unittest.mock.patch.object(testscope, "MAX_RS_BYTES", 4):
-            scopes = self.scopes()
-        self.assertIsNone(scopes.scope_for("tests/it.rs", 1))
-        self.assertIsNotNone(scopes.incomplete)
-
-    def test_declared_file_resolution_is_conservative(self):
-        files = {"src/a.rs", "src/b/mod.rs", "src/c.rs", "src/c/mod.rs", "src/x/d.rs", "src/d.rs"}
-        self.assertEqual(testscope._declared_file("src/lib.rs", "a", files), "src/a.rs")
-        self.assertEqual(testscope._declared_file("src/lib.rs", "b", files), "src/b/mod.rs")
-        self.assertIsNone(testscope._declared_file("src/lib.rs", "c", files))  # ambiguous
-        self.assertIsNone(testscope._declared_file("src/lib.rs", "missing", files))
-        # src/x.rs could be a crate root (src/d.rs) or a plain module (src/x/d.rs): ambiguous.
-        self.assertIsNone(testscope._declared_file("src/x.rs", "d", files))
-
-    def test_module_names_skip_keywords_and_files_without_cfg_test(self):
-        names = testscope.module_names(
-            {"a.rs": "#[cfg( test )]\nmod tests {}\nmod self_check;\nmod r#type;", "b.rs": "mod other;"}
-        )
-        self.assertEqual(names, ["self_check", "tests"])
 
 
 # ---------------------------------------------------------------- the scope rules, with Opengrep
@@ -360,7 +397,7 @@ pub mod test_support {{
 }}
 
 #[cfg(test)]
-mod ambiguous;
+mod main;
 
 #[cfg(test)]
 #[path = "support/fixture_impl.rs"]
@@ -428,8 +465,8 @@ class ScopeRuleTests(unittest.TestCase):
 
     def test_adversarial_constructs(self):
         make_crate(self.repo, ADVERSARIAL)
-        write(self.repo, "src/ambiguous.rs", f"fn amb1() {{ {CALL} }}\n")
-        write(self.repo, "src/ambiguous/mod.rs", f"fn amb2() {{ {CALL} }}\n")
+        # A crate root that a #[cfg(test)] declaration also names, and a #[path] file: whole files are never scoped.
+        write(self.repo, "src/main.rs", f"fn main() {{ {CALL} }}\n")
         write(self.repo, "src/support/fixture_impl.rs", f"fn fix() {{ {CALL} }}\n")
         doc = self.scan()
         lines = (self.repo / "src/lib.rs").read_text(encoding="utf-8").split("\n")
@@ -440,19 +477,47 @@ class ScopeRuleTests(unittest.TestCase):
                 seen[name] = (f.get("test_scope") or {}).get("kind")
         self.assertEqual(seen, EXPECTED)
         by_path = {f["path"]: f.get("test_scope") for f in doc["findings"] if f["rule"] == RULE}
-        self.assertIsNone(by_path["src/ambiguous.rs"])
-        self.assertIsNone(by_path["src/ambiguous/mod.rs"])
-        fixture_line = lines.index("mod fixture;") - 1
-        self.assertEqual(
-            by_path["src/support/fixture_impl.rs"],
-            {"kind": "cfg_test_file", "path": "src/lib.rs", "line": fixture_line},
-        )
+        self.assertIsNone(by_path["src/main.rs"])
+        self.assertIsNone(by_path["src/support/fixture_impl.rs"])
         # The scope rules' matches are never findings, in findings.json or the SARIF file.
         self.assertFalse([f for f in doc["findings"] if f["rule"].startswith("test-scope.")])
         sarif = (self.out / "findings.sarif").read_text(encoding="utf-8")
         self.assertNotIn("test-scope.", sarif)
         self.assertIn("shoalscan/test_scope", sarif)
         self.assertNotIn("test-scope.rust-cfg-test-item", doc["rule_ids"])
+
+    def test_a_build_time_cfg_test_turns_scope_off(self):
+        make_crate(self.repo, None)
+        write(self.repo, "build.rs", 'fn main() {\n    println!("cargo:rustc-cfg=test");\n}\n')
+        code, _, err = cli("scan", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out))
+        self.assertEqual(code, 0, err)
+        self.assertIn("TEST SCOPE IS OFF", err)
+        doc = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
+        self.assertIn("build.rs", doc["test_scope"]["off"])
+        self.assertFalse([f for f in doc["findings"] if "test_scope" in f])
+        (self.repo / "build.rs").unlink()
+        write(self.repo, ".cargo/config.toml", '[build]\nrustflags = ["--cfg", "test"]\n')
+        doc = self.scan()
+        self.assertIn(".cargo/config.toml", doc["test_scope"]["off"])
+        self.assertFalse([f for f in doc["findings"] if "test_scope" in f])
+
+    def test_a_shadowed_test_attribute_is_not_scope(self):
+        lib = (FIXTURE / "src/lib.rs").read_text(encoding="utf-8")
+        make_crate(self.repo, "use test_log::test;\n" + lib)
+        doc = self.scan()
+        kinds = {f["test_scope"]["kind"] for f in doc["findings"] if f["path"] == "src/lib.rs" and "test_scope" in f}
+        self.assertEqual(kinds, {"cfg_test_module", "cfg_test_item"})
+        self.assertEqual(doc["test_scope"]["test_fn_dropped"], 1)
+
+    def test_the_module_name_cap_warns(self):
+        make_crate(self.repo, None)
+        with unittest.mock.patch.object(testscope, "MAX_MODULE_NAMES", 0):
+            code, _, err = cli("scan", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out))
+        self.assertEqual(code, 0, err)
+        self.assertIn("module names were left out", err)
+        doc = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(doc["test_scope"]["module_names_dropped"], 3)
+        self.assertNotIn("cfg_test_module", {f["test_scope"]["kind"] for f in doc["findings"] if "test_scope" in f})
 
     def test_policy_off_runs_no_scope_rules(self):
         make_crate(self.repo, None, policy=False)
@@ -529,20 +594,23 @@ class EndToEndTests(unittest.TestCase):
                 ("src/lib.rs", "cfg_test_module"),
                 ("src/lib.rs", "test_fn"),
                 ("src/lib.rs", "cfg_test_item"),
-                ("src/helpers.rs", "cfg_test_file"),
-                ("tests/integration.rs", "test_target"),
-                ("tests/common/mod.rs", "test_target"),
+                ("tests/integration.rs", "test_fn"),
             },
         )
         code, summary, out = self.check()
         self.assertEqual(code, 1)
-        self.assertEqual(summary["test_scoped"], 6)
-        self.assertEqual(summary["new_blocking"], len(doc["findings"]) - 6)
-        self.assertIn("Accepted as test-only code (never blocking): 6", out)
+        self.assertEqual(summary["test_scoped"], 4)
+        self.assertEqual(summary["new_blocking"], len(doc["findings"]) - 4)
+        self.assertIn("Accepted as test-only code (never blocking): 4", out)
         blocked = json.loads((self.out / "check.json").read_text(encoding="utf-8"))["new_blocking"]
         # The rule [test_scope] does not list blocks even inside the test module.
         self.assertIn("repo.rules.other", {k[1] for k in blocked})
-        self.assertTrue({"build.rs", "examples/demo.rs", "src/lib.rs"} <= {k[2] for k in blocked})
+        # Whole files are never test scope: not a crate's tests/ (outside a test function), not the file a
+        # #[cfg(test)] mod NAME; declaration loads.
+        self.assertTrue(
+            {"build.rs", "examples/demo.rs", "src/lib.rs", "src/helpers.rs", "tests/common/mod.rs"}
+            <= {k[2] for k in blocked}
+        )
 
     def test_policy_off(self):
         text = (self.repo / ".shoalscan.toml").read_text(encoding="utf-8")
@@ -574,9 +642,9 @@ class EndToEndTests(unittest.TestCase):
         path.write_text(without, encoding="utf-8")
         git(self.repo, "commit", "-q", "-am", "drop the policy")
         doc = self.scan("--policy-ref", base)
-        self.assertEqual(sum(1 for f in doc["findings"] if "test_scope" in f), 6)
+        self.assertEqual(sum(1 for f in doc["findings"] if "test_scope" in f), 4)
         _, summary, out = self.check("--policy-ref", base)
-        self.assertEqual(summary["test_scoped"], 6)
+        self.assertEqual(summary["test_scoped"], 4)
         self.assertIn("POLICY CHANGES", out)
         # The other way round: a change cannot turn the policy on for itself.
         git(self.repo, "checkout", "-q", "-b", "base-without", base)
@@ -602,7 +670,7 @@ class EndToEndTests(unittest.TestCase):
             ).fetchall()
         finally:
             conn.close()
-        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(rows), 4)
         for _path, status, who, description, resolved in rows:
             self.assertEqual((status, who), ("accepted_risk", AUTO_REVIEWER))
             self.assertTrue(description.startswith("test-only code: "), description)
@@ -627,7 +695,7 @@ class EndToEndTests(unittest.TestCase):
         self.scan()
         code, summary, _ = self.check()
         self.assertEqual(code, 1)
-        self.assertEqual(summary["test_scoped"], 5)
+        self.assertEqual(summary["test_scoped"], 3)
         blocked = json.loads((self.out / "check.json").read_text(encoding="utf-8"))["new_blocking"]
         self.assertIn(("src/lib.rs", RULE), {(k[2], k[1]) for k in blocked})
         self.record(code, "2026-10-02T02:00:00Z")
@@ -648,6 +716,24 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(human, [("wont_fix", "a@b.example")])
         self.assertEqual(events, [("accepted_risk", "open", AUTO_REVIEWER)])
 
+    def test_a_run_without_check_details_supersedes_automatic_reviews(self):
+        self.scan()
+        code, _, _ = self.check()
+        self.record(code, "2026-10-01T02:00:00Z")
+        write(self.repo, "NOTES.md", "a change\n")
+        git(self.repo, "add", "NOTES.md")
+        git(self.repo, "commit", "-q", "-m", "notes")
+        self.scan()
+        code, _, _ = self.check()
+        (self.out / "check.json").unlink()  # a record with the check output only proves nothing
+        self.record(code, "2026-10-02T02:00:00Z")
+        conn = history.open_read_only(self.db)
+        try:
+            statuses = conn.execute("SELECT DISTINCT status, updated_by FROM finding_reviews").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(statuses, [("open", AUTO_REVIEWER)])
+
     def dashboard(self) -> Data:
         self.conn = history.open_read_only(self.db)
         data = Data(self.conn)
@@ -662,21 +748,21 @@ class EndToEndTests(unittest.TestCase):
         data = self.dashboard()
         try:
             page = data.findings(self.repo_id, self.run_id, review="test_scope")
-            self.assertEqual(page["total"], 6)
-            helper = [f for f in page["findings"] if f["path"] == "src/helpers.rs"][0]
+            self.assertEqual(page["total"], 4)
+            helper = [f for f in page["findings"] if f["test_scope"]["kind"] == "cfg_test_module"][0]
             self.assertEqual(
                 helper["test_scope"],
                 {
-                    "kind": "cfg_test_file",
+                    "kind": "cfg_test_module",
                     "path": "src/lib.rs",
-                    "line": 22,
-                    "description": "test-only code: cfg_test_file at src/lib.rs:22",
+                    "line": 7,
+                    "description": "test-only code: cfg_test_module at src/lib.rs:7",
                 },
             )
             self.assertEqual(helper["review"]["updated_by"], AUTO_REVIEWER)
             self.assertEqual(helper["review"]["status"], "accepted_risk")
-            self.assertEqual(data.review_counts(self.repo_id, self.run_id)["test_scoped"], 6)
-            self.assertEqual(data.overview(self.repo_id)["latest_trend_run"]["test_scoped"], 6)
+            self.assertEqual(data.review_counts(self.repo_id, self.run_id)["test_scoped"], 4)
+            self.assertEqual(data.overview(self.repo_id)["latest_trend_run"]["test_scoped"], 4)
             shipped = data.findings(self.repo_id, self.run_id, path="build.rs")["findings"][0]
             self.assertIsNone(shipped["test_scope"])
         finally:
@@ -688,14 +774,14 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         size = (self.repo / "baseline.toml").read_text(encoding="utf-8").count("[[finding]]")
         code, summary, out = self.check()
-        self.assertEqual((code, summary["stale"], summary["baseline_test_scoped"]), (0, 0, 6))
+        self.assertEqual((code, summary["stale"], summary["baseline_test_scoped"]), (0, 0, 4))
         self.assertIn("shoalscan baseline prune --test-scope", out)
         code, out, err = cli("baseline", "prune", "--test-scope", "--repo", str(self.repo), "--out", str(self.out))
         self.assertEqual(code, 0, err)
-        self.assertIn("removed 6 entries", out)
-        self.assertEqual((self.repo / "baseline.toml").read_text(encoding="utf-8").count("[[finding]]"), size - 6)
+        self.assertIn("removed 4 entries", out)
+        self.assertEqual((self.repo / "baseline.toml").read_text(encoding="utf-8").count("[[finding]]"), size - 4)
         code, summary, _ = self.check()
-        self.assertEqual((code, summary["new"], summary["new_blocking"], summary["test_scoped"]), (0, 6, 0, 6))
+        self.assertEqual((code, summary["new"], summary["new_blocking"], summary["test_scoped"]), (0, 4, 0, 4))
         code, out, _ = cli("baseline", "prune", "--test-scope", "--repo", str(self.repo), "--out", str(self.out))
         self.assertIn("no entries", out)
         # Prune refuses findings made under another configuration.
@@ -704,6 +790,63 @@ class EndToEndTests(unittest.TestCase):
         code, _, err = cli("baseline", "prune", "--test-scope", "--repo", str(self.repo), "--out", str(self.out))
         self.assertEqual(code, 2)
         self.assertIn("another configuration", err)
+
+
+# ---------------------------------------------------------------- migrations
+
+
+class MigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+        self.db = self.base / "history.sqlite3"
+        conn = sqlite3.connect(self.db)
+        for version, script in enumerate(history.MIGRATIONS[:13]):
+            conn.executescript(f"{script}\nPRAGMA user_version = {version + 1};")
+        conn.close()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def version(self, path: Path) -> int:
+        conn = sqlite3.connect(path)
+        try:
+            return conn.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            conn.close()
+
+    def check_backup(self, err: str) -> None:
+        backup = self.base / "history.sqlite3.bak-schema13"
+        self.assertTrue(backup.is_file())
+        self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.version(backup), 13)
+        self.assertEqual(self.version(self.db), history.SCHEMA_VERSION)
+        self.assertIn(str(backup), err)
+
+    def test_every_migration_backs_up_first(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            history.open_for_write(self.db).close()
+        self.check_backup(err.getvalue())
+
+    def test_serve_migrates_at_start(self):
+        from shoalscan.dashboard import server
+
+        auth = self.base / "auth"
+        auth.mkdir(mode=0o700)
+        config = server.ServeConfig(
+            db=self.db,
+            cert=self.base / "c",
+            key=self.base / "k",
+            auth_dir=auth,
+            bind="127.0.0.1",
+            port=0,
+            hosts=("127.0.0.1",),
+        )
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            server.App(config)
+        self.check_backup(err.getvalue())
 
 
 if __name__ == "__main__":
