@@ -1,7 +1,8 @@
 """Sign-in through an external OpenID Connect provider, such as Dex.
 
 The flow is the authorization code flow with PKCE (S256), a `state` bound to
-a short-lived cookie, and a `nonce`. The dashboard is a confidential client:
+a short-lived cookie, and a `nonce`. The server keeps nothing per login: the
+state, nonce and PKCE verifier travel in that cookie, signed (see `Logins`). The dashboard is a confidential client:
 it sends its client secret straight to the provider's token endpoint over
 TLS, and checks the ID token it gets back:
 
@@ -51,7 +52,9 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 CLOCK_SKEW_SECONDS = 120
 MIN_RSA_BITS = 2048
 LOGIN_SECONDS = 600
-MAX_PENDING = 1000
+# Login states already used, remembered until their login would have expired anyway.
+MAX_USED_STATES = 10_000
+MAX_LOGIN_COOKIE_CHARS = 1024
 DEFAULT_SCOPES = ("openid", "email", "profile", "groups")
 LOOPBACK = ("127.0.0.1", "::1", "localhost")
 # DER prefix of a SHA-256 DigestInfo (RFC 8017, section 9.2).
@@ -81,15 +84,16 @@ class Config:
     display_name: str = "your identity provider"
 
 
-def validate_url(url: object, what: str) -> str:
-    """An https URL, or http on the loopback interface, with no user name, query or fragment."""
+def validate_url(url: object, what: str, keep_slash: bool = False) -> str:
+    """An https URL, or http on the loopback interface, with no user name, query or fragment.
+    A trailing slash is removed unless `keep_slash` (an issuer is compared exactly as the provider names it)."""
     if not isinstance(url, str) or len(url) > 500:
         raise SetupError(f"the {what} must be a URL")
     parts = urllib.parse.urlsplit(url)
     secure = parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOOPBACK)
     if not secure or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
         raise SetupError(f"the {what} must be an https:// URL (http only on this machine), with no query: {url!r}")
-    return url.rstrip("/")
+    return url if keep_slash else url.rstrip("/")
 
 
 def check_ca_pem(text: object) -> str:
@@ -115,7 +119,7 @@ def validate(raw: dict, ca_file: str | None = None) -> Config:
             f"the OIDC configuration needs {', '.join(sorted(required))}, and may have "
             f"{', '.join(sorted(allowed - required))}"
         )
-    issuer = validate_url(raw["issuer"], "issuer")
+    issuer = validate_url(raw["issuer"], "issuer", keep_slash=True)
     redirect = raw["redirect_uri"]
     parts = urllib.parse.urlsplit(redirect) if isinstance(redirect, str) else None
     if parts is None or parts.scheme != "https" or not parts.hostname or parts.path != "/oidc/callback" or parts.query:
@@ -243,10 +247,15 @@ class Provider:
     checks: list[str] = field(default_factory=list)
 
 
+def discovery_url(issuer: str) -> str:
+    """Where an issuer publishes its discovery document (OpenID Connect Discovery 1.0, section 4)."""
+    return f"{issuer.rstrip('/')}/.well-known/openid-configuration"
+
+
 def discover(config: Config) -> Provider:
     """Fetch and check the discovery document and the signing keys. Every check passed is listed."""
-    doc = _request(f"{config.issuer}/.well-known/openid-configuration", config.ca_file)
-    checks = [f"Discovery document read from {config.issuer}/.well-known/openid-configuration"]
+    doc = _request(discovery_url(config.issuer), config.ca_file)
+    checks = [f"Discovery document read from {discovery_url(config.issuer)}"]
     if doc.get("issuer") != config.issuer:
         raise OidcError(f"the provider says its issuer is {doc.get('issuer')!r}, not {config.issuer!r}")
     checks.append("The issuer matches")
@@ -346,35 +355,73 @@ class Pending:
 
     nonce: str
     verifier: str
-    created: float
+    created: float  # wall-clock time, from the login cookie
 
 
 class Logins:
-    """Logins in progress, keyed by their `state`; each is used once and expires after LOGIN_SECONDS."""
+    """Logins in progress. The server keeps no state per login, so starting logins cannot crowd out others.
 
-    def __init__(self):
+    `start` makes a random state, nonce and PKCE verifier and seals them, with an expiry, into the value of the
+    `__Host-` login cookie: JSON, then an HMAC-SHA256 tag under a key held only in this process's memory. The
+    standard library has no authenticated encryption, so the cookie is signed, not encrypted. That gives integrity,
+    which is what matters: nobody can make a cookie the dashboard accepts, or change one. The verifier is readable
+    only by someone who can read the browser's cookie (it is `Secure` and `HttpOnly`), and that person could already
+    finish the login with the cookie itself, so the verifier being readable adds nothing for them.
+
+    `finish` checks the tag, the expiry, and that the state the provider sent back is the one in the cookie. Each
+    state works once: a used state is remembered until its login would have expired anyway (at most
+    MAX_USED_STATES; entries only get there after a valid cookie, which /oidc/start rate limits). The callback also
+    clears the cookie, and the provider refuses a code used twice. A restart makes a new key, which ends logins
+    in progress, as before.
+    """
+
+    def __init__(self, key: bytes | None = None):
+        self._key = key or secrets.token_bytes(32)
         self._lock = threading.Lock()
-        self._items: dict[str, Pending] = {}
+        self._used: dict[str, float] = {}  # state -> when it may be forgotten
 
-    def start(self) -> tuple[str, Pending]:
+    def _tag(self, payload: bytes) -> str:
+        return base64.urlsafe_b64encode(hmac.digest(self._key, payload, "sha256")).rstrip(b"=").decode()
+
+    def start(self, now: float | None = None) -> tuple[str, Pending, str]:
+        """A new login: (state, its nonce and verifier, the login cookie's value)."""
         state = secrets.token_urlsafe(32)
-        pending = Pending(secrets.token_urlsafe(32), secrets.token_urlsafe(48), time.monotonic())
-        with self._lock:
-            now = time.monotonic()
-            self._items = {k: v for k, v in self._items.items() if now - v.created < LOGIN_SECONDS}
-            if len(self._items) >= MAX_PENDING:
-                self._items.pop(next(iter(self._items)))
-            self._items[state] = pending
-        return state, pending
+        pending = Pending(secrets.token_urlsafe(32), secrets.token_urlsafe(48), time.time() if now is None else now)
+        body = json.dumps(
+            {"s": state, "n": pending.nonce, "v": pending.verifier, "t": pending.created}, separators=(",", ":")
+        ).encode()
+        payload = base64.urlsafe_b64encode(body).rstrip(b"=")
+        return state, pending, f"{payload.decode()}.{self._tag(payload)}"
 
-    def finish(self, state: str | None) -> Pending | None:
-        if not state or len(state) > 100:
+    def finish(self, state: str | None, sealed: str | None, now: float | None = None) -> Pending | None:
+        """The login that `state` came back for, if the cookie is genuine, unexpired, for this state, and unused."""
+        if not state or len(state) > 100 or not sealed or len(sealed) > MAX_LOGIN_COOKIE_CHARS:
+            return None
+        payload, _, tag = sealed.partition(".")
+        if not hmac.compare_digest(
+            tag.encode("ascii", "replace"), self._tag(payload.encode("ascii", "replace")).encode()
+        ):
+            return None
+        try:
+            value = json.loads(_b64(payload))
+            ok = isinstance(value, dict) and all(isinstance(value.get(k), str) for k in "snv")
+            created = value["t"] if ok and isinstance(value.get("t"), (int, float)) else None
+        except (ValueError, UnicodeDecodeError):
+            return None
+        now = time.time() if now is None else now
+        if created is None or not -CLOCK_SKEW_SECONDS <= now - created < LOGIN_SECONDS:
+            return None
+        if not hmac.compare_digest(state.encode("ascii", "replace"), value["s"].encode("ascii", "replace")):
             return None
         with self._lock:
-            pending = self._items.pop(state, None)
-        if pending is None or time.monotonic() - pending.created >= LOGIN_SECONDS:
-            return None
-        return pending
+            for used in [k for k, until in self._used.items() if until <= now]:
+                del self._used[used]
+            if state in self._used:
+                return None
+            if len(self._used) >= MAX_USED_STATES:
+                self._used.pop(next(iter(self._used)))
+            self._used[state] = created + LOGIN_SECONDS
+        return Pending(value["n"], value["v"], created)
 
 
 def authorization_url(provider: Provider, config: Config, state: str, pending: Pending) -> str:
@@ -450,6 +497,8 @@ def verify_id_token(provider: Provider, config: Config, token: str, nonce: str, 
         raise OidcError("the ID token is from another issuer")
     if config.client_id not in audiences or (len(audiences) > 1 and claims.get("azp") != config.client_id):
         raise OidcError("the ID token is for another client")
+    if "azp" in claims and claims["azp"] != config.client_id:
+        raise OidcError("the ID token was issued to another client")
     for name in ("exp", "iat"):
         if not isinstance(claims.get(name), (int, float)) or isinstance(claims.get(name), bool):
             raise OidcError(f"the ID token has no {name}")

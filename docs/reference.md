@@ -48,6 +48,7 @@ What Shoalscan reads and writes, in one place. Each entry links to the guide tha
 | `findings.sarif` | `scan` | SARIF 2.1.0 for code scanning, without code snippets. | [Getting started](getting-started.md#the-first-scan) |
 | `check.json` | `check` | The lists behind the check's counts: new, new blocking and stale. | [Baseline and check](baseline-and-check.md#the-check) |
 | The history database (SQLite) | `record`, the dashboard | Runs, findings, reviews, embeddings and suggestions. | [Dashboard](dashboard.md) |
+| `setup-code`, in the dashboard's state directory (mode 0600) | `serve`, while sign-in is not set up | The one-time setup code for the wizard; it works for 30 minutes, and saving the settings deletes it. | [Dashboard](dashboard.md#signing-in) |
 
 ## Environment
 

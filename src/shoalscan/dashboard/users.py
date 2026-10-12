@@ -5,7 +5,9 @@ The provider proves who someone is; this database decides what they may do.
 - An admin is anyone whose ID token carries the admin claim (by default the
   `shoal-admin` group). The role comes from the provider at every sign-in:
   remove someone from the group there and their next sign-in is a member's,
-  or is refused.
+  or is refused. Admin sessions last at most an hour
+  (`auth.ADMIN_SESSION_MAX_SECONDS`), so that change takes effect within the
+  hour; disabling someone here takes effect at once.
 - Anyone else is refused unless an admin has allowed their email address;
   they are then a member, who reads everything and reviews findings.
 - Only verified email addresses count. On someone's first sign-in their
@@ -13,7 +15,9 @@ The provider proves who someone is; this database decides what they may do.
   that reuses the address is refused.
 - An admin can disable anyone but themselves, admins included; a disabled
   person is refused even with the admin claim. Sessions are checked against
-  this database on every request, so a change takes effect at once.
+  this database on every request, so a change here takes effect at once.
+- Email addresses must be ASCII. Case folding is ASCII only, so no two
+  different addresses can fold to the same one.
 - Every change, and every first sign-in, is kept in `user_events`.
 
 The database is `users.sqlite3` in the dashboard's state directory (mode
@@ -106,6 +110,10 @@ def _now() -> str:
 
 
 def normalise_email(email: object) -> str:
+    """An email address, trimmed and in lower case. Only ASCII addresses are accepted: Unicode case folding
+    maps some letters onto ASCII ones (the Kelvin sign onto `k`), which could make two addresses one."""
+    if isinstance(email, str) and not email.isascii():
+        raise SetupError(f"only email addresses in plain ASCII are accepted: {email[:80]!r}")
     if not isinstance(email, str) or not _EMAIL.match(email.strip()) or len(email) > 254:
         raise SetupError(f"not an email address: {str(email)[:80]!r}")
     return email.strip().lower()
@@ -204,10 +212,6 @@ def current(conn: sqlite3.Connection, email: str, role: str, version: int) -> bo
     and a member must still be allowed."""
     row = conn.execute("SELECT allowed, disabled, version FROM users WHERE email = ?", (email,)).fetchone()
     return row is not None and not row[1] and row[2] == version and (role == "admin" or bool(row[0]))
-
-
-def has_admin(conn: sqlite3.Connection) -> bool:
-    return conn.execute("SELECT 1 FROM users WHERE last_role = 'admin' AND disabled = 0 LIMIT 1").fetchone() is not None
 
 
 # ------------------------------------------------------------------ changes by admins

@@ -1,5 +1,6 @@
 """OpenID Connect sign-in: the configuration, RS256 checks, ID token rules, discovery and the login state."""
 
+import base64
 import json
 import time
 import unittest
@@ -21,11 +22,22 @@ class ConfigTests(unittest.TestCase):
     }
 
     def test_a_good_configuration(self):
-        config = oidc.validate(dict(self.BASE, issuer="https://idp.example/dex/"))
+        config = oidc.validate(self.BASE)
         self.assertEqual(config.issuer, "https://idp.example/dex")
         self.assertEqual((config.admin_claim, config.admin_value), ("groups", "shoal-admin"))
         self.assertIn("openid", config.scopes)
         oidc.validate(dict(self.BASE, issuer="http://127.0.0.1:5556/dex"))  # plain http only on this machine
+
+    def test_an_issuer_keeps_its_trailing_slash(self):
+        # The issuer is compared exactly as the provider publishes it, so a trailing slash stays.
+        config = oidc.validate(dict(self.BASE, issuer="https://idp.example/dex/"))
+        self.assertEqual(config.issuer, "https://idp.example/dex/")
+        self.assertEqual(oidc.discovery_url(config.issuer), "https://idp.example/dex/.well-known/openid-configuration")
+        self.assertEqual(
+            oidc.discovery_url("https://idp.example"), "https://idp.example/.well-known/openid-configuration"
+        )
+        with self.assertRaises(SetupError):
+            oidc.validate(dict(self.BASE, issuer="https://idp.example/dex/?x=1"))
 
     def test_bad_configurations_are_refused(self):
         bad = [
@@ -108,12 +120,15 @@ class IdTokenTests(unittest.TestCase):
     def test_a_good_token(self):
         self.assertEqual(self.verify(sign_jwt(self.claims))["sub"], "u1")
         self.assertEqual(self.verify(sign_jwt(dict(self.claims, aud=["shoalscan", "x"], azp="shoalscan")))["sub"], "u1")
+        self.assertEqual(self.verify(sign_jwt(dict(self.claims, azp="shoalscan")))["sub"], "u1")
 
     def test_every_rule_is_enforced(self):
         bad = {
             "another issuer": sign_jwt(dict(self.claims, iss="https://evil.example")),
             "another audience": sign_jwt(dict(self.claims, aud="someone-else")),
             "several audiences, no azp": sign_jwt(dict(self.claims, aud=["shoalscan", "x"])),
+            "one audience, another azp": sign_jwt(dict(self.claims, azp="someone-else")),
+            "several audiences, another azp": sign_jwt(dict(self.claims, aud=["shoalscan", "x"], azp="x")),
             "expired": sign_jwt(dict(self.claims, exp=int(self.now) - 600)),
             "from the future": sign_jwt(dict(self.claims, iat=int(self.now) + 600)),
             "not yet valid": sign_jwt(dict(self.claims, nbf=int(self.now) + 600)),
@@ -181,6 +196,16 @@ class DiscoveryTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(oidc.OidcError):
                 oidc.discover(self.idp.config())
 
+    def test_the_issuer_must_match_exactly(self):
+        # Configured with a trailing slash the provider does not publish: refused, not quietly normalised.
+        with self.assertRaisesRegex(oidc.OidcError, "issuer"):
+            oidc.discover(self.idp.config(issuer=f"{self.idp.issuer}/"))
+        original = self.idp.discovery
+        self.idp.discovery = lambda: {**original(), "issuer": f"{self.idp.issuer}/"}
+        with self.assertRaisesRegex(oidc.OidcError, "issuer"):
+            oidc.discover(self.idp.config())
+        self.assertEqual(oidc.discover(self.idp.config(issuer=f"{self.idp.issuer}/")).issuer, f"{self.idp.issuer}/")
+
     def test_nothing_listening(self):
         with self.assertRaisesRegex(oidc.OidcError, "not reachable"):
             oidc.discover(
@@ -198,13 +223,56 @@ class DiscoveryTests(unittest.TestCase):
 class LoginStateTests(unittest.TestCase):
     def test_each_state_works_once_and_expires(self):
         logins = oidc.Logins()
-        state, pending = logins.start()
-        self.assertIs(logins.finish(state), pending)
-        self.assertIsNone(logins.finish(state))
-        state, pending = logins.start()
-        pending.created -= oidc.LOGIN_SECONDS + 1
-        self.assertIsNone(logins.finish(state))
-        self.assertIsNone(logins.finish(None))
+        state, pending, sealed = logins.start()
+        self.assertEqual(logins.finish(state, sealed), pending)
+        self.assertIsNone(logins.finish(state, sealed))  # a replayed callback
+        state, pending, sealed = logins.start(now=time.time() - oidc.LOGIN_SECONDS - 1)
+        self.assertIsNone(logins.finish(state, sealed))
+        self.assertIsNone(logins.finish(None, sealed))
+        self.assertIsNone(logins.finish(state, None))
+
+    def test_the_server_keeps_nothing_until_a_login_comes_back(self):
+        logins = oidc.Logins()
+        started = [logins.start() for _ in range(3000)]
+        self.assertEqual(len(logins._used), 0)
+        # Starting many logins crowds out none: the first one still works.
+        state, pending, sealed = started[0]
+        self.assertEqual(logins.finish(state, sealed), pending)
+
+    def test_the_cookie_is_bound_to_its_state_and_cannot_be_forged(self):
+        logins = oidc.Logins()
+        state, _, sealed = logins.start()
+        other_state, _, other_sealed = logins.start()
+        self.assertIsNone(logins.finish(other_state, sealed))  # another login's state
+        payload, tag = sealed.split(".")
+        body = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        body["t"] = time.time() + 3600  # a longer life, under the old tag
+        changed = base64.urlsafe_b64encode(json.dumps(body).encode()).rstrip(b"=").decode()
+        for bad in (f"{changed}.{tag}", f"{payload}.{tag[:-2]}AA", payload, f"{payload}.", "x" * 5000, "a.b.c"):
+            with self.subTest(bad=bad[:30]):
+                self.assertIsNone(logins.finish(state, bad))
+        # A cookie from another process (another key) is refused.
+        self.assertIsNone(oidc.Logins().finish(other_state, other_sealed))
+        self.assertIsNotNone(logins.finish(state, sealed))
+
+    def test_used_states_are_bounded(self):
+        logins = oidc.Logins()
+        before = oidc.MAX_USED_STATES
+        oidc.MAX_USED_STATES = 5
+        try:
+            for _ in range(20):
+                state, _, sealed = logins.start()
+                self.assertIsNotNone(logins.finish(state, sealed))
+            self.assertLessEqual(len(logins._used), 5)
+        finally:
+            oidc.MAX_USED_STATES = before
+        # Used states are forgotten once their login could no longer finish anyway.
+        state, _, sealed = logins.start(now=time.time() - oidc.LOGIN_SECONDS + 1)
+        self.assertIsNotNone(logins.finish(state, sealed))
+        self.assertIsNone(logins.finish(state, sealed, now=time.time() + 5))
+        later, _, later_sealed = logins.start(now=time.time() + 5)
+        self.assertIsNotNone(logins.finish(later, later_sealed, now=time.time() + 5))
+        self.assertNotIn(state, logins._used)
 
     def test_the_authorization_url_carries_pkce(self):
         n, e, _ = rsa_key()
@@ -217,7 +285,7 @@ class LoginStateTests(unittest.TestCase):
             }
         )
         provider = oidc.Provider("https://idp.example", "https://idp.example/auth", "t", "k", {"k1": (n, e)})
-        state, pending = oidc.Logins().start()
+        state, pending, sealed = oidc.Logins().start()
         url = oidc.authorization_url(provider, config, state, pending)
         from urllib.parse import parse_qs, urlsplit
 
@@ -228,6 +296,7 @@ class LoginStateTests(unittest.TestCase):
         )
         self.assertEqual(q["redirect_uri"], "https://dash.example/oidc/callback")
         self.assertNotIn(pending.verifier, url)
+        self.assertNotIn(sealed, url)
 
 
 if __name__ == "__main__":
