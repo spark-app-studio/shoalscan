@@ -52,7 +52,10 @@ MAX_RESPONSE_BYTES = 1024 * 1024
 CLOCK_SKEW_SECONDS = 120
 MIN_RSA_BITS = 2048
 LOGIN_SECONDS = 600
-# Login states already used, remembered until their login would have expired anyway.
+# Login states already used, remembered until their login would have expired anyway. Every entry needs a
+# cookie from /oidc/start, which allows one address at most 30 + 600 / 10 = 90 starts in LOGIN_SECONDS (see
+# server.LOGIN_START_BURST), so filling this takes more than a hundred addresses flooding at once; a team's
+# sign-ins never come close. When it is full, sign-ins are refused until entries age out, never evicted.
 MAX_USED_STATES = 10_000
 MAX_LOGIN_COOKIE_CHARS = 1024
 DEFAULT_SCOPES = ("openid", "email", "profile", "groups")
@@ -64,6 +67,10 @@ _CLAIM = re.compile(r"^[A-Za-z0-9_.:/-]{1,100}$")
 
 class OidcError(Exception):
     """The provider could not be used, or what it answered cannot be trusted."""
+
+
+class TooManyLoginsError(Exception):
+    """So many sign-ins finished recently that their states cannot all be remembered; try again shortly."""
 
 
 # ------------------------------------------------------------------ configuration
@@ -370,9 +377,10 @@ class Logins:
 
     `finish` checks the tag, the expiry, and that the state the provider sent back is the one in the cookie. Each
     state works once: a used state is remembered until its login would have expired anyway (at most
-    MAX_USED_STATES; entries only get there after a valid cookie, which /oidc/start rate limits). The callback also
-    clears the cookie, and the provider refuses a code used twice. A restart makes a new key, which ends logins
-    in progress, as before.
+    MAX_USED_STATES; entries only get there after a valid cookie, which /oidc/start rate limits). When the set is
+    full of states that have not aged out, `finish` refuses with TooManyLoginsError rather than forget one, so a
+    replay can never get through. The callback also clears the cookie, and the provider refuses a code used twice.
+    A restart makes a new key, which ends logins in progress, as before.
     """
 
     def __init__(self, key: bytes | None = None):
@@ -394,7 +402,8 @@ class Logins:
         return state, pending, f"{payload.decode()}.{self._tag(payload)}"
 
     def finish(self, state: str | None, sealed: str | None, now: float | None = None) -> Pending | None:
-        """The login that `state` came back for, if the cookie is genuine, unexpired, for this state, and unused."""
+        """The login that `state` came back for, if the cookie is genuine, unexpired, for this state, and unused.
+        Raises TooManyLoginsError when the used states cannot all be remembered."""
         if not state or len(state) > 100 or not sealed or len(sealed) > MAX_LOGIN_COOKIE_CHARS:
             return None
         payload, _, tag = sealed.partition(".")
@@ -419,7 +428,7 @@ class Logins:
             if state in self._used:
                 return None
             if len(self._used) >= MAX_USED_STATES:
-                self._used.pop(next(iter(self._used)))
+                raise TooManyLoginsError("too many sign-ins in the last few minutes; try again shortly")
             self._used[state] = created + LOGIN_SECONDS
         return Pending(value["n"], value["v"], created)
 

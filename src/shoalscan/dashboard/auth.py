@@ -170,6 +170,33 @@ class LoginLimiter:
             self._all.append(now)
 
 
+class TokenBucket:
+    """A token bucket per address: up to `burst` requests at once, then one every `refill_seconds`.
+
+    Unlike LoginLimiter it has no overall hold-off and nothing is cleared by success: one address never affects
+    another, and a busy shared address recovers on its own as tokens refill. At most `max_addresses` buckets are
+    kept; when that many exist, full buckets (which mean nothing) are dropped first, then the oldest."""
+
+    def __init__(self, burst: int, refill_seconds: float, max_addresses: int = 10_000):
+        self.burst, self.refill, self.max_addresses = burst, refill_seconds, max_addresses
+        self._lock = threading.Lock()
+        self._buckets: dict[str, tuple[float, float]] = {}  # address -> (tokens, as of when), monotonic
+
+    def take(self, address: str, now: float | None = None) -> bool:
+        """Spend one token for `address`; False when it has none left."""
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            tokens, since = self._buckets.pop(address, (float(self.burst), now))
+            tokens = min(float(self.burst), tokens + max(0.0, now - since) / self.refill)
+            if len(self._buckets) >= self.max_addresses:
+                full = [a for a, (t, s) in self._buckets.items() if t + (now - s) / self.refill >= self.burst]
+                for key in full or [next(iter(self._buckets))]:
+                    del self._buckets[key]
+            allowed = tokens >= 1.0
+            self._buckets[address] = (tokens - 1.0 if allowed else tokens, now)
+            return allowed
+
+
 def same_origin(host: str | None, origin: str | None, referer: str | None, allowed_hosts: frozenset[str]) -> bool:
     """True when a state-changing request comes from this dashboard's own pages."""
     if not host or host not in allowed_hosts:

@@ -255,15 +255,28 @@ class LoginStateTests(unittest.TestCase):
         self.assertIsNone(oidc.Logins().finish(other_state, other_sealed))
         self.assertIsNotNone(logins.finish(state, sealed))
 
-    def test_used_states_are_bounded(self):
+    def test_used_states_are_bounded_and_never_evicted(self):
         logins = oidc.Logins()
         before = oidc.MAX_USED_STATES
         oidc.MAX_USED_STATES = 5
         try:
-            for _ in range(20):
+            done = []
+            for _ in range(5):
                 state, _, sealed = logins.start()
                 self.assertIsNotNone(logins.finish(state, sealed))
-            self.assertLessEqual(len(logins._used), 5)
+                done.append((state, sealed))
+            # Full of states that have not aged out: a new sign-in is refused rather than one being forgotten.
+            state, _, sealed = logins.start()
+            with self.assertRaises(oidc.TooManyLoginsError):
+                logins.finish(state, sealed)
+            self.assertEqual(len(logins._used), 5)
+            for old_state, old_sealed in done:  # every used state still refuses a replay
+                self.assertIsNone(logins.finish(old_state, old_sealed))
+                self.assertIn(old_state, logins._used)
+            # Once they age out, there is room again.
+            fresh, _, fresh_sealed = logins.start(now=time.time() + oidc.LOGIN_SECONDS + 1)
+            self.assertIsNotNone(logins.finish(fresh, fresh_sealed, now=time.time() + oidc.LOGIN_SECONDS + 1))
+            self.assertEqual(list(logins._used), [fresh])
         finally:
             oidc.MAX_USED_STATES = before
         # Used states are forgotten once their login could no longer finish anyway.

@@ -83,8 +83,13 @@ SETUP_CODE_SECONDS = 30 * 60
 # PROVIDER_RETRY_SECONDS, so sign-ins in the meantime fail at once rather than each waiting on the network.
 PROVIDER_REFRESH_SECONDS = 3600
 PROVIDER_RETRY_SECONDS = 30
-# Sign-ins started per address in LOGIN_SECONDS; a successful sign-in clears its address's count.
-LOGIN_STARTS_PER_ADDRESS = 20
+# Starting a sign-in, per client address: a burst of LOGIN_START_BURST, then one every LOGIN_START_REFILL_SECONDS.
+# Behind a reverse proxy, NAT or a container port mapping every client shares one address, so the burst lets a
+# team sign in together, and the refill (360 an hour) covers a steady stream of sign-ins and abandoned attempts.
+# Sign-ins keep no server state, so this only bounds what one address can make the dashboard remember (used
+# states, see oidc.MAX_USED_STATES) and send on to the provider.
+LOGIN_START_BURST = 30
+LOGIN_START_REFILL_SECONDS = 10.0
 # Sent after a successful sign-in: a same-origin refresh, so the browser sends the new
 # SameSite=Strict session cookie (a redirect chain begun at the provider would not).
 SIGNED_IN_PAGE = (
@@ -322,8 +327,7 @@ class App:
         self.logins = oidc.Logins()
         self.sessions = auth.Sessions(self.session_valid)
         self.limiter = auth.LoginLimiter()
-        # Each start of a sign-in counts, failed or not; overall it only holds off addresses that started many.
-        self.start_limiter = auth.LoginLimiter(LOGIN_STARTS_PER_ADDRESS, 500, oidc.LOGIN_SECONDS)
+        self.start_limiter = auth.TokenBucket(LOGIN_START_BURST, LOGIN_START_REFILL_SECONDS)
         icon = data_path("assets/shoalscan-icon.svg").read_bytes()
         self.static = {
             path: icon if source == "icon" else (STATIC_DIR / source).read_bytes()
@@ -350,6 +354,11 @@ class App:
     def drop_setup_code(self) -> None:
         self.setup_code = None
         self.setup_code_path.unlink(missing_ok=True)
+
+    def expire_setup_code(self) -> None:
+        """Delete the setup code and its file once it has expired."""
+        if self.setup_code is not None and time.monotonic() >= self.setup_code_expires:
+            self.drop_setup_code()
 
     def users(self):
         return users.open_users(self.auth_dir)
@@ -443,6 +452,11 @@ class DashboardServer(socketserver.ThreadingMixIn, HTTPServer):
 
     daemon_threads = True
     request_queue_size = 64
+
+    def service_actions(self) -> None:
+        """Called by serve_forever on every poll: an expired setup code is deleted even when nobody asks for it."""
+        super().service_actions()
+        self.app.expire_setup_code()
 
     def __init__(self, address, app: App, ctx: ssl.SSLContext):
         self.app = app
@@ -705,6 +719,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urlsplit(self.path)
         route = ROUTES.get(url.path)
         if self.app.oidc is None:
+            self.app.expire_setup_code()
             # Setup mode: the wizard and what it needs, and nothing else.
             if route and route[2] and url.path not in ("/", "/login"):
                 return self.send(200, self.app.static[url.path], route[1])
@@ -995,9 +1010,8 @@ class Handler(BaseHTTPRequestHandler):
         """GET /oidc/start: send the browser to the provider, with a fresh state, nonce and PKCE challenge.
         They travel in the signed login cookie; the server keeps nothing for the login."""
         address = self.client_address[0]
-        if not self.app.start_limiter.allowed(address):
-            return self._to_login("limit")
-        self.app.start_limiter.failed(address)  # every start counts, until a sign-in succeeds
+        if not self.app.start_limiter.take(address):
+            return self._to_login("starts")
         try:
             provider = self.app.provider_now()
         except oidc.OidcError:
@@ -1021,7 +1035,10 @@ class Handler(BaseHTTPRequestHandler):
                 cookie = value
         # The state must come back to the browser that started the login, in its genuine, unexpired login
         # cookie, and be used once.
-        pending = self.app.logins.finish(state, cookie)
+        try:
+            pending = self.app.logins.finish(state, cookie)
+        except oidc.TooManyLoginsError:
+            return self._to_login("busy", clear)
         if pending is None:
             self.app.limiter.failed(address)
             return self._to_login("state", clear)
@@ -1041,7 +1058,6 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
         self.app.limiter.succeeded(address)
-        self.app.start_limiter.succeeded(address)
         sid = self.app.sessions.create(user.email, user.role, user.version)
         return self.send(
             200, SIGNED_IN_PAGE, HTML, {"Set-Cookie": [auth.session_cookie(sid, user.role), clear["Set-Cookie"]]}

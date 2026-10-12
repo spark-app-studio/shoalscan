@@ -10,6 +10,8 @@ Shoalscan's own safeguards have limits too:
 
 - The policy-from-base model protects pull requests only when CI passes `--policy-ref`, and only as well as the base branch is protected. Changes on the base branch itself are trusted, which is why the policy files belong under [CODEOWNERS](ci.md#codeowners).
 - The policy diff shows tracked files. A rule directory's untracked files are not part of a commit, so they never reach CI.
+- The dashboard's rate limits are per client address. Behind a reverse proxy, load balancer, NAT or container port mapping, all clients share one address and so share the limits; one person starting many sign-ins can make others wait a minute.
+- The dashboard reads the identity provider's discovery document and keys again every hour. If that read fails, sign-ins are refused for 30 seconds before it is tried again, even though the previous keys may still be good. People who are already signed in are not affected.
 
 ### Unscanned files
 

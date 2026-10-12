@@ -152,6 +152,47 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(len(self.sessions._items), 2)
 
 
+class StartLimitTests(unittest.TestCase):
+    def test_addresses_do_not_affect_each_other(self):
+        # The reviewer's case: 25 IPv6 addresses each start 20 sign-ins; nobody else is held off.
+        bucket = auth.TokenBucket(server.LOGIN_START_BURST, server.LOGIN_START_REFILL_SECONDS)
+        now = 1000.0
+        self.assertTrue(bucket.take("2001:db8::ffff", now))
+        for i in range(25):
+            for _ in range(20):
+                self.assertTrue(bucket.take(f"2001:db8::{i:x}", now))
+        self.assertTrue(bucket.take("2001:db8::ffff", now))
+        self.assertTrue(bucket.take("192.0.2.1", now))
+        for _ in range(server.LOGIN_START_BURST * 4):
+            bucket.take("198.51.100.9", now)
+        self.assertFalse(bucket.take("198.51.100.9", now))
+        self.assertTrue(bucket.take("192.0.2.2", now))
+
+    def test_a_shared_address_recovers_as_tokens_refill(self):
+        bucket = auth.TokenBucket(server.LOGIN_START_BURST, server.LOGIN_START_REFILL_SECONDS)
+        now = 1000.0
+        for _ in range(server.LOGIN_START_BURST):  # a team behind one proxy signs in together
+            self.assertTrue(bucket.take("10.0.0.1", now))
+        self.assertFalse(bucket.take("10.0.0.1", now))
+        self.assertFalse(bucket.take("10.0.0.1", now + server.LOGIN_START_REFILL_SECONDS / 2))
+        self.assertTrue(bucket.take("10.0.0.1", now + server.LOGIN_START_REFILL_SECONDS))
+        later = now + server.LOGIN_START_REFILL_SECONDS * server.LOGIN_START_BURST * 2
+        self.assertTrue(all(bucket.take("10.0.0.1", later) for _ in range(server.LOGIN_START_BURST)))
+        self.assertFalse(bucket.take("10.0.0.1", later))  # never more than the burst
+
+    def test_the_buckets_are_bounded(self):
+        bucket = auth.TokenBucket(2, 10.0, max_addresses=5)
+        for i in range(50):
+            bucket.take(f"a{i}", 1000.0)
+        self.assertLessEqual(len(bucket._buckets), 5)
+        bucket.take("busy", 1000.0)
+        bucket.take("busy", 1000.0)
+        self.assertFalse(bucket.take("busy", 1000.0))  # an emptied bucket is kept while full ones are dropped
+        for i in range(10):
+            bucket.take(f"b{i}", 1000.0 + 100 + i)
+        self.assertLessEqual(len(bucket._buckets), 5)
+
+
 class ProviderCacheTests(unittest.TestCase):
     def app(self, provider=None):
         return types.SimpleNamespace(
@@ -287,7 +328,7 @@ class ServerCase(unittest.TestCase):
 
     def setUp(self):
         self.httpd.app.limiter = auth.LoginLimiter()
-        self.httpd.app.start_limiter = auth.LoginLimiter(server.LOGIN_STARTS_PER_ADDRESS, 500, oidc.LOGIN_SECONDS)
+        self.httpd.app.start_limiter = auth.TokenBucket(server.LOGIN_START_BURST, server.LOGIN_START_REFILL_SECONDS)
         self.idp.misbehave = None
 
     def request(self, method, path, body=None, headers=None, cookie=None):
@@ -408,6 +449,22 @@ class SetupWizardTests(ServerCase):
         status, _, raw = self.request("POST", "/setup/test", json.dumps({"setup_code": code}))
         self.assertEqual(status, 403)
         self.assertIn("expired", json.loads(raw)["error"])
+        self.assertFalse(path.exists())
+        self.assertIsNone(app.setup_code)
+
+    def test_an_expired_setup_code_file_is_deleted_without_a_post(self):
+        app = self.httpd.app
+        path = self.state / server.SETUP_CODE_FILE
+        app.new_setup_code()
+        app.setup_code_expires = time.monotonic() - 1
+        self.assertEqual(self.request("GET", "/setup")[0], 200)  # reading the wizard page deletes it
+        self.assertFalse(path.exists())
+        self.assertIsNone(app.setup_code)
+        app.new_setup_code()
+        self.httpd.service_actions()  # the server's poll loop
+        self.assertTrue(path.exists())  # not expired yet
+        app.setup_code_expires = time.monotonic() - 1
+        self.httpd.service_actions()
         self.assertFalse(path.exists())
         self.assertIsNone(app.setup_code)
 
@@ -542,9 +599,23 @@ class SignInTests(ServerCase):
         self.assertEqual(dict(headers)["Location"], "/login?error=state")
 
     def test_starting_sign_ins_is_rate_limited(self):
-        for _ in range(server.LOGIN_STARTS_PER_ADDRESS):
+        for _ in range(server.LOGIN_START_BURST):
             self.assertTrue(self.request("GET", "/oidc/start")[1]["Location"].startswith(self.idp.issuer))
-        self.assertEqual(self.request("GET", "/oidc/start")[1]["Location"], "/login?error=limit")
+        self.assertEqual(self.request("GET", "/oidc/start")[1]["Location"], "/login?error=starts")
+        # Callbacks are not starts: a sign-in already under way still finishes.
+        self.httpd.app.start_limiter = auth.TokenBucket(1, 3600)
+        cookie, _ = sign_in(self.port, self.ctx, self.idp, "root6@example.com", groups=["shoal-admin"])
+        self.assertIsNotNone(cookie)
+        self.assertEqual(self.request("GET", "/oidc/start")[1]["Location"], "/login?error=starts")
+
+    def test_a_full_used_state_set_refuses_sign_ins(self):
+        before = oidc.MAX_USED_STATES
+        oidc.MAX_USED_STATES = 0
+        try:
+            cookie, where = sign_in(self.port, self.ctx, self.idp, "root7@example.com", groups=["shoal-admin"])
+        finally:
+            oidc.MAX_USED_STATES = before
+        self.assertEqual((cookie, where), (None, "/login?error=busy"))
 
     def test_failed_callbacks_are_rate_limited(self):
         for _ in range(5):

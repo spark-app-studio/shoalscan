@@ -83,7 +83,7 @@ For example: cat /home/shoal/.config/shoalscan/dashboard/setup-code
 The code works for 30 minutes and only while the dashboard runs; a restart makes a new one.
 ```
 
-The wizard needs that code, so only someone who can read the file on the server can set up sign-in; a stranger who reaches the port first cannot. The code works for 30 minutes; after that, restart `shoalscan serve` for a new one. Saving the settings deletes the file. In the wizard:
+The wizard needs that code, so only someone who can read the file on the server can set up sign-in; a stranger who reaches the port first cannot. The code works for 30 minutes, and the file is deleted when it expires; after that, restart `shoalscan serve` for a new one. Saving the settings deletes the file. In the wizard:
 
 1. Register Shoalscan at your provider as a confidential client, with the redirect URI the wizard shows (`https://<the dashboard's address>/oidc/callback`) and a client secret. For Dex, the wizard shows the `staticClients` entry to add.
 2. Enter the setup code, the issuer URL, the client id and secret, and, if the provider's certificate comes from a private CA, paste that CA's certificate (PEM). The dashboard keeps it as `oidc-ca.pem` in its state directory; it never takes a file path from the browser.
@@ -104,7 +104,9 @@ Only email addresses the provider marks as verified count, and only plain ASCII 
 
 The people list is kept in `users.sqlite3` in the state directory (mode 0600), not in the history database: `shoalscan record` writes the history, often from CI, and nothing that can write it should be able to let someone in.
 
-**How sign-in works.** **Sign in** sends you to the provider with the authorization code flow, PKCE (S256), a `state` tied to a short-lived signed cookie and a `nonce`; the dashboard itself keeps nothing for a sign-in in progress. When you come back, Shoalscan swaps the code for an ID token at the provider's token endpoint, using the client secret over TLS, and checks the token's RS256 signature against the provider's published keys, its issuer, audience, authorised party, expiry and nonce. The issuer must match exactly what the provider publishes, trailing slash included. The provider must be reached over https (plain http only on the loopback interface), with its certificate checked; proxy settings are ignored.
+**How sign-in works.** **Sign in** sends you to the provider with the authorization code flow, PKCE (S256), a `state` tied to a short-lived signed cookie and a `nonce`; the dashboard itself keeps nothing for a sign-in in progress. When you come back, Shoalscan swaps the code for an ID token at the provider's token endpoint, using the client secret over TLS, and checks the token's RS256 signature against the provider's published keys, its issuer, audience, authorised party, expiry and nonce. The issuer must match exactly what the provider publishes, trailing slash included.
+
+Starting a sign-in is limited per client address to a burst of 30, then one every 10 seconds, and failed sign-ins are limited per address too. Behind a reverse proxy, a load balancer, NAT or a container port mapping, the dashboard sees one address for everyone, so all clients share these limits. The burst lets a team sign in together; if people see "Too many sign-ins were started from your network address", they wait a minute and try again. The provider must be reached over https (plain http only on the loopback interface), with its certificate checked; proxy settings are ignored.
 
 [Security model](security-model.md#the-dashboard) describes how the dashboard protects itself: TLS settings, login, sessions, headers and limits.
 

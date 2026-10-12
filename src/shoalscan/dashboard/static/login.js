@@ -11,7 +11,9 @@
     denied: "The sign-in was cancelled at your identity provider.",
     state: "That sign-in had expired or was not started here. Try again.",
     provider: "The identity provider could not be reached, or its answer could not be trusted. Try again, or ask an admin.",
-    limit: "Too many failed sign-ins. Wait 15 minutes and try again."
+    limit: "Too many failed sign-ins. Wait 15 minutes and try again.",
+    starts: "Too many sign-ins were started from your network address. Wait a minute and try again.",
+    busy: "The dashboard has had too many sign-ins in the last few minutes. Wait a few minutes and try again."
   };
   var reason = new URLSearchParams(window.location.search).get("error");
   var box = document.getElementById("login-error");
