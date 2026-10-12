@@ -113,6 +113,12 @@ def execute(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, list | None, 
     return 0, doc, tail
 
 
+def _dict(value: object) -> dict:
+    """The value if it is an object, else an empty one: zizmor's optional fields are read without trusting
+    their shape."""
+    return value if isinstance(value, dict) else {}
+
+
 def _primary(result: dict) -> dict:
     locations = result.get("locations")
     if isinstance(locations, list):
@@ -135,7 +141,7 @@ def normalise(
             raise ScanError("zizmor output has a finding that is not an object")
         ident = r.get("ident")
         det = r.get("determinations") if isinstance(r.get("determinations"), dict) else {}
-        severity = _SEVERITY.get(det.get("severity"))
+        severity = _SEVERITY.get(str(det.get("severity")))
         if not isinstance(ident, str) or not _AUDIT.match(ident) or severity is None:
             raise ScanError(f"zizmor output has a malformed finding: {str(r)[:300]}")
         if ident in ignore:
@@ -155,16 +161,15 @@ def normalise(
             raise ScanError(f"zizmor reported a path outside the target: {path[:300]}") from None
         if rel not in scanned:
             raise ScanError(f"zizmor reported a file it was not given: {rel[:300]}")
-        concrete = loc.get("concrete") if isinstance(loc.get("concrete"), dict) else {}
-        start = (
-            concrete.get("location", {}).get("start_point", {}) if isinstance(concrete.get("location"), dict) else {}
-        )
+        concrete = _dict(loc.get("concrete"))
+        start = _dict(_dict(concrete.get("location")).get("start_point"))
         row, col = start.get("row"), start.get("column")
         if not isinstance(row, int) or isinstance(row, bool) or row < 0:
             raise ScanError("zizmor output has a malformed location")
-        route = loc["symbolic"].get("route", {}).get("route") if isinstance(loc["symbolic"].get("route"), dict) else []
+        route = _dict(loc["symbolic"].get("route")).get("route")
         # Keys only: a step index changes when a step is added above it.
-        keys = [str(step["Key"]) for step in route or [] if isinstance(step, dict) and "Key" in step]
+        steps = route if isinstance(route, list) else []
+        keys = [str(step["Key"]) for step in steps if isinstance(step, dict) and "Key" in step]
         desc = " ".join(str(r.get("desc", "")).split())
         note = " ".join(str(loc["symbolic"].get("annotation", "")).split())
         items.append(

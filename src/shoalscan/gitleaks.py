@@ -121,6 +121,8 @@ def execute(cmd: list[str], cwd: Path, report: Path, timeout: int) -> list:
 def _relative(path: object, root: Path) -> str:
     if not isinstance(path, str) or not Path(path).is_absolute():
         raise ScanError(f"gitleaks reported a path that is not absolute: {str(path)[:300]}")
+    if ".." in Path(path).parts:  # relative_to is lexical: root/../x would otherwise pass as "../x"
+        raise ScanError(f"gitleaks reported a path outside the target: {path[:300]}")
     try:
         return Path(path).relative_to(root).as_posix()
     except ValueError:

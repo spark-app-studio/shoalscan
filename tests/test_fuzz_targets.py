@@ -1,6 +1,7 @@
 """The fuzz targets (fuzz/targets.py), over their seeds and some random input, without Atheris."""
 
 import random
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -38,6 +39,15 @@ class FuzzTargetTests(unittest.TestCase):
                 for data in mutations(seed, rng):
                     with self.subTest(target=name, data=data[:60]):
                         target(data)
+
+    def test_the_workflow_and_the_docs_list_every_target(self):
+        root = Path(targets.__file__).resolve().parent.parent
+        workflow = (root / ".github" / "workflows" / "fuzz.yml").read_text(encoding="utf-8")
+        listed = set(re.findall(r"^\s+- ([a-z_]+)$", workflow, re.MULTILINE))
+        self.assertEqual(listed & set(targets.TARGETS), set(targets.TARGETS))
+        docs = (root / "docs" / "development.md").read_text(encoding="utf-8")
+        for name in targets.TARGETS:
+            self.assertIn(f"`{name}`", docs)
 
     def test_the_fuzz_runner_imports_atheris(self):
         # OpenSSF Scorecard finds Python fuzzing by this import.

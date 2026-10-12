@@ -30,7 +30,23 @@ CI runs both checks. The test modules import `helpers` before `shoalscan` (it pu
 
 ## Fuzzing
 
-`fuzz/targets.py` holds fuzz targets for the parsers that read input Shoalscan does not control: `.shoalscan.toml` and the baseline (from the scanned repository), suppression markers in source lines, the Markdown escaper used by the work list and the report, and ID tokens on the dashboard's sign-in (any string, and correctly signed tokens with any claims). Each target checks a contract, such as "valid, or a `SetupError`, nothing else" or "the escaped text holds no markup", not only that nothing crashes.
+`fuzz/targets.py` holds fuzz targets for the parsers that read input Shoalscan does not control:
+
+| Target | What it reads |
+|---|---|
+| `config_file` | `.shoalscan.toml`, from the scanned repository |
+| `baseline_file` | the baseline, from the scanned repository |
+| `suppression_line` | Opengrep and Trivy suppression markers in a source line |
+| `markdown_text` | text for the Markdown escaper used by the work list and the report |
+| `id_token` | any string as an ID token on the dashboard's sign-in |
+| `id_token_claims` | correctly signed ID tokens with any claims |
+| `gitleaks_report` | Gitleaks' JSON report |
+| `trivy_report` | Trivy's JSON report |
+| `hadolint_report` | Hadolint's JSON output |
+| `zizmor_report` | zizmor's JSON output |
+| `findings_file` | `findings.json`, which `check` and `record` read back |
+
+Each target checks a contract, such as "valid, or a `SetupError`, nothing else", "the escaped text holds no markup" or "every finding is in a file of the repository", not only that nothing crashes. The scanner-report targets run against a small repository in a temporary directory; an input can write `$ROOT` for its path, since the scanners report absolute paths.
 
 The targets need only the standard library, and `tests/test_fuzz_targets.py` runs each over its seeds and random edits of them with the other tests. The `fuzz` workflow runs them coverage-guided with [Atheris](https://github.com/google/atheris), a minute each on pull requests that change the code and ten minutes each week; a failing input is kept as a workflow artifact. To fuzz on Linux x86-64 yourself:
 
