@@ -57,7 +57,7 @@ class FakeOllama:
                     return self.reply(404, {"error": f'model "{body["model"]}" not found, try pulling it first'})
                 if owner.mode == "redirect":
                     self.send_response(307)
-                    self.send_header("Location", owner.redirect_to + self.path)
+                    self.send_header("Location", owner.redirect_to + "/api/embed")
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return None
