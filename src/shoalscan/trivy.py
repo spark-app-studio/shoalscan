@@ -36,14 +36,16 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 
-from shoalscan import process
+from shoalscan import helm, process
 from shoalscan.config import Limits, component_for
 from shoalscan.errors import ScanError, SetupError
 from shoalscan.excludes import ExcludeMatcher
 from shoalscan.findings import Finding, assign_fingerprints, normalise_code
 from shoalscan.hadolint import is_dockerfile
+from shoalscan.helm import Rendered
 from shoalscan.lockfile import verify_sha256
 from shoalscan.suppressions import Suppression, find_trivy_suppressions
 
@@ -90,7 +92,7 @@ _CONFIG_SUFFIXES = (
 )
 
 
-def build_command(binary: Path, target: Path, work: Path) -> list[str]:
+def build_command(binary: Path, target: Path, work: Path, scanners: tuple[str, ...] = MISCONFIG_SCANNERS) -> list[str]:
     return [
         str(binary),
         "config",
@@ -110,7 +112,7 @@ def build_command(binary: Path, target: Path, work: Path) -> list[str]:
         # Every scanner but Helm's: Trivy reads ignore comments from the rendered chart, which a
         # template can produce at render time where no lint of the source can see them.
         "--misconfig-scanners",
-        ",".join(MISCONFIG_SCANNERS),
+        ",".join(scanners),
         "--format",
         "json",
         "--exit-code",
@@ -159,9 +161,18 @@ def parse_errors(log: str, root: Path, excludes: tuple[str, ...]) -> list[dict]:
 
 
 def normalise(
-    doc: dict, root: Path, components: dict[str, str], excludes: tuple[str, ...], ignore: tuple[str, ...]
+    doc: dict,
+    root: Path,
+    components: dict[str, str],
+    excludes: tuple[str, ...],
+    ignore: tuple[str, ...],
+    rendered: dict[str, Rendered] | None = None,
 ) -> tuple[list[Finding], dict]:
-    """Findings, and the rule metadata for the work list."""
+    """Findings, and the rule metadata for the work list.
+
+    With `rendered`, the report is of rendered Helm charts: each target is a
+    rendered document, reported at its template (see `shoalscan.helm`).
+    """
     matcher = ExcludeMatcher(list(excludes))
     items, meta = [], {}
     for result in doc.get("Results") or []:
@@ -173,7 +184,10 @@ def normalise(
         failures = [m for m in misconfigs if isinstance(m, dict) and m.get("Status") == "FAIL"]
         if not failures:
             continue
-        rel = _inside(root, result.get("Target"))
+        origin = rendered.get(str(result.get("Target"))) if rendered is not None else None
+        rel = (
+            origin.path if origin is not None else None if rendered is not None else _inside(root, result.get("Target"))
+        )
         if rel is None:
             raise ScanError(
                 "trivy reported a finding in something that is not a file of the repository: "
@@ -196,19 +210,30 @@ def normalise(
             title = " ".join(str(m.get("Title", "")).split())
             message = " ".join(str(m.get("Message", "")).split())
             rule = f"{TOOL}.{check}"
-            items.append(
-                {
-                    "tool": TOOL,
-                    "rule": rule,
-                    "path": rel,
-                    "line": line,
-                    "code": normalise_code("\n".join(str(x) for x in lines)),
-                    # The resource (aws_s3_bucket.logs) follows the finding when blocks move.
-                    "context": str(cause.get("Resource") or "")[:300],
-                    "severity": severity,
-                    "message": (f"{title}: {message}" if message and message != title else title)[:1000] or check,
-                }
-            )
+            item = {
+                "tool": TOOL,
+                "rule": rule,
+                "path": rel,
+                "line": line,
+                "code": normalise_code("\n".join(str(x) for x in lines)),
+                # The resource (aws_s3_bucket.logs) follows the finding when blocks move.
+                "context": str(cause.get("Resource") or "")[:300],
+                "severity": severity,
+                "message": (f"{title}: {message}" if message and message != title else title)[:1000] or check,
+            }
+            if origin is not None:
+                # Rendered output has no stable lines: the template, the resource and the rule identify it.
+                where = f" (in {origin.resource})" if origin.resource else ""
+                item.update(
+                    line=1,
+                    code="",
+                    context=f"helm:{origin.resource}"[:300],
+                    message=(
+                        f"{item['message']}{where}; found in the chart as Helm renders it, so the line is the "
+                        "template's first"
+                    )[:1000],
+                )
+            items.append(item)
             refs = [
                 u
                 for u in [m.get("PrimaryURL"), *(m.get("References") if isinstance(m.get("References"), list) else [])]
@@ -275,24 +300,6 @@ def silenced_findings(log: str, markers: list[Suppression], excludes: tuple[str,
     return count
 
 
-HELM_REASON = "Helm charts are not scanned; render and scan the manifests"
-
-
-def helm_charts(root: Path, excludes: tuple[str, ...]) -> list[dict]:
-    """Every Helm chart directory (one holding a Chart.yaml), as a skipped entry, so the gap shows in each run."""
-    matcher = ExcludeMatcher(list(excludes))
-    found = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        rel_dir = Path(dirpath).relative_to(root).as_posix()
-        rel_dir = "" if rel_dir == "." else rel_dir
-        dirnames[:] = sorted(
-            d for d in dirnames if d != ".git" and not matcher.excluded(f"{rel_dir}/{d}" if rel_dir else d)
-        )
-        if "Chart.yaml" in filenames and not matcher.excluded(f"{rel_dir}/Chart.yaml" if rel_dir else "Chart.yaml"):
-            found.append({"path": f"{rel_dir}/" if rel_dir else "./", "reason": HELM_REASON})
-    return found
-
-
 def config_files(root: Path, excludes: tuple[str, ...], max_bytes: int) -> list[str]:
     """The files whose Trivy markers are linted: every file of a kind Trivy reads, outside .git and the excludes."""
     matcher = ExcludeMatcher(list(excludes))
@@ -310,6 +317,54 @@ def config_files(root: Path, excludes: tuple[str, ...], max_bytes: int) -> list[
     return sorted(found)
 
 
+def _remaining(deadline: float, timeout: int) -> int:
+    left = int(deadline - time.monotonic())
+    if left <= 0:
+        raise ScanError(f"trivy timed out after {timeout}s")
+    return left
+
+
+def _scan_charts(
+    binary: Path,
+    root: Path,
+    stage: Path,
+    components: dict[str, str],
+    excludes: tuple[str, ...],
+    ignore: tuple[str, ...],
+    helm_pin: tuple[Path, str] | None,
+    helm_values: dict[str, tuple[str, ...]],
+    deadline: float,
+) -> tuple[list[Finding], list[dict], dict]:
+    """Render the Helm charts and check the manifests with Trivy's Kubernetes checks."""
+    charts = helm.find_charts(root, excludes)
+    if not charts:
+        return [], [], {}
+    if helm_pin is None:
+        raise SetupError("the repository has Helm charts, but tools.lock pins no helm (run `shoalscan install`)")
+    timeout = int(deadline - time.monotonic())
+    work = stage / "trivy-helm"
+    rendered, mapping, errors = helm.render(
+        helm_pin[0], helm_pin[1], root, work / "helm", charts, helm_values, _remaining(deadline, timeout)
+    )
+    if not mapping:
+        return [], errors, {}
+    for d in ("cache", "modules"):
+        (work / d).mkdir(parents=True)
+    (work / "trivy.yaml").write_text("{}\n", encoding="utf-8")
+    (work / "trivyignore").write_text("", encoding="utf-8")
+    cmd = build_command(binary, rendered, work, ("kubernetes",))
+    doc, log = execute(cmd, work, _remaining(deadline, timeout))
+    # Nothing in a rendered chart may silence a check: its comments were removed and its markers defused.
+    if _IGNORED.search(log):
+        raise ScanError("trivy reports a finding silenced in a rendered Helm chart; nothing there may silence a check")
+    findings, meta = normalise(doc, root, components, excludes, ignore, rendered=mapping)
+    for match in _PARSE_ERROR.finditer(log):
+        origin = mapping.get(match.group(1).replace('\\"', '"'))
+        if origin is not None:
+            errors.append({"path": origin.path, "type": "trivy parse error (rendered by helm)"})
+    return findings, errors, meta
+
+
 def run(
     binary: Path,
     binary_sha256: str,
@@ -319,8 +374,10 @@ def run(
     components: dict[str, str],
     excludes: tuple[str, ...],
     ignore: tuple[str, ...],
+    helm_pin: tuple[Path, str] | None = None,
+    helm_values: dict[str, tuple[str, ...]] | None = None,
 ) -> tuple[list[Finding], dict, list[Suppression], int, dict]:
-    """Check the repository's infrastructure as code.
+    """Check the repository's infrastructure as code, Helm charts rendered by the pinned Helm.
 
     Returns the findings, the unscanned files, the Trivy markers found, how
     many findings those markers silenced (from Trivy's log) and the rule metadata.
@@ -333,11 +390,17 @@ def run(
         (work / d).mkdir(parents=True)
     (work / "trivy.yaml").write_text("{}\n", encoding="utf-8")
     (work / "trivyignore").write_text("", encoding="utf-8")
+    deadline = time.monotonic() + limits.scan_timeout_seconds
     doc, log = execute(build_command(binary, root, work), work, limits.scan_timeout_seconds)
     findings, meta = normalise(doc, root, components, excludes, ignore)
+    chart_findings, chart_errors, chart_meta = _scan_charts(
+        binary, root, stage, components, excludes, ignore, helm_pin, helm_values or {}, deadline
+    )
+    findings += chart_findings
+    meta.update(chart_meta)
     markers = find_trivy_suppressions(
         root, config_files(root, excludes, limits.max_target_bytes), limits.max_target_bytes
     )
     silenced = silenced_findings(log, markers, excludes)
-    unscanned = {"skipped": helm_charts(root, excludes), "errors": parse_errors(log, root, excludes)}
+    unscanned = {"skipped": [], "errors": [*parse_errors(log, root, excludes), *chart_errors]}
     return findings, unscanned, markers, silenced, meta

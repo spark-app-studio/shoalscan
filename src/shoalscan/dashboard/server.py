@@ -206,6 +206,7 @@ def about_info() -> dict:
         lock = tomllib.load(handle)
     og, cs, rules = lock.get("opengrep", {}), lock.get("cosign", {}), lock.get("rules", {})
     gl, hl, zz, tv = lock.get("gitleaks"), lock.get("hadolint"), lock.get("zizmor"), lock.get("trivy")
+    hm = lock.get("helm")
     return {
         "shoalscan": {
             "version": __version__,
@@ -278,6 +279,19 @@ def about_info() -> dict:
                     }
                 ]
                 if isinstance(tv, dict)
+                else []
+            ),
+            *(
+                [
+                    {
+                        "name": "Helm",
+                        "role": "renders Helm charts for Trivy (when Trivy is enabled)",
+                        "version": hm.get("version"),
+                        "licence": hm.get("license"),
+                        "source": hm.get("source"),
+                    }
+                ]
+                if isinstance(hm, dict)
                 else []
             ),
         ],

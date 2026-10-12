@@ -221,6 +221,21 @@ def _archive_markers(rel: str, full: Path, max_bytes: int) -> list[Suppression]:
     return found
 
 
+def neutralise_trivy_markers(line: str) -> str:
+    """The line with every Trivy marker defused: the colon after its prefix becomes a dash.
+
+    Only words with an `ignore` key are touched, so an image tag such as
+    `aquasec/trivy:0.74.0` keeps its meaning.
+    """
+    out, last = [], 0
+    for match in _TRIVY.finditer(line):
+        if any(s.strip().lower() == "ignore" for s in match.group("rest").split(":")):
+            colon = match.start("rest") - 1
+            out.append(line[last:colon] + "-")
+            last = colon + 1
+    return "".join(out) + line[last:]
+
+
 MAX_MARKER_LINT_BYTES = 64 * 1024 * 1024
 
 

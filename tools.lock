@@ -249,3 +249,41 @@ sha256 = "b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5"
 binary_sha256 = "fed2c9ca7d27191ada34524b5eaf5216a845c6d6f3246143c3b475552ffe5358"
 bundle_url = "https://github.com/aquasecurity/trivy/releases/download/v0.74.0/trivy_0.74.0_Linux-ARM64.tar.gz.sigstore.json"
 bundle_sha256 = "f74491a5b45a4941426372f5c6a6e7a5bff99a6ed3a098bfa1bf6826656b17a5"
+
+# Helm renders Helm charts so that Trivy can check the Kubernetes manifests
+# they produce; it is installed whenever the lock pins it and used when
+# Trivy runs. Each archive's SHA-256 was checked against its .sha256sum file
+# on get.helm.sh, and its PGP signature (.asc, from the GitHub release) with
+# gpg against the KEYS file at the v4.2.4 tag: a good signature by Scott
+# Rigby, key 208DD36ED5BB3745A16743A4C7C6FBB5B91C1155, before it was pinned.
+# `install` checks the SHA-256 of the archive and of the `helm` binary in it;
+# it does not check the PGP signature again (that would need gpg).
+[helm]
+version = "4.2.4"
+source = "https://github.com/helm/helm/releases/tag/v4.2.4"
+license = "Apache-2.0"
+verification = "sha256 (PGP signature checked when pinned)"
+
+[helm.platforms.darwin-x86_64]
+url = "https://get.helm.sh/helm-v4.2.4-darwin-amd64.tar.gz"
+sha256 = "6c163d687ca03c3b5c01928e53bbbcf9518278f47ce7a2f249a5a08e8bdaa2bc"
+binary_sha256 = "e906367827b7f793311a49985f60aea0a58de5757012df6be92814e01fd2f910"
+member = "darwin-amd64/helm"
+
+[helm.platforms.darwin-arm64]
+url = "https://get.helm.sh/helm-v4.2.4-darwin-arm64.tar.gz"
+sha256 = "d747eb4e28bd2727173d15b759fa0a17822291ec09db7ced3d55af290a3661a2"
+binary_sha256 = "66f6b8881392bfa15c6c1dceef980426a28709c8122d5dc8a7a29697cad7334c"
+member = "darwin-arm64/helm"
+
+[helm.platforms.linux-x86_64]
+url = "https://get.helm.sh/helm-v4.2.4-linux-amd64.tar.gz"
+sha256 = "c306b46f719b0a4da32d0f78ee21bf90ce8d602f15b22ab753f0674d1670a7f3"
+binary_sha256 = "92e191314f44aac173711bb0247c38c727f3ddf65ad16a01c0861d509a63a9e1"
+member = "linux-amd64/helm"
+
+[helm.platforms.linux-arm64]
+url = "https://get.helm.sh/helm-v4.2.4-linux-arm64.tar.gz"
+sha256 = "564de2191b881e9f71b5606b25345821ea1682f06ab90499d3ab22b530176da1"
+binary_sha256 = "0690653ac2aad19150f0c22383ceb8aaf4fd96666fcfabb9d4641fbf757e0490"
+member = "linux-arm64/helm"

@@ -355,11 +355,12 @@ def install_pinned_tool(
             verify_bundle(cosign, download_path, bundle, tool.signature)
             verified = True
             _log(f"{tool.name} {tool.version}: cosign signature verified")
-    if tool.member is None:
+    member = entry.member or tool.member
+    if member is None:
         binary = download_path
     else:
         binary = tmp / tool.name
-        extract_member(download_path, tool.member, binary)
+        extract_member(download_path, member, binary)
         verify_sha256(binary, entry.binary_sha256)
     _place(binary, dest, 0o755)
     if verified:

@@ -213,11 +213,13 @@ def run_scanner(
     timeout: int,
     max_stdout: int = DEFAULT_MAX_STDOUT,
     max_stderr: int = DEFAULT_MAX_STDERR,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[int, bytes, str]:
     """Run `cmd` and return its exit code, its standard output and its standard error.
 
     Both streams are read as the scanner writes them; one that grows past its
-    cap kills the scanner, and the scan fails.
+    cap kills the scanner, and the scan fails. `extra_env` adds variables the
+    caller sets itself (never ones taken from the environment).
     """
     home = Path(tempfile.mkdtemp(prefix="shoalscan-home-"))
     try:
@@ -230,7 +232,7 @@ def run_scanner(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
-                env=scanner_env(home),
+                env={**scanner_env(home), **(extra_env or {})},
                 start_new_session=True,
             )
         except OSError as exc:

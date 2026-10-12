@@ -43,6 +43,11 @@ ignore = ["artipacked"]
 # Trivy checks to leave out (see Scanners).
 ignore = ["KSV-0011"]
 
+[trivy.helm_values]
+# Extra values files for rendering a Helm chart, by chart directory ("." for a
+# chart at the root); repository-relative. The chart's values.yaml is always used.
+"deploy/helm/app" = ["deploy/helm/app/values-ci.yaml"]
+
 [opengrep]
 community_rules = true    # the pinned opengrep-rules snapshot
 shoalscan_rules = true    # the rules in this repository's rules/ directory

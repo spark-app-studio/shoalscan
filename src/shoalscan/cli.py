@@ -125,7 +125,9 @@ def _tools(args: argparse.Namespace, config: Config, lock: Lock) -> Tools:
     if config.opengrep.shoalscan_rules:
         own = shoalscan_rules_dir()
     pinned = {}
-    for name in config.scanners:
+    # Helm is no scanner of its own: Trivy renders charts with it.
+    wanted = [*config.scanners, *(["helm"] if "trivy" in config.scanners and "helm" in lock.tools else [])]
+    for name in wanted:
         tool = lock.tools.get(name)
         if name == "opengrep" or tool is None:
             continue

@@ -8,7 +8,7 @@
 | Gitleaks | secrets: API keys, tokens, private keys, passwords | off | SHA-256 of the release archive, of the binary in it and of its default rules |
 | Hadolint | Dockerfile mistakes, with ShellCheck for `RUN` lines: running as root, unpinned images and packages, unsafe shell pipes | off | SHA-256 of the binary |
 | zizmor | GitHub Actions flaws: template injection, dangerous triggers, unpinned actions, broad permissions, persisted credentials | off | SHA-256 of the release archive and of the binary in it; build provenance checked when pinned |
-| Trivy | infrastructure-as-code misconfigurations in Terraform, CloudFormation, Kubernetes, Dockerfiles, Azure ARM and Ansible | off | SHA-256 of the release archive and of the binary in it, and a cosign signature checked at install against the Trivy release workflow |
+| Trivy | infrastructure-as-code misconfigurations in Terraform, CloudFormation, Kubernetes, Helm charts (rendered with a pinned Helm), Dockerfiles, Azure ARM and Ansible | off | SHA-256 of the release archive and of the binary in it, and a cosign signature checked at install against the Trivy release workflow |
 
 ```toml
 scanners = ["opengrep", "gitleaks", "hadolint", "zizmor", "trivy"]
@@ -110,7 +110,7 @@ zizmor publishes no checksums file, but its release archives carry GitHub build 
 
 ## Trivy
 
-Trivy's `config` command checks infrastructure as code: Terraform, CloudFormation, Kubernetes manifests, Dockerfiles, Azure ARM templates and Ansible. Helm charts are left out (`--misconfig-scanners` without `helm`): Trivy reads ignore comments from the rendered chart, and a template can produce one at render time that no check of the source can see. To check a chart, render it (`helm template`) and scan the manifests as Kubernetes files. Findings are named `trivy.<check>`, such as `trivy.AWS-0087` or `trivy.KSV-0017`. `CRITICAL` and `HIGH` become ERROR, `MEDIUM` WARNING, and `LOW` and `UNKNOWN` INFO. The triage work list shows each check's resolution and links to its page.
+Trivy's `config` command checks infrastructure as code: Terraform, CloudFormation, Kubernetes manifests, Dockerfiles, Azure ARM templates and Ansible. Helm charts are rendered by Shoalscan with a pinned Helm and then checked as Kubernetes manifests ([below](#helm-charts)); Trivy's own Helm scanner is turned off. Findings are named `trivy.<check>`, such as `trivy.AWS-0087` or `trivy.KSV-0017`. `CRITICAL` and `HIGH` become ERROR, `MEDIUM` WARNING, and `LOW` and `UNKNOWN` INFO. The triage work list shows each check's resolution and links to its page.
 
 Trivy finds the configuration files itself. Findings in excluded files and under `.git` are dropped. A finding in anything that is not a file of the repository (for example, a remote Terraform module) fails the scan, so it can never be filed under the wrong path.
 
@@ -134,6 +134,26 @@ resource "aws_s3_bucket" "assets" {
 A comment without an issue, with a wildcard, or with more than one check, is a blocking finding (`shoalscan.suppression-without-rule-and-issue`). To miss none, Shoalscan looks for both prefixes anywhere in a line and in any letter case; a word without an `ignore` key, such as the image tag `aquasec/trivy:0.74.0`, is not a comment. Every comment is counted and listed with the other inline suppressions, and so is every finding Trivy reports it silenced, so silencing never looks like fixing. The comments are read in the files Trivy reads, whatever their size (Trivy reads files over `max_target_bytes` too): `.tf`, `.tf.json`, `.tofu`, `.tofu.json`, `.tfvars`, `.hcl`, `.yaml`, `.yml`, `.json`, `.template`, `.tpl`, `.bicep`, Dockerfiles, and the files inside packaged charts (`.tgz`, `.tar.gz`, `.tar`). A file over 64 MB that mentions a Trivy prefix cannot be checked and is reported as an invalid comment.
 
 As a second line of defence, every finding Trivy logs as silenced (it does for Terraform and CloudFormation) must have a valid comment in its file, at or above the finding's first line. If one is not, something the lint did not recognise silenced a check, and the scan fails rather than pass.
+
+### Helm charts
+
+Trivy's own Helm scanner reads ignore comments from the chart as it renders it, and a template can write such a comment at render time, from text that looks like nothing in the source. So Shoalscan turns that scanner off and renders the charts itself:
+
+- **Which charts.** Every directory with a `Chart.yaml`, outside `.git` and the excludes. Subcharts in a chart's `charts/` directory are rendered with their parent; library charts are not rendered on their own.
+- **How.** `helm template` with the pinned Helm 4.2.4, offline, in the scanners' isolated environment and network sandbox, with Helm's cache, configuration, data and plugin directories in the scan's private staging directory and no Kubernetes configuration. No plugin or post-renderer runs, `lookup` finds nothing, and dependencies are never fetched.
+- **Values.** The chart's own `values.yaml`, and any extra values files you name for the chart, which charts with required values need:
+
+  ```toml
+  [trivy.helm_values]
+  "deploy/helm/app" = ["deploy/helm/app/values-ci.yaml"]   # chart directory ("." for the root) = values files
+  ```
+
+  This is policy: under `--policy-ref` it comes from the base branch. Paths are repository-relative.
+- **Nothing a template writes can silence a check.** Before Trivy reads the rendered manifests, every comment line is removed and every inline ignore marker is defused, and a finding Trivy reports as silenced in them fails the scan. Inline ignore comments therefore have no effect in Helm charts (they are still linted like other Trivy comments). Accept a finding in the baseline, or leave a check out with `[trivy] ignore`.
+- **Where findings are reported.** Helm marks each rendered document with the template it came from (`# Source: ...`). A finding is reported at that template, on its first line, since rendered lines do not map back to template lines; the message names the resource. Its fingerprint uses the rule, the template and the resource's kind and name, so it stays the same when unrelated lines change.
+- **Charts that cannot be rendered** are listed as not fully scanned, every file of them, so a pull request that changes one fails the check: a chart that does not render (`helm render failed`), one whose dependencies are not in its `charts/` directory (`helm chart dependencies missing`; run `helm dependency build` and commit them, or exclude the chart), one that holds a symbolic link (Helm would follow it out of the repository), and one whose extra values file is missing.
+
+Helm's release archives are pinned by SHA-256, archive and binary. Their PGP signatures were checked with gpg against the project's KEYS file when they were pinned; `install` does not check them again, as that would need gpg.
 
 ### Leaving checks out
 

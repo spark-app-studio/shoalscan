@@ -57,6 +57,11 @@ class ZizmorSettings:
 class TrivySettings:
     # Trivy check ids to leave out, such as AWS-0089 or KSV-0011.
     ignore: tuple[str, ...] = ()
+    # Extra values files for Helm, by chart directory ("." for a chart at the root); repository-relative.
+    helm_values: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+    def helm_values_map(self) -> dict[str, tuple[str, ...]]:
+        return dict(self.helm_values)
 
 
 @dataclass(frozen=True)
@@ -293,14 +298,24 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
     tr_raw = data.get("trivy", {})
     if not isinstance(tr_raw, dict):
         raise SetupError(f"{CONFIG_NAME}: [trivy] must be a table")
-    _check_keys(tr_raw, {"ignore"}, "[trivy]")
+    _check_keys(tr_raw, {"ignore", "helm_values"}, "[trivy]")
     checks = _str_list(tr_raw.get("ignore", []), "trivy.ignore")
     for check in checks:
         if not _TRIVY_CHECK_RE.match(check):
             raise SetupError(
                 f"{CONFIG_NAME}: trivy.ignore entries must be check ids such as AWS-0089 or KSV-0011: {check!r}"
             )
-    trivy = TrivySettings(ignore=tuple(sorted(set(checks))))
+    hv_raw = tr_raw.get("helm_values", {})
+    if not isinstance(hv_raw, dict):
+        raise SetupError(f"{CONFIG_NAME}: [trivy.helm_values] must be a table of chart directory = [values files]")
+    helm_values = []
+    for chart, files in sorted(hv_raw.items()):
+        chart_dir = "." if chart == "." else relative_repo_path(chart, f"trivy.helm_values key {chart!r}")
+        paths = tuple(
+            relative_repo_path(f, f"trivy.helm_values.{chart}") for f in _str_list(files, f"trivy.helm_values.{chart}")
+        )
+        helm_values.append((chart_dir, paths))
+    trivy = TrivySettings(ignore=tuple(sorted(set(checks))), helm_values=tuple(helm_values))
 
     lim_raw = data.get("limits", {})
     if not isinstance(lim_raw, dict):

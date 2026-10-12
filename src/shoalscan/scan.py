@@ -313,6 +313,8 @@ def run_scan(
                 config.components,
                 config.excludes,
                 config.trivy.ignore,
+                helm_pin=(tools.pinned["helm"].path, tools.pinned["helm"].sha256) if "helm" in tools.pinned else None,
+                helm_values=config.trivy.helm_values_map(),
             )
             findings += misconfigs
             extra_runs.append((trivy.TOOL, pin.version, misconfigs))
@@ -332,6 +334,9 @@ def run_scan(
                 "findings": len(misconfigs),
                 "inline_suppressions": len(markers),
                 "suppressed_findings": silenced,
+                "helm": {"version": tools.pinned["helm"].version, "verification": tools.pinned["helm"].verification()}
+                if "helm" in tools.pinned
+                else None,
             }
         sarif_text = build_sarif(sarif_source, root, sarif_index, own_findings, extra_runs)
     finally:

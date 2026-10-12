@@ -485,7 +485,8 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(about["scanners"][0]["name"], "Opengrep")
         self.assertRegex(about["scanners"][0]["version"], r"^\d+\.\d+\.\d+$")
         self.assertEqual(
-            [s["name"] for s in about["scanners"]], ["Opengrep", "cosign", "Gitleaks", "Hadolint", "zizmor", "Trivy"]
+            [s["name"] for s in about["scanners"]],
+            ["Opengrep", "cosign", "Gitleaks", "Hadolint", "zizmor", "Trivy", "Helm"],
         )
         self.assertEqual(about["scanners"][2]["licence"], "MIT")
         self.assertIn("Commons Clause", about["rule_sources"][0]["licence"])
