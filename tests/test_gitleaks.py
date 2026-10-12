@@ -26,7 +26,7 @@ from shoalscan.lockfile import load_lock, parse_lock, sha256_file
 LOCK_PATH = helpers.ROOT / "tools.lock"
 TOOLS = helpers.tools_dir()
 # Built in pieces, so this file holds no real-looking secret that a scanner would report.
-SECRET = "ghp_" + "R2xq7Wd9TbKz4LmN8pQs3VhY6cJf1aEu5oGi"
+GITHUB_PAT = "ghp_" + "R2xq7Wd9TbKz4LmN8pQs3VhY6cJf1aEu5oGi"
 AWS = "AKIA" + "Z4XQ7RJHJ2KQK6WN"
 
 
@@ -211,23 +211,23 @@ class NormaliseTests(unittest.TestCase):
         (self.root / "vendor").mkdir()
         (self.root / ".git").mkdir()
         (self.root / "src" / "app.py").write_text(
-            f'class Client:\n    def connect(self):\n        token = "{SECRET}"\n        other = "{SECRET}"\n'
+            f'class Client:\n    def connect(self):\n        token = "{GITHUB_PAT}"\n        other = "{GITHUB_PAT}"\n'
         )
         (self.root / "vendor" / "lib.py").write_text(f'key = "{AWS}"\n')
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def entry(self, path, line, secret=SECRET, rule="github-pat", col=17):
+    def entry(self, path, line, value=GITHUB_PAT, rule="github-pat", col=17):
         return {
             "RuleID": rule,
             "File": str(self.root / path),
             "StartLine": line,
             "EndLine": line,
             "StartColumn": col,
-            "EndColumn": col + len(secret),
-            "Secret": secret,
-            "Match": f'token = "{secret}"',
+            "EndColumn": col + len(value),
+            "Secret": value,
+            "Match": f'token = "{value}"',
             "Description": "Found a GitHub token.",
         }
 
@@ -250,14 +250,14 @@ class NormaliseTests(unittest.TestCase):
             ],
         )
         dumped = json.dumps([f.__dict__ for f in found])
-        self.assertNotIn(SECRET, dumped)
-        self.assertNotIn(SECRET[4:20], dumped)
+        self.assertNotIn(GITHUB_PAT, dumped)
+        self.assertNotIn(GITHUB_PAT[4:20], dumped)
         self.assertEqual(found[0].message, "Found a GitHub token.")
 
     def test_fingerprints_follow_the_line_not_the_secret(self):
         first = self.normalise([self.entry("src/app.py", 3)])[0]
         # A rotated secret on the same line is the same leak; a moved line keeps its fingerprint.
-        rotated = SECRET[:-4] + "ZZZZ"
+        rotated = GITHUB_PAT[:-4] + "ZZZZ"
         (self.root / "src" / "app.py").write_text(
             f'class Client:\n\n    def connect(self):\n        token = "{rotated}"\n'
         )
@@ -267,9 +267,11 @@ class NormaliseTests(unittest.TestCase):
         self.assertNotEqual(first.fingerprint, other_rule.fingerprint)
 
     def test_a_secret_found_decoded_falls_back_to_rule_and_context(self):
-        self.assertEqual(gitleaks.masked_code(["x = 'Z2hw...'"], 1, 1, SECRET), "")
-        self.assertEqual(gitleaks.masked_code([f"a {SECRET} b {SECRET}"], 1, 1, SECRET), "a \0secret\0 b \0secret\0")
-        self.assertEqual(gitleaks.masked_code(["x"], 3, 3, SECRET), "")
+        self.assertEqual(gitleaks.masked_code(["x = 'Z2hw...'"], 1, 1, GITHUB_PAT), "")
+        self.assertEqual(
+            gitleaks.masked_code([f"a {GITHUB_PAT} b {GITHUB_PAT}"], 1, 1, GITHUB_PAT), "a \0secret\0 b \0secret\0"
+        )
+        self.assertEqual(gitleaks.masked_code(["x"], 3, 3, GITHUB_PAT), "")
 
     def test_malformed_reports_fail(self):
         bad = [
@@ -411,7 +413,7 @@ class EndToEndTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo, out = Path(tmp).resolve() / "repo", Path(tmp) / "out"
             (repo / "src").mkdir(parents=True)
-            (repo / "src" / "app.py").write_text(f'aws_key = "{AWS}"  # gitleaks:allow\ntoken = "{SECRET}"\n')
+            (repo / "src" / "app.py").write_text(f'aws_key = "{AWS}"  # gitleaks:allow\ntoken = "{GITHUB_PAT}"\n')
             (repo / "c.py").write_text(f'k = "{AWS}"\n')
             (repo / ".gitleaks.toml").write_text('[allowlist]\npaths = ["src/.*"]\n')
             # Gitleaks's fingerprints in `dir` mode: the absolute path, the rule and the line, in every form it
@@ -425,7 +427,7 @@ class EndToEndTests(unittest.TestCase):
             ]
             # The ignore file holds a secret of its own, which must still be found.
             (repo / ".gitleaksignore").write_text(f"# {AWS}\n" + "\n".join(fingerprints) + "\n")
-            (repo / "src" / ".gitleaksignore").write_text(f"# {SECRET}\n" + "\n".join(fingerprints) + "\n")
+            (repo / "src" / ".gitleaksignore").write_text(f"# {GITHUB_PAT}\n" + "\n".join(fingerprints) + "\n")
             (repo / ".shoalscan.toml").write_text('scanners = ["gitleaks"]\n[opengrep]\ncommunity_rules = false\n')
             git(repo, "init", "-q", "-b", "main")
             git(repo, "add", "-A")
@@ -445,7 +447,7 @@ class EndToEndTests(unittest.TestCase):
             self.assertIn("gitleaks.github-pat", doc["rule_ids"])
             for name in ("findings.json", "findings.sarif"):
                 text = (out / name).read_text()
-                self.assertNotIn(SECRET, text, name)
+                self.assertNotIn(GITHUB_PAT, text, name)
                 self.assertNotIn(AWS, text, name)
 
     def test_the_built_in_path_allowlist_cannot_hide_a_secret(self):
@@ -479,7 +481,7 @@ class EndToEndTests(unittest.TestCase):
             repo, out = Path(tmp).resolve() / "repo", Path(tmp) / "out"
             repo.mkdir()
             (repo / "c.py").write_text(f'k = "{AWS}"\n')
-            (repo / ".GitleaksIgnore").write_text(f"{repo}/c.py:aws-access-token:1\n# {SECRET}\n")
+            (repo / ".GitleaksIgnore").write_text(f"{repo}/c.py:aws-access-token:1\n# {GITHUB_PAT}\n")
             (repo / ".shoalscan.toml").write_text('scanners = ["gitleaks"]\n')
             # On a case-insensitive file system Gitleaks would open this as its ignore file.
             insensitive = (repo / ".gitleaksignore").exists()
