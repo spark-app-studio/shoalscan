@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,6 +28,7 @@ from shoalscan import markdown as md
 from shoalscan.check import SUMMARY_PREFIX
 from shoalscan.errors import SetupError
 from shoalscan.findings import Finding, load_findings
+from shoalscan.testscope import scope_from_json
 
 KINDS = ("pr", "scheduled")
 SEVERITIES = ("ERROR", "WARNING", "INFO")
@@ -297,7 +299,19 @@ MIGRATIONS: tuple[str, ...] = (
     ) WITHOUT ROWID;
     CREATE INDEX finding_suggestions_by_neighbour ON finding_suggestions (neighbour_id);
     """,
+    # 14: test code labels ([test_code]): the label of each labelled finding, as JSON, and the count. Labels are
+    # triage help only.
+    """
+    ALTER TABLE run_findings ADD COLUMN test_code TEXT;
+    ALTER TABLE runs ADD COLUMN test_code INTEGER NOT NULL DEFAULT 0;
+    """,
+    # 15: repair databases that unreleased builds of the test-scope work wrote at version 14, with other
+    # columns (run_findings.test_scope, runs.test_scoped) and automatic reviews. Worked out in Python:
+    # see `_migration_15`.
+    "python:_migration_15",
 )
+# The automatic reviewer those unreleased builds wrote reviews under.
+UNRELEASED_AUTO_REVIEWER = "shoalscan (test scope)"
 REVIEW_STATUSES = ("open", "false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed", "regression")
 USER_STATUSES = ("open", "false_positive", "accepted_risk", "wont_fix", "fixed")
 RESOLVED_STATUSES = frozenset({"false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed"})
@@ -330,9 +344,41 @@ def migrate(conn: sqlite3.Connection) -> int:
             f"({SCHEMA_VERSION}); upgrade Shoalscan"
         )
     for version in range(found, SCHEMA_VERSION):
+        step = MIGRATIONS[version]
+        if step.startswith("python:"):
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                globals()[step[len("python:") :]](conn)
+                conn.execute(f"PRAGMA user_version = {version + 1}")
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            continue
         # executescript commits first, so run each migration in its own explicit transaction.
-        conn.executescript(f"BEGIN IMMEDIATE;\n{MIGRATIONS[version]}\nPRAGMA user_version = {version + 1};\nCOMMIT;")
+        conn.executescript(f"BEGIN IMMEDIATE;\n{step}\nPRAGMA user_version = {version + 1};\nCOMMIT;")
     return found
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _migration_15(conn: sqlite3.Connection) -> None:
+    """Bring a database from an unreleased build up to the released version 14 columns, and remove the
+    automatic reviews it wrote: only a person's review may stand, and none may reach a baseline."""
+    if "test_code" not in _columns(conn, "run_findings"):
+        conn.execute("ALTER TABLE run_findings ADD COLUMN test_code TEXT")
+    if "test_code" not in _columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN test_code INTEGER NOT NULL DEFAULT 0")
+    reviews = conn.execute("DELETE FROM finding_reviews WHERE updated_by = ?", (UNRELEASED_AUTO_REVIEWER,)).rowcount
+    events = conn.execute("DELETE FROM finding_review_events WHERE who = ?", (UNRELEASED_AUTO_REVIEWER,)).rowcount
+    if reviews or events:
+        print(
+            f"shoalscan: removed {reviews} automatic reviews and {events} review events by "
+            f'"{UNRELEASED_AUTO_REVIEWER}" that an unreleased build wrote; a person reviews findings again',
+            file=sys.stderr,
+        )
 
 
 def open_for_write(path: Path) -> sqlite3.Connection:
@@ -347,11 +393,60 @@ def open_for_write(path: Path) -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 30000")
+        found = conn.execute("PRAGMA user_version").fetchone()[0]
+        if 0 < found < SCHEMA_VERSION:
+            backup_before_migration(conn, path, found)
         migrate(conn)
     except BaseException:
         conn.close()
         raise
     return conn
+
+
+def backup_path(path: Path, version: int) -> Path:
+    return path.with_name(f"{path.name}.bak-schema{version}")
+
+
+def backup_before_migration(conn: sqlite3.Connection, path: Path, found: int) -> Path:
+    """Copy the database, as it is at schema `found`, next to it (mode 0600) before a migration.
+
+    An older Shoalscan cannot open a migrated database; after rolling the
+    binary back, stop the dashboard and put this copy back in place.
+    """
+    dest = backup_path(path, found)
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.unlink(missing_ok=True)
+    os.close(os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    try:
+        target = sqlite3.connect(str(tmp))
+        try:
+            conn.backup(target)
+        finally:
+            target.close()
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    print(
+        f"shoalscan: backed up the history database (schema {found}) to {dest} before migrating it to schema "
+        f"{SCHEMA_VERSION}",
+        file=sys.stderr,
+    )
+    return dest
+
+
+def migrate_in_place(path: Path) -> None:
+    """Bring an existing database up to this Shoalscan's schema, with a backup first (for `serve`)."""
+    if not path.is_file():
+        return
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+    if version < SCHEMA_VERSION:
+        open_for_write(path).close()
 
 
 def open_read_only(path: Path) -> sqlite3.Connection:
@@ -365,7 +460,7 @@ def open_read_only(path: Path) -> sqlite3.Connection:
         conn.close()
         raise SetupError(
             f"the history database has schema version {version}; this Shoalscan needs {SCHEMA_VERSION}. "
-            "Run `shoalscan record` with this version once to migrate it."
+            "Run `shoalscan record` or start `shoalscan serve` with this version once to migrate it."
         )
     return conn
 
@@ -507,6 +602,19 @@ def read_details(path: Path, findings_path: Path, summary: dict, findings: list[
         for e in baselined
     ):
         raise SetupError(f"{path}: baselined lists entries that are not findings in {findings_path}")
+    doc.setdefault("test_code", [])
+    test_code = doc["test_code"]
+    if not isinstance(test_code, list) or not all(
+        isinstance(e, dict)
+        and isinstance(e.get("key"), list)
+        and len(e["key"]) == 4
+        and tuple(e["key"]) in keys
+        and scope_from_json({k: e.get(k) for k in ("kind", "path", "line")}) is not None
+        for e in test_code
+    ):
+        raise SetupError(f"{path}: test_code lists entries that are not findings in {findings_path}")
+    if len(test_code) != (_int(summary, "test_code") if "test_code" in summary else 0):
+        raise SetupError(f"{path}: test_code does not match the check summary")
     for name in (
         "stale",
         "baseline_additions",
@@ -662,6 +770,7 @@ def _row(
         "unscanned_skipped": _int(summary, "unscanned", "skipped"),
         "unscanned_errored": _int(summary, "unscanned", "errored"),
         "changed_unscanned": _int(summary, "unscanned", "changed_and_unscanned"),
+        "test_code": _int(summary, "test_code") if "test_code" in summary else 0,
         "policy_ref": _text(policy_ref, 256) if isinstance(policy_ref, str) else None,
         "shoalscan_version": _text(version, 64) if isinstance(version, str) else None,
         "scanners": json.dumps(meta.get("scanners") if isinstance(meta.get("scanners"), dict) else {}, sort_keys=True)[
@@ -780,6 +889,15 @@ def record_run(
         {tuple(k) for k in details["blocking_class"]} if details and details.get("blocking_class") is not None else None
     )
     baselined = {tuple(e["key"]): e for e in details.get("baselined", [])} if details else {}
+    # The check decides which findings carry a test code label: only its list counts.
+    test_code = (
+        {
+            tuple(e["key"]): scope_from_json({k: e[k] for k in ("kind", "path", "line")})
+            for e in details.get("test_code", [])
+        }
+        if details
+        else {}
+    )
     content = _content_sha256(findings, summary, meta, info, details, outcome, check_exit)
     row = _row(info, summary, meta, content, outcome, check_exit, details)
     row["blocking_class_count"] = len(blocking_class) if blocking_class is not None else None
@@ -835,7 +953,7 @@ def record_run(
             conn.execute(
                 "INSERT INTO run_findings (run_id, key_id, severity, line, component, message_id, is_new, "
                 "new_blocking, blocking_class, "
-                "baseline_issue, baseline_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "baseline_issue, baseline_reason, test_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     key_id,
@@ -848,6 +966,7 @@ def record_run(
                     None if blocking_class is None else int(raw_key in blocking_class),
                     _text(baselined[raw_key]["issue"], 500) if raw_key in baselined else None,
                     _text(baselined[raw_key]["reason"], 2000) if raw_key in baselined else None,
+                    json.dumps(test_code[raw_key].as_json(), sort_keys=True)[:2000] if raw_key in test_code else None,
                 ),
             )
         if details:

@@ -8,10 +8,10 @@ import shutil
 import tempfile
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from shoalscan import __version__, gitleaks, hadolint, opengrep, process, trivy, zizmor
+from shoalscan import __version__, gitleaks, hadolint, opengrep, process, testscope, trivy, zizmor
 from shoalscan.check import CHECK_JSON
 from shoalscan.config import Config
 from shoalscan.errors import ScanError, SetupError
@@ -19,6 +19,7 @@ from shoalscan.excludes import ExcludeMatcher
 from shoalscan.findings import Finding, findings_to_json
 from shoalscan.gitref import baseline_binding_path, worktree_state
 from shoalscan.lockfile import verify_sha256
+from shoalscan.resources import scope_rules_file
 from shoalscan.rulesets import RuleIdFilter
 from shoalscan.sarif import build_sarif
 from shoalscan.suppressions import find_suppressions, lint_findings
@@ -156,6 +157,7 @@ def run_scan(
     }
     unscanned: dict = {"skipped": [], "errors": []}
     sarif_index: dict = {}
+    scoped: dict = {}
     sarif_source: Path | None = None
     suppressed_by_scanner = 0
     stage = Path(tempfile.mkdtemp(prefix="shoalscan-rules-"))
@@ -183,11 +185,31 @@ def run_scan(
             excluded = RuleIdFilter(config.opengrep.exclude_rules)
             stats = opengrep.stage_rules(rules_stage, sources, excluded)
             namespaces = [s.namespace for s in sources]
+            # Test code labels: the scope rules run in the same scan, staged apart so that no policy
+            # setting (exclude_rules) can leave them out. Off unless the policy lists a rule. Labels are
+            # triage help: they never change whether a finding blocks.
+            labels_on = bool(config.test_code.rules)
+            scope_ids: set[str] = set()
+            if labels_on:
+                repository = testscope.read_repository(root)
+                meta["test_code"] = {
+                    "rules": list(config.test_code.rules),
+                    # Why the labels may be unreliable (a note for reviewers; never affects blocking).
+                    "unreliable": repository.unreliable,
+                    "module_names": len(repository.module_names),
+                    "module_names_dropped": repository.names_dropped,
+                    "findings": 0,
+                }
+                testscope.stage(rules_stage / testscope.NAMESPACE, scope_rules_file(), repository.module_names)
+                scope_ids = testscope.rule_ids(repository.module_names)
+                namespaces.append(testscope.NAMESPACE)
             sarif_source = stage / "opengrep.sarif"
             cmd = opengrep.build_command(tools.opengrep, namespaces, root, config.limits, excludes, sarif_source)
             doc = opengrep.execute(cmd, rules_stage, config.limits.scan_timeout_seconds)
+            # The scope rules' matches are never findings: taken out before anything reads the results.
+            scope_results = testscope.split_results(doc)
             warnings = opengrep.check_errors(doc)
-            rules_ran = opengrep.check_rules_ran(doc, stats.rule_ids)
+            rules_ran = opengrep.check_rules_ran(doc, stats.rule_ids | scope_ids)
             scanned_paths = opengrep.scanned_paths(doc, root)
             scanned = len(scanned_paths)
             if scanned == 0:
@@ -201,6 +223,24 @@ def run_scan(
             og_findings, sarif_index = opengrep.normalise(doc, root, config.components)
             # Defence in depth: the staging filter already left these rules out.
             og_findings = [f for f in og_findings if not excluded.matches(f.rule)]
+            if labels_on:
+                errored = frozenset(e["path"] for e in unscanned["errors"]) | frozenset(
+                    e["path"] for e in unscanned["skipped"]
+                )
+                scopes = testscope.build(root, scope_results, errored)
+                listed = RuleIdFilter(config.test_code.rules)
+                spans = opengrep.result_spans(doc, root)
+                by_print = {(k[0], k[1], fp): spans.get(k) for k, fp in sarif_index.items()}
+                og_findings = [
+                    replace(f, test_code=scopes.scope_for(f.path, *(by_print.get(f.key()[1:]) or (None, None))))
+                    if testscope.eligible(f.tool, f.rule, f.path, listed)
+                    else f
+                    for f in og_findings
+                ]
+                scoped = {(f.rule, f.path, f.fingerprint): f.test_code for f in og_findings if f.test_code}
+                meta["test_code"].update(
+                    {"findings": len(scoped), "items": scopes.counts(), "unrecognised_spelling": scopes.unrecognised}
+                )
             findings += og_findings
             if not sarif_source.is_file():
                 raise ScanError("opengrep did not write its SARIF output")
@@ -344,7 +384,7 @@ def run_scan(
                 if "helm" in tools.pinned
                 else None,
             }
-        sarif_text = build_sarif(sarif_source, root, sarif_index, own_findings, extra_runs)
+        sarif_text = build_sarif(sarif_source, root, sarif_index, own_findings, extra_runs, scoped)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 

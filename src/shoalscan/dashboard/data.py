@@ -23,6 +23,7 @@ from collections import Counter
 from datetime import date, datetime, timedelta
 
 from shoalscan import embeddings
+from shoalscan.testscope import scope_from_json
 
 SEVERITIES = ("ERROR", "WARNING", "INFO")
 AGE_BUCKETS = ((7, "0-7 days"), (30, "8-30 days"), (90, "31-90 days"), (365, "91-365 days"), (None, "over a year"))
@@ -45,7 +46,7 @@ _RUN_COLUMNS = (
     "baseline_additions, suppressions, suppressions_invalid, suppressed_findings, unscanned_skipped, "
     "unscanned_errored, changed_unscanned, policy_ref, shoalscan_version, duration_seconds, outcome, check_exit, "
     "details_known, files_known, suppressions_known, partial_warnings, partial_warn_only, excluded_changed, "
-    "blocking_class_count, scanners, "
+    "blocking_class_count, scanners, test_code, "
     "EXISTS (SELECT 1 FROM scan_triggers st WHERE st.run_id = runs.id AND st.trigger = 'rescan-commit') AS rescanned"
 )
 SORTS = ("priority",)
@@ -60,6 +61,7 @@ REVIEW_FILTERS = (
     "regression",
     "baselined",
     "suggested",
+    "test_code",
 )
 # The neighbour's decision, now: its dashboard review, else its baseline reason in its newest scheduled run.
 # A pull-request run's baseline reason is never a decision: the change under review has not been accepted.
@@ -138,6 +140,17 @@ def _review(r) -> dict:
         "baseline_issue": r["baseline_issue"],
         "baseline_reason": r["baseline_reason"],
     }
+
+
+def _test_code(value: str | None) -> dict | None:
+    """A finding's test code label, with its description; None when it has none."""
+    if value is None:
+        return None
+    try:
+        scope = scope_from_json(json.loads(value))
+    except ValueError:
+        return None
+    return None if scope is None else {**scope.as_json(), "description": scope.description()}
 
 
 SEVERITY_RANK = {"ERROR": 0, "WARNING": 1, "INFO": 2}
@@ -283,6 +296,8 @@ def _run_dict(row: sqlite3.Row) -> dict:
         "shoalscan_version": d["shoalscan_version"],
         "duration_seconds": d["duration_seconds"],
         "rescanned": bool(d["rescanned"]),
+        # Findings labelled as test code: a triage label, which never changes whether a finding blocks.
+        "test_code": d["test_code"],
         "scanners": _scanners_ran(d.get("scanners")),
     }
     out["status"] = run_status(d)
@@ -413,7 +428,7 @@ class Data:
             "age_buckets": [{"label": label, "count": 0} for _, label in AGE_BUCKETS],
             "by_component": {"run": None, "severities": list(SEVERITIES), "max_cell": 0, "rows": []},
             "blocking": {"run": None, "known": False, "total": None, "new": None, "baselined": None, "top": []},
-            "reviews": {"run": None, "untriaged_blocking": 0, "regressions": 0},
+            "reviews": {"run": None, "untriaged_blocking": 0, "regressions": 0, "test_code": 0},
             "embeddings": None,
         }
         if not runs:
@@ -589,6 +604,8 @@ class Data:
             params.append(json.dumps(keys))
         if review == "untriaged":
             where.append("fr.status IS NULL AND rf.baseline_reason IS NULL")
+        elif review == "test_code":
+            where.append("rf.test_code IS NOT NULL")
         elif review == "suggested":
             where.append(_SUGGESTED)
             params.append(embeddings.DEFAULT_MODEL)
@@ -605,7 +622,8 @@ class Data:
         offset = max(0, offset)
         columns = (
             f"SELECT rf.key_id, rf.severity, fk.tool, fk.rule, fk.path, fk.fingerprint, rf.line, rf.component, m.text, "
-            "rf.is_new, rf.new_blocking, rf.blocking_class, rf.baseline_issue, rf.baseline_reason, fr.status AS "
+            "rf.is_new, rf.new_blocking, rf.blocking_class, rf.baseline_issue, rf.baseline_reason, rf.test_code, "
+            "fr.status AS "
             "review_status_raw, "
             f"({_REVIEW_STATUS}) AS review_status, fr.description AS review_description, fr.resolved_at AS "
             "review_resolved_at, "
@@ -671,6 +689,7 @@ class Data:
                     "blocking_class": None if r["blocking_class"] is None else bool(r["blocking_class"]),
                     "key": [r["tool"], r["rule"], r["path"], r["fingerprint"]],
                     "review": _review(r),
+                    "test_code": _test_code(r["test_code"]),
                     "suggestion": suggestions.get(r["key_id"]),
                 }
                 for r in rows
@@ -889,7 +908,10 @@ class Data:
             "WHERE rf.run_id = ? AND fr.status = 'regression'",
             (repo_id, run_id),
         ).fetchone()[0]
-        return {"run": run_id, "untriaged_blocking": untriaged, "regressions": regressions}
+        test_code = self.conn.execute(
+            "SELECT COUNT(*) FROM run_findings WHERE run_id = ? AND test_code IS NOT NULL", (run_id,)
+        ).fetchone()[0]
+        return {"run": run_id, "untriaged_blocking": untriaged, "regressions": regressions, "test_code": test_code}
 
     def _first_seen(self, repo_id: int, key_ids: list[int]) -> dict[int, str]:
         if not key_ids:

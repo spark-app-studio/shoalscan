@@ -59,6 +59,14 @@ categories = ["security"]
 # Rules to leave out, by exact id or by prefix ending in ".*".
 exclude_rules = ["community.python.lang.security.audit.dangerous-subprocess-use-audit"]
 
+[test_code]
+# Opengrep rules whose Rust findings inside #[cfg(test)] items get a "test
+# code" label, by exact id or by prefix ending in ".*", as in
+# opengrep.exclude_rules. A label is triage help only: labelled findings block
+# like any other. Off when empty (the default). Secret rules, Gitleaks rules,
+# other scanners' rules and wildcards such as community.* are refused.
+rules = ["community.rust.lang.security.temp-dir", "shoalscan.rust-plain-http-url"]
+
 [limits]
 scan_timeout_seconds = 1800
 rule_timeout_seconds = 30       # per rule and file
@@ -89,6 +97,10 @@ Use it only for languages whose parser is experimental: Dockerfiles, shell scrip
 Each entry must name the files it covers. It is a file name (`Dockerfile`), a file name with any extension (`Dockerfile.*`), an extension (`*.sh`, `*.yaml`), or a path with `/` whose last part is one of those (`deploy/**/templates/*.yaml`). An entry without `/` matches a file's own name only, never a directory on its path. Patterns that could cover any file, such as `*e*`, `**` or `src/*`, are refused.
 
 The setting only protects pull requests that run under `--policy-ref`: then the list comes from the base branch, like the rest of the policy, and a change cannot make its own files warn-only. Without `--policy-ref`, or in adoption mode (the first run, before the base branch has a configuration), the configuration in the change itself applies, including its `parse_warn_only`.
+
+## Test code labels
+
+`[test_code] rules` lists Opengrep rules whose Rust findings get a **test code** label when they lie inside a top-level `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) module, function, `impl`, constant or static. Labelled findings are grouped apart in the scan output, `findings.json`, the check report and the dashboard. A label is triage help, not a proof: labelled findings block like any other, and only a person accepts one, through the baseline (`shoalscan baseline accept --test-code`) or a dashboard review. Rules that find secrets, Gitleaks rules, other scanners' rules and wildcards broader than three dotted parts are refused. [Test code labels](test-code.md) explains what gets a label, why it is not a proof, and how to accept a labelled finding.
 
 How `check` treats partial parses and other unscanned files is described in [The baseline and the check](baseline-and-check.md#the-check).
 

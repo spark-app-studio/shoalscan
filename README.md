@@ -74,19 +74,20 @@ shoalscan scan && shoalscan check
 1. [Getting started](docs/getting-started.md): install Shoalscan and the pinned scanners, run the first scan and write the first baseline.
 2. [Configuration](docs/configuration.md): every `.shoalscan.toml` key, and partial parses with `parse_warn_only`.
 3. [The baseline and the check](docs/baseline-and-check.md): findings and fingerprints, the baseline file, `check` and its summary, inline suppressions, renames, and why pull requests read the policy from the base branch.
-4. [CI](docs/ci.md): the GitHub Actions workflow, the self-hosted runner script and the recommended CODEOWNERS.
-5. [Scanners](docs/scanners.md): Opengrep, Gitleaks, Hadolint, zizmor and Trivy, and how the scanned repository is kept from silencing them.
-6. [Rules](docs/rules.md): Shoalscan's own rules and the community rules snapshot.
-7. [The dashboard](docs/dashboard.md): recording runs, correcting the history, serving the dashboard and its pages.
-8. [Reviewing findings](docs/reviewing-findings.md): review statuses, automatic verification of fixes, and `triage export`.
-9. [The triage work list](docs/triage.md): `shoalscan triage`, a prioritised work list of the last scan's findings, grouped by rule family and component.
-10. [The security report](docs/report.md): `shoalscan report`, a dated report on a repository's security over a period, from the run history.
-11. [Scheduled scans](docs/scheduled-scans.md): nightly scans of the default branch with the example script and units.
-12. [Scanning from the dashboard](docs/dashboard-scanning.md): registered repositories, Rescan, and the Configuration page.
-13. [Security model](docs/security-model.md): how the dashboard and the scan worker protect themselves.
-14. [Limits](docs/limits.md): what static analysis and Shoalscan's own safeguards cannot do.
-15. [Development](docs/development.md): running the tests, the code style and fuzzing.
-16. [Command and file reference](docs/reference.md): every command, the exit codes, and the files Shoalscan reads and writes.
+4. [Test code labels](docs/test-code.md): labels for Rust findings inside `#[cfg(test)]` code, a triage help that never decides whether a finding blocks, and how a reviewer accepts one.
+5. [CI](docs/ci.md): the GitHub Actions workflow, the self-hosted runner script and the recommended CODEOWNERS.
+6. [Scanners](docs/scanners.md): Opengrep, Gitleaks, Hadolint, zizmor and Trivy, and how the scanned repository is kept from silencing them.
+7. [Rules](docs/rules.md): Shoalscan's own rules and the community rules snapshot.
+8. [The dashboard](docs/dashboard.md): recording runs, correcting the history, serving the dashboard and its pages.
+9. [Reviewing findings](docs/reviewing-findings.md): review statuses, automatic verification of fixes, and `triage export`.
+10. [The triage work list](docs/triage.md): `shoalscan triage`, a prioritised work list of the last scan's findings, grouped by rule family and component.
+11. [The security report](docs/report.md): `shoalscan report`, a dated report on a repository's security over a period, from the run history.
+12. [Scheduled scans](docs/scheduled-scans.md): nightly scans of the default branch with the example script and units.
+13. [Scanning from the dashboard](docs/dashboard-scanning.md): registered repositories, Rescan, and the Configuration page.
+14. [Security model](docs/security-model.md): how the dashboard and the scan worker protect themselves.
+15. [Limits](docs/limits.md): what static analysis and Shoalscan's own safeguards cannot do.
+16. [Development](docs/development.md): running the tests, the code style and fuzzing.
+17. [Command and file reference](docs/reference.md): every command, the exit codes, and the files Shoalscan reads and writes.
 
 **Design and contributing:** [docs/design.md](docs/design.md) describes the goals, principles and plan.
 

@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from shoalscan.errors import ScanError, SetupError
+from shoalscan.testscope import TestScope, scope_from_json
 
 FINDINGS_FORMAT = 1
 _WS = re.compile(r"\s+")
@@ -39,6 +40,9 @@ class Finding:
     fingerprint: str
     component: str
     message: str
+    # Set when the finding lies inside a #[cfg(test)] item in Rust and the policy's
+    # [test_code] lists its rule: a label for triage, which never changes whether it blocks.
+    test_code: TestScope | None = None
 
     def key(self) -> tuple[str, str, str, str]:
         return (self.tool, self.rule, self.path, self.fingerprint)
@@ -125,12 +129,20 @@ def assign_fingerprints(items: list[dict]) -> list[str]:
     return result
 
 
+def finding_to_json(f: Finding) -> dict:
+    """A finding as findings.json holds it; `test_code` only when it is set."""
+    item = asdict(f)
+    if f.test_code is None:
+        del item["test_code"]
+    return item
+
+
 def findings_to_json(findings: list[Finding], meta: dict) -> str:
     doc = {
         "format": FINDINGS_FORMAT,
         "complete": True,
         **meta,
-        "findings": [asdict(f) for f in sort_findings(findings)],
+        "findings": [finding_to_json(f) for f in sort_findings(findings)],
     }
     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
 
@@ -139,14 +151,14 @@ def sort_findings(findings: list[Finding]) -> list[Finding]:
     return sorted(findings, key=lambda f: (f.path, f.line, f.rule, f.fingerprint, f.tool))
 
 
+_TEXT_FIELDS = tuple(k for k in Finding.__dataclass_fields__ if k not in ("line", "test_code"))
+_REQUIRED_FIELDS = frozenset((*_TEXT_FIELDS, "line"))
+
+
 def _well_typed(item: dict) -> bool:
     """Every field of a finding has its type: text, and a line number that is a whole number."""
     line = item["line"]
-    return (
-        isinstance(line, int)
-        and not isinstance(line, bool)
-        and all(isinstance(item[k], str) for k in Finding.__dataclass_fields__ if k != "line")
-    )
+    return isinstance(line, int) and not isinstance(line, bool) and all(isinstance(item[k], str) for k in _TEXT_FIELDS)
 
 
 def load_findings(path: Path) -> tuple[list[Finding], dict]:
@@ -165,11 +177,15 @@ def load_findings(path: Path) -> tuple[list[Finding], dict]:
     raw = doc.get("findings")
     if not isinstance(raw, list):
         raise ScanError(f"findings file has no findings list: {path}")
-    fields = set(Finding.__dataclass_fields__)
     findings = []
     for item in raw:
-        if not isinstance(item, dict) or set(item) != fields or not _well_typed(item):
+        if not isinstance(item, dict) or set(item) - {"test_code"} != _REQUIRED_FIELDS or not _well_typed(item):
             raise ScanError(f"findings file has a malformed entry: {item!r}"[:300])
-        findings.append(Finding(**item))
+        scope = None
+        if "test_code" in item:
+            scope = scope_from_json(item["test_code"])
+            if scope is None:
+                raise ScanError(f"findings file has a malformed test_code: {item!r}"[:300])
+        findings.append(Finding(**{**item, "test_code": scope}))
     meta = {k: v for k, v in doc.items() if k != "findings"}
     return findings, meta

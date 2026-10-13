@@ -40,7 +40,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shoalscan.dashboard.auth import write_private_file
+from shoalscan.dashboard.auth import text_equal, write_private_file
 from shoalscan.errors import SetupError
 
 CONFIG_FILE = "oidc.toml"
@@ -407,9 +407,7 @@ class Logins:
         if not state or len(state) > 100 or not sealed or len(sealed) > MAX_LOGIN_COOKIE_CHARS:
             return None
         payload, _, tag = sealed.partition(".")
-        if not hmac.compare_digest(
-            tag.encode("ascii", "replace"), self._tag(payload.encode("ascii", "replace")).encode()
-        ):
+        if not text_equal(tag, self._tag(payload.encode("utf-8", "surrogatepass"))):
             return None
         try:
             value = json.loads(_b64(payload))
@@ -420,7 +418,7 @@ class Logins:
         now = time.time() if now is None else now
         if created is None or not -CLOCK_SKEW_SECONDS <= now - created < LOGIN_SECONDS:
             return None
-        if not hmac.compare_digest(state.encode("ascii", "replace"), value["s"].encode("ascii", "replace")):
+        if not text_equal(state, value["s"]):
             return None
         with self._lock:
             for used in [k for k, until in self._used.items() if until <= now]:
@@ -515,7 +513,7 @@ def verify_id_token(provider: Provider, config: Config, token: str, nonce: str, 
         raise OidcError("the ID token has expired, or is from the future")
     if isinstance(claims.get("nbf"), (int, float)) and claims["nbf"] > now + CLOCK_SKEW_SECONDS:
         raise OidcError("the ID token is not valid yet")
-    if not isinstance(claims.get("nonce"), str) or not hmac.compare_digest(claims["nonce"], nonce):
+    if not isinstance(claims.get("nonce"), str) or not text_equal(claims["nonce"], nonce):
         raise OidcError("the ID token's nonce does not match this login")
     if not isinstance(claims.get("sub"), str) or not claims["sub"]:
         raise OidcError("the ID token names no subject")

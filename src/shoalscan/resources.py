@@ -1,4 +1,4 @@
-"""Locate the files that ship with Shoalscan: `tools.lock` and its own rules."""
+"""Locate the files that ship with Shoalscan: `tools.lock`, its own rules and its scope rules."""
 
 from __future__ import annotations
 
@@ -27,3 +27,8 @@ def default_lock_path() -> Path:
 
 def shoalscan_rules_dir() -> Path:
     return data_path("rules")
+
+
+def scope_rules_file() -> Path:
+    """The internal rule pack that finds `#[cfg(test)]` items for test code labels (see `shoalscan.testscope`)."""
+    return data_path("scope") / "rust-test-scope.yaml"

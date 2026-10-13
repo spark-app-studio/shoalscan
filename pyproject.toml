@@ -20,7 +20,7 @@ classifiers = [
 [project.scripts]
 shoalscan = "shoalscan.cli:main"
 
-# The lock file, Shoalscan's own rules and the icon live at the repository root and are
+# The lock file, Shoalscan's own rules, its test-scope rules and the icon live at the repository root and are
 # shipped inside the package as `shoalscan/_data/`.
 [tool.setuptools]
 package-dir = { "" = "src", "shoalscan._data" = "." }
@@ -28,7 +28,7 @@ packages = ["shoalscan", "shoalscan.dashboard", "shoalscan._data"]
 include-package-data = false
 
 [tool.setuptools.package-data]
-"shoalscan._data" = ["tools.lock", "rules/*.yaml", "assets/shoalscan-icon.svg"]
+"shoalscan._data" = ["tools.lock", "rules/*.yaml", "scope/*.yaml", "assets/shoalscan-icon.svg"]
 "shoalscan.dashboard" = ["static/*.html", "static/*.css", "static/*.js"]
 
 # Style: PEP 8, with 120-character lines. Ruff is a development tool only;

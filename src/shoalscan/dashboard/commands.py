@@ -6,6 +6,7 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -228,6 +229,13 @@ def _describe(run: dict) -> str:
 
 
 EXPORT_LABELS = {"false_positive": "False positive", "accepted_risk": "Accepted", "wont_fix": "Won't fix"}
+# Who a review may come from to reach a baseline: a signed-in person, by their verified email address, or a
+# session of the 0.1 dashboard's shared login. Anything else (an automatic writer) is never exported.
+_PERSON = re.compile(r"^[^@\s]{1,64}@[A-Za-z0-9.-]{1,190}\.?[A-Za-z0-9-]*$|^dashboard user \(session [0-9a-f]{1,32}\)$")
+
+
+def exportable_reviewer(who: object) -> bool:
+    return isinstance(who, str) and bool(_PERSON.match(who))
 
 
 def cmd_triage_export(args: argparse.Namespace) -> int:
@@ -258,15 +266,29 @@ def cmd_triage_export(args: argparse.Namespace) -> int:
         conn.close()
     entries = []
     suppressions = []
+    refused = 0
     for tool, rule, path, fingerprint, status, description, who, resolved_at, line in rows:
+        if not exportable_reviewer(who):
+            refused += 1
+            continue
         summary = md.one_line(description)
-        reason = f"{EXPORT_LABELS[status]}: {summary} (reviewed in dashboard by {who} on {resolved_at})"
+        label = EXPORT_LABELS[status]
+        # A dashboard accept already says "Accepted: ..."; do not say it twice.
+        if summary.lower().startswith(f"{label.lower()}:"):
+            summary = summary[len(label) + 1 :].strip()
+        reason = f"{label}: {summary} (reviewed in dashboard by {who} on {resolved_at})"
         entries.append(Entry(tool, rule, path, fingerprint, issue, reason))
         # The path is quoted, so no character in a file name (a newline, say) can end the comment.
         suppressions.append(
             f"# {json.dumps(path)} line {line or '?'}:  # nosemgrep: {md.one_line(rule)} {issue} {summary[:80]}"
         )
     print(render_baseline(entries), end="")
+    if refused:
+        print(
+            f"shoalscan triage export: WARNING: left out {refused} reviews that no signed-in person made; only a "
+            "person's review can become a baseline entry.",
+            file=sys.stderr,
+        )
     if args.suppressions and suppressions:
         print(
             "\n# Or, instead of baseline entries, inline suppressions on the lines below (each line of code it applies "

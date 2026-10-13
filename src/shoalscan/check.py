@@ -11,6 +11,8 @@ from shoalscan.baseline import Entry
 from shoalscan.config import component_for, under_prefix
 from shoalscan.excludes import ExcludeMatcher, FileGlobMatcher
 from shoalscan.findings import Finding, sort_findings
+from shoalscan.rulesets import RuleIdFilter
+from shoalscan.testscope import eligible, never_test_code
 
 SUMMARY_PREFIX = "SHOALSCAN_SUMMARY "
 # Written next to findings.json: the lists behind the summary's counts, for
@@ -45,6 +47,16 @@ class CheckResult:
     syntax_warn_only: list[dict] = field(default_factory=list)
     # Findings the baseline accepts, with the entry that accepts each.
     matched: list = field(default_factory=list)
+    # Findings labelled as test code (a `#[cfg(test)]` item) for a rule [test_code] lists. A label groups a
+    # finding for triage; it never changes whether the finding blocks.
+    test_code: list[Finding] = field(default_factory=list)
+    test_code_rules: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        self._labelled = set(self.test_code)
+
+    def is_test_code(self, f: Finding) -> bool:
+        return f in self._labelled
 
     def in_non_blocking_path(self, f: Finding) -> bool:
         return under_prefix(f.path, self.non_blocking_paths)
@@ -70,6 +82,7 @@ def compare(
     components: dict[str, str] | None = None,
     adoption: bool = False,
     parse_warn_only: tuple[str, ...] = (),
+    test_code_rules: tuple[str, ...] = (),
 ) -> CheckResult:
     """Compare findings with the baseline.
 
@@ -87,7 +100,21 @@ def compare(
     git reports a rename (`renames`), every base entry of the old path moves
     to the new path unchanged and one-to-one, and the component and
     non-blocking status stay the same.
+
+    A test code label only groups a finding for the report: it never changes
+    whether the finding blocks. A label counts only when this check's own
+    policy lists the rule under `[test_code] rules`, it is an Opengrep finding
+    in a Rust file, and its path can carry a label; any other mark is ignored.
     """
+    listed = RuleIdFilter(test_code_rules)
+    labelled = [
+        f
+        for f in sort_findings(findings)
+        if f.test_code is not None
+        and eligible(f.tool, f.rule, f.path, listed)
+        and not never_test_code(f.path)
+        and not never_test_code(f.test_code.path)
+    ]
     entries = baseline or []
     known = {e.key() for e in entries}
     by_key = {e.key(): e for e in entries}
@@ -171,6 +198,8 @@ def compare(
         baseline_found=baseline is not None,
         non_blocking_paths=non_blocking_paths,
         adoption=adoption,
+        test_code=labelled,
+        test_code_rules=tuple(test_code_rules),
     )
 
 
@@ -232,6 +261,9 @@ def summary(result: CheckResult) -> dict:
         "adoption": result.adoption,
         "baseline_additions": len(result.baseline_additions),
         "policy_ref": result.policy_ref,
+        "test_code": len(result.test_code),
+        "new_test_code": sum(1 for f in result.new if result.is_test_code(f)),
+        "new_blocking_test_code": sum(1 for f in result.new_blocking if result.is_test_code(f)),
     }
 
 
@@ -285,6 +317,10 @@ def details(result: CheckResult, findings_sha256: str) -> dict:
         "partial_warn_only": [file_detail(e) for e in result.partial_warn_only],
         "syntax_warn_only": [file_detail(e) for e in result.syntax_warn_only],
         "excluded_changed": list(result.excluded_changed),
+        # Findings labelled as test code, with the label, and the
+        # baseline entries they make unnecessary.
+        "test_code_rules": list(result.test_code_rules),
+        "test_code": [{"key": key(f), **f.test_code.as_json()} for f in result.test_code],
         "summary": summary(result),
     }
 
@@ -310,6 +346,11 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         f"{blocking})",
         f"  Stale baseline entries: {len(result.stale)}",
     ]
+    if result.test_code_rules:
+        out.append(
+            f"  Labelled as test code (a label only; they block like any other finding): {len(result.test_code)}, "
+            f"of which new: {s['new_test_code']}, new and blocking: {s['new_blocking_test_code']}"
+        )
     if result.suppressions:
         out.append(
             f"  Inline suppressions: {result.suppressions.get('total', 0)}"
@@ -330,7 +371,38 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         if len(items) > max_items:
             out.append(f"  ... and {len(items) - max_items} more (see findings.json)")
 
-    finding_lines("New blocking findings", result.new_blocking)
+    labelled_blocking = [f for f in result.new_blocking if result.is_test_code(f)]
+    unlabelled_blocking = [f for f in result.new_blocking if not result.is_test_code(f)]
+    if labelled_blocking:
+        # The heading gives the full count: a label never takes a finding out of the blocking total.
+        out.append("")
+        out.append(
+            f"New blocking findings ({len(result.new_blocking)}, of which {len(labelled_blocking)} labelled as test "
+            "code below):"
+        )
+        for f in unlabelled_blocking[:max_items]:
+            out.append(f"  {f.severity:<7} {t(f.path)}:{f.line}  {t(f.rule)}")
+            if f.message:
+                out.append(f"          {t(f.message.splitlines()[0], 200)}")
+            out.append(f"          fingerprint {t(f.fingerprint)}")
+        if len(unlabelled_blocking) > max_items:
+            out.append(f"  ... and {len(unlabelled_blocking) - max_items} more (see findings.json)")
+    else:
+        finding_lines("New blocking findings", unlabelled_blocking)
+    if labelled_blocking:
+        out.append("")
+        out.append(
+            f"New blocking findings in code labelled as test code ({len(labelled_blocking)}): the label is triage "
+            "help, not a proof that the code never ships. They block until a person accepts them, for example with "
+            "`shoalscan baseline accept --test-code --fingerprint <fingerprint> --by <you> --issue <issue>`, "
+            "committed through a reviewed change on the base branch."
+        )
+        for f in labelled_blocking[:max_items]:
+            out.append(f"  {f.severity:<7} {t(f.path)}:{f.line}  {t(f.rule)}")
+            out.append(f"          {t(f.test_code.description())}")
+            out.append(f"          fingerprint {t(f.fingerprint)}")
+        if len(labelled_blocking) > max_items:
+            out.append(f"  ... and {len(labelled_blocking) - max_items} more (see check.json)")
     if result.non_blocking_paths:
         out.insert(
             5,
@@ -341,7 +413,10 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         "New findings that do not block",
         [f for f in result.new if f not in result.new_blocking and not result.in_non_blocking_path(f)],
     )
-    finding_lines("New findings in non-blocking paths", [f for f in result.new if result.in_non_blocking_path(f)])
+    finding_lines(
+        "New findings in non-blocking paths",
+        [f for f in result.new if result.in_non_blocking_path(f)],
+    )
     if result.stale:
         out.append("")
         out.append(f"Stale baseline entries ({len(result.stale)}): these no longer match a finding; remove them.")

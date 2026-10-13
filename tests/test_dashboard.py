@@ -35,6 +35,7 @@ class DashboardServerTests(unittest.TestCase):
         cls._log = server.Handler._log
         server.Handler._log = lambda self, status: None  # keep the test output readable
         base = Path(cls._tmp.name)
+        cls.base_dir = base
         cls.tls = tlsgen.generate(base / "tls", ["127.0.0.1"], [])
         conn = history.open_for_write(base / "history.sqlite3")
         sample_history(conn, base)
@@ -225,7 +226,12 @@ class DashboardServerTests(unittest.TestCase):
     def test_logout_needs_the_csrf_token(self):
         cookie = self.session()
         csrf = self.get_json("/api/session", cookie)["csrf"]
-        for headers in ({"Origin": self.origin}, {"Origin": self.origin, "X-CSRF-Token": "wrong"}):
+        # A token with characters outside ASCII is a refusal, not a crash (compare_digest on str).
+        for headers in (
+            {"Origin": self.origin},
+            {"Origin": self.origin, "X-CSRF-Token": "wrong"},
+            {"Origin": self.origin, "X-CSRF-Token": "é" * len(csrf)},
+        ):
             with self.subTest(headers=headers):
                 self.assertEqual(self.request("POST", "/logout", headers=headers, cookie=cookie)[0], 403)
         # The right CSRF token from another origin is still refused.
@@ -441,6 +447,7 @@ class DashboardServerTests(unittest.TestCase):
             "duration_seconds",
             "blocking_class",
             "rescanned",
+            "test_code",
         }
         self.assertEqual(set(o["latest_run"]), run_keys)
         # Which scanners the run used, by name and version, for the run's detail.
@@ -467,6 +474,7 @@ class DashboardServerTests(unittest.TestCase):
                 "blocking_class",
                 "key",
                 "review",
+                "test_code",
                 "suggestion",
             },
         )
@@ -614,6 +622,58 @@ class DashboardServerTests(unittest.TestCase):
         status, _, body = self.request("POST", "/api/review", json.dumps(payload), headers, cookie=cookie)
         return status, json.loads(body) if body else {}
 
+    def test_accept_as_test_code(self):
+        import sqlite3
+
+        cookie = self.session()
+        csrf = self.get_json("/api/session", cookie)["csrf"]
+        page = self.get_json("/api/findings?repo=acme/app&severity=WARNING", cookie)
+        key, run = page["findings"][0]["key"], page["run"]
+        headers = {"Content-Type": "application/json", "X-CSRF-Token": csrf, "Origin": self.origin}
+
+        def post(payload, hdrs=headers, ck=cookie):
+            status, _, body = self.request("POST", "/api/review/test-code", json.dumps(payload), hdrs, cookie=ck)
+            return status, json.loads(body) if body else {}
+
+        good = {"repo": "acme/app", "finding_key": key, "run_id": run}
+        self.assertEqual(post(good, ck=None)[0], 401)
+        self.assertEqual(post(good, {**headers, "X-CSRF-Token": "wrong"})[0], 403)
+        # The browser sends no reason or status: the server writes them.
+        for extra in ({"description": "Accepted: anything"}, {"status": "false_positive"}):
+            self.assertEqual(post({**good, **extra})[0], 400)
+        self.assertEqual(post({**good, "run_id": 999999})[0], 404)
+        status, body = post(good)
+        self.assertEqual((status, body.get("error")), (400, "this finding has no test code label in this run"))
+        db = sqlite3.connect(self.base_dir / "history.sqlite3")
+        try:
+            db.execute(
+                "UPDATE run_findings SET test_code = ? WHERE run_id = ? AND key_id = (SELECT id FROM finding_keys "
+                "WHERE tool = ? AND rule = ? AND path = ? AND fingerprint = ?)",
+                (json.dumps({"kind": "cfg_test_item", "path": key[2], "line": 1}), run, *key),
+            )
+            db.commit()
+        finally:
+            db.close()
+        try:
+            status, body = post(good)
+            self.assertEqual((status, body), (200, {"reviewed": 1, "status": "accepted_risk"}))
+            finding = self.get_json(
+                "/api/finding?" + urlencode({"repo": "acme/app", "run": run, "finding_key": json.dumps(key)}), cookie
+            )["finding"]
+            self.assertEqual(finding["review"]["status"], "accepted_risk")
+            self.assertEqual(finding["review"]["updated_by"], self.ADMIN)
+            self.assertEqual(finding["review"]["description"], f"Accepted: test code (cfg_test_item at {key[2]}:1)")
+        finally:
+            # Other tests share this history: put it back as it was.
+            db = sqlite3.connect(self.base_dir / "history.sqlite3")
+            try:
+                db.execute("UPDATE run_findings SET test_code = NULL")
+                db.execute("DELETE FROM finding_reviews WHERE path = ?", (key[2],))
+                db.execute("DELETE FROM finding_review_events WHERE path = ?", (key[2],))
+                db.commit()
+            finally:
+                db.close()
+
     def test_reviews(self):
         cookie = self.session()
         csrf = self.get_json("/api/session", cookie)["csrf"]
@@ -678,7 +738,7 @@ class DashboardServerTests(unittest.TestCase):
         self.assertEqual(self.get_json("/api/findings?repo=acme/app&review=false_positive", cookie)["total"], 1)
         self.get_json("/api/findings?repo=acme/app&review=bogus", cookie, 400)
         reviews = self.get_json("/api/overview?repo=acme/app", cookie)["reviews"]
-        self.assertEqual(set(reviews), {"run", "untriaged_blocking", "regressions"})
+        self.assertEqual(set(reviews), {"run", "untriaged_blocking", "regressions", "test_code"})
 
     def test_a_bulk_review_needs_typed_text_and_is_audited(self):
         cookie = self.session()

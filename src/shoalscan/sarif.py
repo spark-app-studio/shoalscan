@@ -14,8 +14,10 @@ from pathlib import Path
 from shoalscan import __version__
 from shoalscan.errors import ScanError
 from shoalscan.findings import Finding
+from shoalscan.testscope import NAMESPACE as TEST_SCOPE_NAMESPACE
 
 FINGERPRINT_KEY = "shoalscan/v1"
+TEST_SCOPE_KEY = "shoalscan/test_code"
 _LEVEL = {"ERROR": "error", "WARNING": "warning", "INFO": "note"}
 
 
@@ -47,10 +49,21 @@ def _drop_snippets(node: object) -> None:
             _drop_snippets(value)
 
 
-def rewrite_opengrep_sarif(doc: dict, root: Path, index: dict) -> dict:
+def _scope_rule(rule_id: object) -> bool:
+    return isinstance(rule_id, str) and rule_id.startswith(TEST_SCOPE_NAMESPACE + ".")
+
+
+def rewrite_opengrep_sarif(doc: dict, root: Path, index: dict, scoped: dict | None = None) -> dict:
+    """`scoped` maps (rule, path, fingerprint) to the TestScope of a test-scoped finding."""
     if not isinstance(doc, dict) or not isinstance(doc.get("runs"), list):
         raise ScanError("opengrep SARIF output has no runs")
     for run in doc["runs"]:
+        # The test-scope rules' matches are Shoalscan's input, not findings.
+        if isinstance(run.get("results"), list):
+            run["results"] = [r for r in run["results"] if not (isinstance(r, dict) and _scope_rule(r.get("ruleId")))]
+        driver = run.get("tool", {}).get("driver", {}) if isinstance(run.get("tool"), dict) else {}
+        if isinstance(driver, dict) and isinstance(driver.get("rules"), list):
+            driver["rules"] = [r for r in driver["rules"] if not (isinstance(r, dict) and _scope_rule(r.get("id")))]
         for result in run.get("results", []) or []:
             _drop_snippets(result)
             rel = None
@@ -72,6 +85,10 @@ def rewrite_opengrep_sarif(doc: dict, root: Path, index: dict) -> dict:
             fp = index.get((result.get("ruleId"), rel, line, col))
             if fp:
                 result.setdefault("partialFingerprints", {})[FINGERPRINT_KEY] = fp
+                scope = (scoped or {}).get((result.get("ruleId"), rel, fp))
+                if scope is not None:
+                    # Recorded, never hidden: a property, not a SARIF suppression.
+                    result.setdefault("properties", {})[TEST_SCOPE_KEY] = scope.as_json()
         # The command line holds local temporary paths; it adds nothing.
         for inv in run.get("invocations", []) or []:
             inv.pop("commandLine", None)
@@ -116,6 +133,7 @@ def build_sarif(
     index: dict,
     own: list[Finding],
     extra_runs: list[tuple[str, str, list[Finding]]] | None = None,
+    scoped: dict | None = None,
 ) -> str:
     """Opengrep's SARIF, rewritten, plus a run of Shoalscan's own findings and one per
     `extra_runs` entry (name, version, findings). Gitleaks' own SARIF holds the
@@ -126,7 +144,7 @@ def build_sarif(
                 doc = json.load(handle)
         except (OSError, json.JSONDecodeError) as exc:
             raise ScanError(f"opengrep SARIF output is unreadable: {exc}") from None
-        doc = rewrite_opengrep_sarif(doc, root, index)
+        doc = rewrite_opengrep_sarif(doc, root, index, scoped)
     else:
         doc = {
             "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
