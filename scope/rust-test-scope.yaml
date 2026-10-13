@@ -1,8 +1,10 @@
-# Shoalscan's internal scope rules: they prove, with Opengrep's own Rust
-# parser, which items are compiled only for tests. They run in the same scan as
-# the security rules when `[test_scope] non_blocking` lists a rule, and their
-# matches are never findings: Shoalscan reads their line ranges and removes
-# them from the output. See docs/test-scope.md.
+# Shoalscan's internal rules for test code labels: with Opengrep's own Rust
+# parser, they find the items marked #[cfg(test)]. A label is triage help, not a
+# proof that the code never ships, and it never changes whether a finding
+# blocks. They run in the same scan as the security rules when
+# `[test_code] rules` lists a rule, and their matches are never findings:
+# Shoalscan reads their byte ranges and removes them from the output. See
+# docs/test-code.md.
 #
 # Each pattern names the attribute exactly, and Shoalscan checks the spelling
 # of every match again. `#[cfg(test)]`, and `#[cfg(all(..., test, ...))]`
@@ -12,14 +14,14 @@
 #
 # Opengrep's Rust parser keeps the attributes of top-level items only; inside
 # a module body they are dropped. So these rules see top-level items only, and
-# an attributed item nested in another module is not test scope (fail closed).
+# an attributed item nested in another module gets no label.
 #
 # The module rule is not in this file: Opengrep binds no metavariable to a
 # module's name, so Shoalscan writes one pattern per module name that follows
 # such an attribute in the scanned files (see shoalscan/testscope.py).
 rules:
   - id: rust-cfg-test-item
-    message: An item compiled only for tests (#[cfg(test)]).
+    message: An item marked for tests (#[cfg(test)]).
     severity: INFO
     languages: [rust]
     metadata:

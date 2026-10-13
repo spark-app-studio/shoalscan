@@ -1,4 +1,4 @@
-"""Test code labels: where a Rust finding sits inside an item compiled only for tests.
+"""Test code labels: where a Rust finding sits inside an item marked `#[cfg(test)]`.
 
 A label is triage help, never a decision. It tells a reviewer that a finding's
 code is inside a `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) module or item.
@@ -321,7 +321,7 @@ def module_rules(names: list[str]) -> dict:
         "rules": [
             {
                 "id": MODULE_RULE.split(".", 1)[1],
-                "message": "A module compiled only for tests (#[cfg(test)]).",
+                "message": "A module marked for tests (#[cfg(test)]).",
                 "severity": "INFO",
                 "languages": ["rust"],
                 "metadata": {"category": "test-scope"},

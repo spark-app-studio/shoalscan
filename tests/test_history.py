@@ -1186,7 +1186,12 @@ class TriageExportTests(HistoryTestCase):
             self.db, "acme/app", [[b.tool, b.rule, b.path, b.fingerprint]], "fixed", "Escaped in the template.", "me"
         )
         history.set_reviews(
-            self.db, "acme/app", [[c.tool, c.rule, c.path, c.fingerprint]], "accepted_risk", "Internal tool only.", "me"
+            self.db,
+            "acme/app",
+            [[c.tool, c.rule, c.path, c.fingerprint]],
+            "accepted_risk",
+            "Internal tool only.",
+            "me@example.invalid",
         )
 
         def run(*args):
@@ -1215,6 +1220,36 @@ class TriageExportTests(HistoryTestCase):
         self.assertIn("never change what blocks CI", err)
 
 
+class TriageExportReviewerTests(HistoryTestCase):
+    def test_only_a_person_s_review_is_exported_and_its_reason_is_not_doubled(self):
+        from shoalscan.baseline import baseline_from_bytes
+
+        a, b, c = (
+            finding("r.a", "src/a.py", "aa:0"),
+            finding("r.b", "src/b.py", "bb:0"),
+            finding("r.c", "src/c.py", "cc:0"),
+        )
+        record(self.conn, self.tmp, "acme/app", "1" * 40, 1, [a, b, c])
+        for f, who in ((a, "dana@example.invalid"), (b, "shoalscan (test scope)"), (c, "shoalscan")):
+            history.set_reviews(
+                self.db,
+                "acme/app",
+                [[f.tool, f.rule, f.path, f.fingerprint]],
+                "accepted_risk",
+                "Accepted: test code (cfg_test_module at src/lib.rs:7)",
+                who,
+            )
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(["triage", "export", "--repo", "acme/app", "--issue", "#9", "--db", str(self.db)])
+        self.assertEqual(code, 0, err.getvalue())
+        entries = baseline_from_bytes(out.getvalue().encode("utf-8"), "export")
+        self.assertEqual([e.path for e in entries], ["src/a.py"])
+        self.assertTrue(entries[0].reason.startswith("Accepted: test code (cfg_test_module at src/lib.rs:7) (reviewed"))
+        self.assertNotIn("Accepted: Accepted:", entries[0].reason)
+        self.assertIn("left out 2 reviews that no signed-in person made", err.getvalue())
+
+
 class TriageExportPathTests(HistoryTestCase):
     def test_a_newline_in_a_file_name_cannot_inject_lines(self):
         from shoalscan.baseline import baseline_from_bytes
@@ -1227,7 +1262,7 @@ class TriageExportPathTests(HistoryTestCase):
             [[evil.tool, evil.rule, evil.path, evil.fingerprint]],
             "wont_fix",
             "Kept on purpose for now.",
-            "me",
+            "me@example.invalid",
         )
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):

@@ -305,7 +305,13 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE run_findings ADD COLUMN test_code TEXT;
     ALTER TABLE runs ADD COLUMN test_code INTEGER NOT NULL DEFAULT 0;
     """,
+    # 15: repair databases that unreleased builds of the test-scope work wrote at version 14, with other
+    # columns (run_findings.test_scope, runs.test_scoped) and automatic reviews. Worked out in Python:
+    # see `_migration_15`.
+    "python:_migration_15",
 )
+# The automatic reviewer those unreleased builds wrote reviews under.
+UNRELEASED_AUTO_REVIEWER = "shoalscan (test scope)"
 REVIEW_STATUSES = ("open", "false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed", "regression")
 USER_STATUSES = ("open", "false_positive", "accepted_risk", "wont_fix", "fixed")
 RESOLVED_STATUSES = frozenset({"false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed"})
@@ -338,9 +344,41 @@ def migrate(conn: sqlite3.Connection) -> int:
             f"({SCHEMA_VERSION}); upgrade Shoalscan"
         )
     for version in range(found, SCHEMA_VERSION):
+        step = MIGRATIONS[version]
+        if step.startswith("python:"):
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                globals()[step[len("python:") :]](conn)
+                conn.execute(f"PRAGMA user_version = {version + 1}")
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            continue
         # executescript commits first, so run each migration in its own explicit transaction.
-        conn.executescript(f"BEGIN IMMEDIATE;\n{MIGRATIONS[version]}\nPRAGMA user_version = {version + 1};\nCOMMIT;")
+        conn.executescript(f"BEGIN IMMEDIATE;\n{step}\nPRAGMA user_version = {version + 1};\nCOMMIT;")
     return found
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def _migration_15(conn: sqlite3.Connection) -> None:
+    """Bring a database from an unreleased build up to the released version 14 columns, and remove the
+    automatic reviews it wrote: only a person's review may stand, and none may reach a baseline."""
+    if "test_code" not in _columns(conn, "run_findings"):
+        conn.execute("ALTER TABLE run_findings ADD COLUMN test_code TEXT")
+    if "test_code" not in _columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN test_code INTEGER NOT NULL DEFAULT 0")
+    reviews = conn.execute("DELETE FROM finding_reviews WHERE updated_by = ?", (UNRELEASED_AUTO_REVIEWER,)).rowcount
+    events = conn.execute("DELETE FROM finding_review_events WHERE who = ?", (UNRELEASED_AUTO_REVIEWER,)).rowcount
+    if reviews or events:
+        print(
+            f"shoalscan: removed {reviews} automatic reviews and {events} review events by "
+            f'"{UNRELEASED_AUTO_REVIEWER}" that an unreleased build wrote; a person reviews findings again',
+            file=sys.stderr,
+        )
 
 
 def open_for_write(path: Path) -> sqlite3.Connection:

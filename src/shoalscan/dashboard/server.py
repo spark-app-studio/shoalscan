@@ -794,7 +794,7 @@ class Handler(BaseHTTPRequestHandler):
             if post_path in CONFIG_POSTS
             else MAX_SETUP_BODY
             if post_path in SETUP_POSTS
-            else (MAX_REVIEW_BODY if post_path == "/api/review" else MAX_BODY)
+            else (MAX_REVIEW_BODY if post_path in ("/api/review", "/api/review/test-code") else MAX_BODY)
         )
         if not length.isdigit() or int(length) > limit:
             self.close_connection = True
@@ -827,7 +827,51 @@ class Handler(BaseHTTPRequestHandler):
             return self.change_users(path, body, session)
         if path == "/api/review":
             return self.review(body, session)
+        if path == "/api/review/test-code":
+            return self.accept_test_code(body, session)
         return self.send_error_json(404, "not found")
+
+    def accept_test_code(self, body: bytes, session: auth.Session) -> None:
+        """POST /api/review/test-code: {repo, finding_key, run_id}. A signed-in person accepts one finding that the
+        run labels as test code. The server checks the label and writes the reason itself; the browser sends no
+        text. It is an ordinary accepted-risk review: it never changes what blocks CI."""
+        request = self._json_body(body)
+        if request is None:
+            return None
+        if set(request) != {"repo", "finding_key", "run_id"}:
+            return self.send_error_json(400, "send repo, finding_key and run_id")
+        repo, key, run_id = request["repo"], request["finding_key"], request["run_id"]
+        if not scanning.valid_name(repo):
+            return self.send_error_json(400, "invalid repository name")
+        if isinstance(run_id, bool) or not isinstance(run_id, int) or not 0 < run_id < 2**62:
+            return self.send_error_json(400, "run_id must be a run number")
+        if not (
+            isinstance(key, list)
+            and len(key) == 4
+            and all(isinstance(p, str) and 0 < len(p) <= history.MAX_FIELD_CHARS for p in key)
+        ):
+            return self.send_error_json(400, "a finding key is [tool, rule, path, fingerprint]")
+        data = self.app.data()
+        try:
+            repo_id = data.repo_id(repo)
+            if repo_id is None or data.run(repo_id, run_id) is None:
+                return self.send_error_json(404, "this repository has no such run")
+            found = data.finding(repo_id, run_id, key)
+        finally:
+            data.conn.close()
+        if found is None:
+            return self.send_error_json(404, "no such finding in this run")
+        label = found.get("test_code")
+        if not label:
+            return self.send_error_json(400, "this finding has no test code label in this run")
+        reason = f"Accepted: test code ({label['kind']} at {label['path']}:{label['line']})"
+        try:
+            history.set_reviews(self.app.config.db, repo, [key], "accepted_risk", reason, session.who, run_id)
+        except LookupError:
+            return self.send_error_json(404, "no such finding in this repository")
+        except SetupError as exc:
+            return self.send_error_json(400, str(exc)[:300])
+        return self.send_json(200, {"reviewed": 1, "status": "accepted_risk"})
 
     def review(self, body: bytes, session: auth.Session) -> None:
         """POST /api/review: {repo, finding_key | finding_keys, status, description[, run_id]}.

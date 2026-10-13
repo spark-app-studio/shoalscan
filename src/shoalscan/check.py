@@ -371,8 +371,24 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         if len(items) > max_items:
             out.append(f"  ... and {len(items) - max_items} more (see findings.json)")
 
-    finding_lines("New blocking findings", [f for f in result.new_blocking if not result.is_test_code(f)])
     labelled_blocking = [f for f in result.new_blocking if result.is_test_code(f)]
+    unlabelled_blocking = [f for f in result.new_blocking if not result.is_test_code(f)]
+    if labelled_blocking:
+        # The heading gives the full count: a label never takes a finding out of the blocking total.
+        out.append("")
+        out.append(
+            f"New blocking findings ({len(result.new_blocking)}, of which {len(labelled_blocking)} labelled as test "
+            "code below):"
+        )
+        for f in unlabelled_blocking[:max_items]:
+            out.append(f"  {f.severity:<7} {t(f.path)}:{f.line}  {t(f.rule)}")
+            if f.message:
+                out.append(f"          {t(f.message.splitlines()[0], 200)}")
+            out.append(f"          fingerprint {t(f.fingerprint)}")
+        if len(unlabelled_blocking) > max_items:
+            out.append(f"  ... and {len(unlabelled_blocking) - max_items} more (see findings.json)")
+    else:
+        finding_lines("New blocking findings", unlabelled_blocking)
     if labelled_blocking:
         out.append("")
         out.append(

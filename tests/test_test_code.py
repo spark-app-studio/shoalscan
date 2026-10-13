@@ -170,6 +170,15 @@ class CheckTests(unittest.TestCase):
         self.assertIn(list(labelled.key()), d["blocking_class"])
         self.assertIn(list(labelled.key()), d["new_blocking"])
 
+    def test_the_report_heading_counts_every_blocking_finding(self):
+        from shoalscan.check import render_report
+
+        labelled = [finding("src/lib.rs", n, test_code=self.SCOPE) for n in (10, 11, 12)]
+        plain = [finding("src/a.rs", n) for n in range(1, 11)]
+        out = render_report(compare(labelled + plain, [], ("ERROR", "WARNING"), test_code_rules=(RULE,)))
+        self.assertIn("New blocking findings (13, of which 3 labelled as test code below):", out)
+        self.assertIn("New blocking findings in code labelled as test code (3)", out)
+
     def test_only_a_baseline_entry_lets_a_labelled_finding_pass(self):
         from shoalscan.baseline import Entry
 
@@ -960,6 +969,86 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(self.version(backup), 13)
         self.assertEqual(self.version(self.db), history.SCHEMA_VERSION)
         self.assertIn(str(backup), err)
+
+    def test_a_database_from_an_unreleased_build_is_repaired(self):
+        # Builds eb71004..b4f7010 wrote version 14 with other columns, and automatic reviews.
+        conn = sqlite3.connect(self.db)
+        conn.executescript(
+            "ALTER TABLE run_findings ADD COLUMN test_scope TEXT;\n"
+            "ALTER TABLE runs ADD COLUMN test_scoped INTEGER NOT NULL DEFAULT 0;\nPRAGMA user_version = 14;"
+        )
+        for who, path in (("shoalscan (test scope)", "src/a.rs"), ("dana@example.invalid", "src/b.rs")):
+            conn.execute(
+                "INSERT INTO finding_reviews (repo_name, tool, rule, path, fingerprint, status, description, "
+                "updated_at, updated_by, resolved_at) VALUES ('acme/demo', 'opengrep', 'r', ?, 'f:0', "
+                "'accepted_risk', 'test-only code: cfg_test_module at x:1', '2026-10-01T00:00:00Z', ?, "
+                "'2026-10-01T00:00:00Z')",
+                (path, who),
+            )
+            conn.execute(
+                "INSERT INTO finding_review_events (repo_name, tool, rule, path, fingerprint, who, at, from_status, "
+                "to_status, description, run_id) VALUES ('acme/demo', 'opengrep', 'r', ?, 'f:0', ?, "
+                "'2026-10-01T00:00:00Z', 'open', 'accepted_risk', 'x', NULL)",
+                (path, who),
+            )
+        conn.commit()
+        conn.close()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            history.open_for_write(self.db).close()
+        self.assertEqual(self.version(self.db), history.SCHEMA_VERSION)
+        self.assertIn('removed 1 automatic reviews and 1 review events by "shoalscan (test scope)"', err.getvalue())
+        self.assertTrue((self.base / "history.sqlite3.bak-schema14").is_file())
+        conn = sqlite3.connect(self.db)
+        try:
+            self.assertIn("test_code", {r[1] for r in conn.execute("PRAGMA table_info(run_findings)")})
+            self.assertIn("test_code", {r[1] for r in conn.execute("PRAGMA table_info(runs)")})
+            self.assertEqual(
+                conn.execute("SELECT updated_by FROM finding_reviews").fetchall(), [("dana@example.invalid",)]
+            )
+            self.assertEqual(
+                conn.execute("SELECT who FROM finding_review_events").fetchall(), [("dana@example.invalid",)]
+            )
+        finally:
+            conn.close()
+        # The repaired database records runs with labels as a released one does.
+        from shoalscan.findings import Finding
+
+        conn = history.open_for_write(self.db)
+        try:
+            info = history.RunInfo("acme/demo", "main", "a" * 40, "scheduled", "2026-10-02T00:00:00Z")
+            f = Finding(
+                "opengrep",
+                "r",
+                "WARNING",
+                "src/a.rs",
+                3,
+                "f:0",
+                "other",
+                "m",
+                test_code=TestScope("cfg_test_item", "src/a.rs", 1),
+            )
+            summary = {"result": "fail", "findings": 1, "new": 1, "new_blocking": 1, "stale": 0, "test_code": 1}
+            keys = [list(f.key())]
+            details_doc = {
+                "new": keys,
+                "new_blocking": keys,
+                "blocking_class": keys,
+                "baselined": [],
+                "stale": [],
+                "baseline_additions": [],
+                "changed_unscanned": [],
+                "partial_warnings": [],
+                "partial_warn_only": [],
+                "excluded_changed": [],
+                "test_code": [{"key": keys[0], "kind": "cfg_test_item", "path": "src/a.rs", "line": 1}],
+            }
+            result = history.record_run(conn, info, [f], {"worktree": {"commit": "a" * 40}}, summary, details_doc, 1)
+            self.assertEqual(result.status, "recorded")
+            stored = conn.execute("SELECT test_code FROM run_findings").fetchone()[0]
+            self.assertIn("cfg_test_item", stored)
+        finally:
+            conn.close()
 
     def test_every_migration_backs_up_first(self):
         err = io.StringIO()

@@ -22,7 +22,7 @@ A finding that is missing from a run counts as fixed only when that run could ha
 
 ## Accepting a finding labelled as test code
 
-A finding inside `#[cfg(test)]` code can carry a **test code** label ([Test code labels](test-code.md)). The label is triage help: nothing is reviewed automatically, and the finding blocks like any other. Its review page has an **Accept as test code** button, which records an ordinary review by you, now: **Accepted risk**, with the description "Accepted: test code (...)". As with every review, it does not change what blocks CI; carry it into the baseline with `triage export`, or accept the finding in the baseline directly with `shoalscan baseline accept --test-code`.
+A finding inside `#[cfg(test)]` code can carry a **test code** label ([Test code labels](test-code.md)). The label is triage help: nothing is reviewed automatically, and the finding blocks like any other. Its review page has an **Accept as test code** button for any signed-in person, which records an ordinary review by that person, now: **Accepted risk**, with the description "Accepted: test code (...)", written by the server after it checks the label. As with every review, it does not change what blocks CI; carry it into the baseline with `triage export`, or accept the finding in the baseline directly with `shoalscan baseline accept --test-code`.
 
 ## How reviews follow a finding
 
@@ -46,6 +46,6 @@ The similar finding's reason is shown for reference only. **Use the suggestion**
 shoalscan triage export --repo owner/project --issue "#123" > reviewed-entries.toml
 ```
 
-It prints baseline entries for the findings reviewed as false positive, accepted risk or won't fix. Each reason is the review's description with "(reviewed in dashboard by WHO on WHEN)", and `--issue` is required. `--suppressions` also prints matching inline suppression lines, as comments. The command never writes the repository's baseline itself. [The baseline file](baseline-and-check.md#the-baseline-file) describes the format.
+It prints baseline entries for the findings reviewed as false positive, accepted risk or won't fix by a signed-in person; a review that no person made (from an automatic writer) is left out, with a warning. Each reason is the review's description with "(reviewed in dashboard by WHO on WHEN)", and `--issue` is required. `--suppressions` also prints matching inline suppression lines, as comments. The command never writes the repository's baseline itself. [The baseline file](baseline-and-check.md#the-baseline-file) describes the format.
 
 **Next:** [The triage work list](triage.md).

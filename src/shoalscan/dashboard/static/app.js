@@ -758,13 +758,13 @@
     }, function () { list.appendChild(el("li", { "class": "muted" }, "Similar findings could not be loaded.")); });
   }
 
-  // One step for a person to accept a finding labelled as test code: an ordinary review, recorded under
-  // their name and the time by the server, with the reason "test code".
+  // One step for a signed-in person to accept a finding labelled as test code: the server checks the
+  // label and writes the reason; the review is recorded under the person's name.
   function acceptTestCode() {
     if (!state.reviewTestCode) return;
     var form = $("review-form");
-    postJson("/api/review", { repo: state.repo, finding_key: state.reviewKey, status: "accepted_risk",
-      description: "Accepted: test code (" + state.reviewTestCode + ")", run_id: Number(form.getAttribute("data-run")) }).then(function (r) {
+    postJson("/api/review/test-code", { repo: state.repo, finding_key: state.reviewKey,
+      run_id: Number(form.getAttribute("data-run")) }).then(function (r) {
       if (r.status === 200) route();
       else $("review-error").textContent = r.body.error || "error " + r.status;
     });
