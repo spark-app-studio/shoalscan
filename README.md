@@ -93,7 +93,18 @@ shoalscan scan && shoalscan check
 
 ## Status
 
-Early development. Phase 1 (Opengrep install, scan, baseline and check) and phase 2 (the run history and the dashboard) are done. Phase 3 added triage work lists (`shoalscan triage`) and dated security reports (`shoalscan report`). Phase 4 added Gitleaks for secrets, Hadolint for Dockerfiles, zizmor for GitHub Actions and Trivy for infrastructure as code. Clippy's security lints are left out: they compile the scanned crate, which runs its code. See [CHANGELOG.md](CHANGELOG.md) for changes.
+The current release is **0.3.0** (13 October 2026). Shoalscan is used every day to gate pull requests and scan a default branch nightly, but it is still before 1.0: configuration keys and the history database can still change between minor releases. Each release says what changed in [CHANGELOG.md](CHANGELOG.md), and `shoalscan serve` and `shoalscan record` migrate an older history database themselves, after saving a copy of it.
+
+All four phases of the [design](docs/design.md#phases) are done:
+
+1. Opengrep install, scan, baseline and check.
+2. The run history and the self-hosted dashboard, with sign-in through your OpenID Connect provider.
+3. Triage work lists (`shoalscan triage`), dated security reports (`shoalscan report`), and suggestions from similar findings with a local embedding model.
+4. More scanners: Gitleaks for secrets, Hadolint for Dockerfiles, zizmor for GitHub Actions and Trivy for infrastructure as code.
+
+New in 0.3.0: findings inside Rust `#[cfg(test)]` code are labelled as test code, so reviewers can sort them quickly. A label never changes whether a finding blocks; a person accepts it, and the acceptance is recorded ([Test code labels](docs/test-code.md)).
+
+Clippy's security lints are left out on purpose: running them compiles the scanned crate, which runs its build scripts and procedural macros.
 
 ## Contributing and security
 
