@@ -40,9 +40,9 @@ class Finding:
     fingerprint: str
     component: str
     message: str
-    # Set when the finding is in proven test-only Rust code and the policy's
-    # [test_scope] lists its rule: it is then never blocking.
-    test_scope: TestScope | None = None
+    # Set when the finding lies inside a #[cfg(test)] item in Rust and the policy's
+    # [test_code] lists its rule: a label for triage, which never changes whether it blocks.
+    test_code: TestScope | None = None
 
     def key(self) -> tuple[str, str, str, str]:
         return (self.tool, self.rule, self.path, self.fingerprint)
@@ -130,10 +130,10 @@ def assign_fingerprints(items: list[dict]) -> list[str]:
 
 
 def finding_to_json(f: Finding) -> dict:
-    """A finding as findings.json holds it; `test_scope` only when it is set."""
+    """A finding as findings.json holds it; `test_code` only when it is set."""
     item = asdict(f)
-    if f.test_scope is None:
-        del item["test_scope"]
+    if f.test_code is None:
+        del item["test_code"]
     return item
 
 
@@ -151,7 +151,7 @@ def sort_findings(findings: list[Finding]) -> list[Finding]:
     return sorted(findings, key=lambda f: (f.path, f.line, f.rule, f.fingerprint, f.tool))
 
 
-_TEXT_FIELDS = tuple(k for k in Finding.__dataclass_fields__ if k not in ("line", "test_scope"))
+_TEXT_FIELDS = tuple(k for k in Finding.__dataclass_fields__ if k not in ("line", "test_code"))
 _REQUIRED_FIELDS = frozenset((*_TEXT_FIELDS, "line"))
 
 
@@ -179,13 +179,13 @@ def load_findings(path: Path) -> tuple[list[Finding], dict]:
         raise ScanError(f"findings file has no findings list: {path}")
     findings = []
     for item in raw:
-        if not isinstance(item, dict) or set(item) - {"test_scope"} != _REQUIRED_FIELDS or not _well_typed(item):
+        if not isinstance(item, dict) or set(item) - {"test_code"} != _REQUIRED_FIELDS or not _well_typed(item):
             raise ScanError(f"findings file has a malformed entry: {item!r}"[:300])
         scope = None
-        if "test_scope" in item:
-            scope = scope_from_json(item["test_scope"])
+        if "test_code" in item:
+            scope = scope_from_json(item["test_code"])
             if scope is None:
-                raise ScanError(f"findings file has a malformed test_scope: {item!r}"[:300])
-        findings.append(Finding(**{**item, "test_scope": scope}))
+                raise ScanError(f"findings file has a malformed test_code: {item!r}"[:300])
+        findings.append(Finding(**{**item, "test_code": scope}))
     meta = {k: v for k, v in doc.items() if k != "findings"}
     return findings, meta

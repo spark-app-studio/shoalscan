@@ -17,7 +17,7 @@ from shoalscan.findings import Finding
 from shoalscan.testscope import NAMESPACE as TEST_SCOPE_NAMESPACE
 
 FINGERPRINT_KEY = "shoalscan/v1"
-TEST_SCOPE_KEY = "shoalscan/test_scope"
+TEST_SCOPE_KEY = "shoalscan/test_code"
 _LEVEL = {"ERROR": "error", "WARNING": "warning", "INFO": "note"}
 
 

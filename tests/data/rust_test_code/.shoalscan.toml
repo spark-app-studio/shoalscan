@@ -6,8 +6,8 @@ community_rules = false
 shoalscan_rules = false
 rule_dirs = ["rules"]
 
-[test_scope]
-non_blocking = ["repo.rules.temp-dir"]
+[test_code]
+rules = ["repo.rules.temp-dir"]
 
 [limits]
 scan_timeout_seconds = 300

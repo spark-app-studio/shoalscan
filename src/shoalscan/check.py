@@ -12,7 +12,7 @@ from shoalscan.config import component_for, under_prefix
 from shoalscan.excludes import ExcludeMatcher, FileGlobMatcher
 from shoalscan.findings import Finding, sort_findings
 from shoalscan.rulesets import RuleIdFilter
-from shoalscan.testscope import eligible, never_test_scope
+from shoalscan.testscope import eligible, never_test_code
 
 SUMMARY_PREFIX = "SHOALSCAN_SUMMARY "
 # Written next to findings.json: the lists behind the summary's counts, for
@@ -47,20 +47,16 @@ class CheckResult:
     syntax_warn_only: list[dict] = field(default_factory=list)
     # Findings the baseline accepts, with the entry that accepts each.
     matched: list = field(default_factory=list)
-    # Findings in proven test-only Rust code whose rule [test_scope] lists: never blocking.
-    test_scoped: list[Finding] = field(default_factory=list)
-    test_scope_rules: tuple[str, ...] = ()
+    # Findings labelled as test code (a `#[cfg(test)]` item) for a rule [test_code] lists. A label groups a
+    # finding for triage; it never changes whether the finding blocks.
+    test_code: list[Finding] = field(default_factory=list)
+    test_code_rules: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        self._scoped = set(self.test_scoped)
+        self._labelled = set(self.test_code)
 
-    def is_test_scoped(self, f: Finding) -> bool:
-        return f in self._scoped
-
-    @property
-    def baseline_test_scoped(self) -> list:
-        """Baseline entries whose finding is now test-scoped: guidance to remove them, never a failure."""
-        return [(f, e) for f, e in self.matched if f in self._scoped]
+    def is_test_code(self, f: Finding) -> bool:
+        return f in self._labelled
 
     def in_non_blocking_path(self, f: Finding) -> bool:
         return under_prefix(f.path, self.non_blocking_paths)
@@ -86,7 +82,7 @@ def compare(
     components: dict[str, str] | None = None,
     adoption: bool = False,
     parse_warn_only: tuple[str, ...] = (),
-    test_scope: tuple[str, ...] = (),
+    test_code_rules: tuple[str, ...] = (),
 ) -> CheckResult:
     """Compare findings with the baseline.
 
@@ -105,21 +101,20 @@ def compare(
     to the new path unchanged and one-to-one, and the component and
     non-blocking status stay the same.
 
-    A finding marked with a test scope never blocks, but only when this
-    check's own policy lists its rule under `[test_scope] non_blocking`, it is
-    an Opengrep finding in a Rust file, and its path can be test scope; any
-    other mark is ignored.
+    A test code label only groups a finding for the report: it never changes
+    whether the finding blocks. A label counts only when this check's own
+    policy lists the rule under `[test_code] rules`, it is an Opengrep finding
+    in a Rust file, and its path can carry a label; any other mark is ignored.
     """
-    listed = RuleIdFilter(test_scope)
-    test_scoped = [
+    listed = RuleIdFilter(test_code_rules)
+    labelled = [
         f
         for f in sort_findings(findings)
-        if f.test_scope is not None
+        if f.test_code is not None
         and eligible(f.tool, f.rule, f.path, listed)
-        and not never_test_scope(f.path)
-        and not never_test_scope(f.test_scope.path)
+        and not never_test_code(f.path)
+        and not never_test_code(f.test_code.path)
     ]
-    scoped_set = set(test_scoped)
     entries = baseline or []
     known = {e.key() for e in entries}
     by_key = {e.key(): e for e in entries}
@@ -130,10 +125,7 @@ def compare(
     new_blocking = [
         f
         for f in new
-        if f.severity in blocking
-        and f.severity != "INFO"
-        and not under_prefix(f.path, non_blocking_paths)
-        and f not in scoped_set
+        if f.severity in blocking and f.severity != "INFO" and not under_prefix(f.path, non_blocking_paths)
     ]
     stale = sorted((e for e in entries if e.key() not in present), key=lambda e: (e.path, e.rule, e.fingerprint))
     unscanned = unscanned or {"skipped": [], "errors": []}
@@ -206,8 +198,8 @@ def compare(
         baseline_found=baseline is not None,
         non_blocking_paths=non_blocking_paths,
         adoption=adoption,
-        test_scoped=test_scoped,
-        test_scope_rules=tuple(test_scope),
+        test_code=labelled,
+        test_code_rules=tuple(test_code_rules),
     )
 
 
@@ -269,20 +261,15 @@ def summary(result: CheckResult) -> dict:
         "adoption": result.adoption,
         "baseline_additions": len(result.baseline_additions),
         "policy_ref": result.policy_ref,
-        "test_scoped": len(result.test_scoped),
-        "new_test_scoped": sum(1 for f in result.new if result.is_test_scoped(f)),
-        "baseline_test_scoped": len(result.baseline_test_scoped),
+        "test_code": len(result.test_code),
+        "new_test_code": sum(1 for f in result.new if result.is_test_code(f)),
+        "new_blocking_test_code": sum(1 for f in result.new_blocking if result.is_test_code(f)),
     }
 
 
 def is_blocking_class(result: CheckResult, f: Finding) -> bool:
     """Would this finding block if it were new? The same test `compare` uses for new findings."""
-    return (
-        f.severity in result.blocking
-        and f.severity != "INFO"
-        and not result.in_non_blocking_path(f)
-        and not result.is_test_scoped(f)
-    )
+    return f.severity in result.blocking and f.severity != "INFO" and not result.in_non_blocking_path(f)
 
 
 def details(result: CheckResult, findings_sha256: str) -> dict:
@@ -330,11 +317,10 @@ def details(result: CheckResult, findings_sha256: str) -> dict:
         "partial_warn_only": [file_detail(e) for e in result.partial_warn_only],
         "syntax_warn_only": [file_detail(e) for e in result.syntax_warn_only],
         "excluded_changed": list(result.excluded_changed),
-        # Findings in proven test-only code, with the scope that proves it, and the
+        # Findings labelled as test code, with the label, and the
         # baseline entries they make unnecessary.
-        "test_scope_rules": list(result.test_scope_rules),
-        "test_scoped": [{"key": key(f), **f.test_scope.as_json()} for f in result.test_scoped],
-        "baseline_test_scoped": [key(f) for f, _ in result.baseline_test_scoped],
+        "test_code_rules": list(result.test_code_rules),
+        "test_code": [{"key": key(f), **f.test_code.as_json()} for f in result.test_code],
         "summary": summary(result),
     }
 
@@ -360,10 +346,10 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         f"{blocking})",
         f"  Stale baseline entries: {len(result.stale)}",
     ]
-    if result.test_scope_rules:
+    if result.test_code_rules:
         out.append(
-            f"  Accepted as test-only code (never blocking): {len(result.test_scoped)}, of which new: "
-            f"{s['new_test_scoped']}"
+            f"  Labelled as test code (a label only; they block like any other finding): {len(result.test_code)}, "
+            f"of which new: {s['new_test_code']}, new and blocking: {s['new_blocking_test_code']}"
         )
     if result.suppressions:
         out.append(
@@ -385,7 +371,22 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         if len(items) > max_items:
             out.append(f"  ... and {len(items) - max_items} more (see findings.json)")
 
-    finding_lines("New blocking findings", result.new_blocking)
+    finding_lines("New blocking findings", [f for f in result.new_blocking if not result.is_test_code(f)])
+    labelled_blocking = [f for f in result.new_blocking if result.is_test_code(f)]
+    if labelled_blocking:
+        out.append("")
+        out.append(
+            f"New blocking findings in code labelled as test code ({len(labelled_blocking)}): the label is triage "
+            "help, not a proof that the code never ships. They block until a person accepts them, for example with "
+            "`shoalscan baseline accept --test-code --fingerprint <fingerprint> --by <you> --issue <issue>`, "
+            "committed through a reviewed change on the base branch."
+        )
+        for f in labelled_blocking[:max_items]:
+            out.append(f"  {f.severity:<7} {t(f.path)}:{f.line}  {t(f.rule)}")
+            out.append(f"          {t(f.test_code.description())}")
+            out.append(f"          fingerprint {t(f.fingerprint)}")
+        if len(labelled_blocking) > max_items:
+            out.append(f"  ... and {len(labelled_blocking) - max_items} more (see check.json)")
     if result.non_blocking_paths:
         out.insert(
             5,
@@ -394,34 +395,12 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         )
     finding_lines(
         "New findings that do not block",
-        [
-            f
-            for f in result.new
-            if f not in result.new_blocking and not result.in_non_blocking_path(f) and not result.is_test_scoped(f)
-        ],
+        [f for f in result.new if f not in result.new_blocking and not result.in_non_blocking_path(f)],
     )
     finding_lines(
         "New findings in non-blocking paths",
-        [f for f in result.new if result.in_non_blocking_path(f) and not result.is_test_scoped(f)],
+        [f for f in result.new if result.in_non_blocking_path(f)],
     )
-    scoped_new = [f for f in result.new if result.is_test_scoped(f)]
-    if scoped_new:
-        out.append("")
-        out.append(f"New findings in test-only code, accepted by [test_scope] ({len(scoped_new)}):")
-        for f in scoped_new[:max_items]:
-            out.append(f"  {f.severity:<7} {t(f.path)}:{f.line}  {t(f.rule)}")
-            out.append(f"          {t(f.test_scope.description())}")
-        if len(scoped_new) > max_items:
-            out.append(f"  ... and {len(scoped_new) - max_items} more (see check.json)")
-    if result.baseline_test_scoped:
-        out.append("")
-        out.append(
-            f"Baseline entries now covered by test scope ({len(result.baseline_test_scoped)}): their findings are in "
-            "test-only code and would not block without them. This does not fail the check. Remove them in a "
-            "reviewed change with `shoalscan baseline prune --test-scope`."
-        )
-        for f, e in result.baseline_test_scoped[:max_items]:
-            out.append(f"  {t(e.path)}  {t(e.rule)}  fingerprint {t(e.fingerprint)}  ({t(f.test_scope.description())})")
     if result.stale:
         out.append("")
         out.append(f"Stale baseline entries ({len(result.stale)}): these no longer match a finding; remove them.")

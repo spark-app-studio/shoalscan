@@ -36,7 +36,7 @@ Shoalscan's own Opengrep rules in `rules/` have tests next to them. After instal
 ~/.cache/shoalscan/tools/opengrep scan --test rules/
 ```
 
-The internal test-scope rules in `scope/` ([Test scope](docs/test-scope.md)) have tests next to them too: `opengrep scan --test scope/`.
+The internal rules in `scope/` that find `#[cfg(test)]` items ([Test code labels](docs/test-code.md)) have tests next to them too: `opengrep scan --test scope/`.
 
 [docs/development.md](docs/development.md) and [docs/rules.md](docs/rules.md) have more detail.
 

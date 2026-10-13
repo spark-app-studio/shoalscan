@@ -30,5 +30,5 @@ def shoalscan_rules_dir() -> Path:
 
 
 def scope_rules_file() -> Path:
-    """The internal rule pack that proves Rust test scope (see `shoalscan.testscope`)."""
+    """The internal rule pack that finds `#[cfg(test)]` items for test code labels (see `shoalscan.testscope`)."""
     return data_path("scope") / "rust-test-scope.yaml"

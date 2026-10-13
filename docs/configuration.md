@@ -59,14 +59,13 @@ categories = ["security"]
 # Rules to leave out, by exact id or by prefix ending in ".*".
 exclude_rules = ["community.python.lang.security.audit.dangerous-subprocess-use-audit"]
 
-[test_scope]
-# Opengrep rules whose findings in proven test-only Rust code never block, by
-# exact id or by prefix ending in ".*", as in opengrep.exclude_rules. Off when
-# empty (the default). Secret rules, Gitleaks rules, other scanners' rules and
-# wildcards such as community.* are refused.
-non_blocking = ["community.rust.lang.security.temp-dir", "shoalscan.rust-plain-http-url"]
-# Compiler wrappers .cargo/config.toml may set as build.rustc-wrapper (bare names only).
-allowed_rustc_wrappers = ["sccache"]
+[test_code]
+# Opengrep rules whose Rust findings inside #[cfg(test)] items get a "test
+# code" label, by exact id or by prefix ending in ".*", as in
+# opengrep.exclude_rules. A label is triage help only: labelled findings block
+# like any other. Off when empty (the default). Secret rules, Gitleaks rules,
+# other scanners' rules and wildcards such as community.* are refused.
+rules = ["community.rust.lang.security.temp-dir", "shoalscan.rust-plain-http-url"]
 
 [limits]
 scan_timeout_seconds = 1800
@@ -99,9 +98,9 @@ Each entry must name the files it covers. It is a file name (`Dockerfile`), a fi
 
 The setting only protects pull requests that run under `--policy-ref`: then the list comes from the base branch, like the rest of the policy, and a change cannot make its own files warn-only. Without `--policy-ref`, or in adoption mode (the first run, before the base branch has a configuration), the configuration in the change itself applies, including its `parse_warn_only`.
 
-## Test scope
+## Test code labels
 
-`[test_scope] non_blocking` lists Opengrep rules whose findings Shoalscan accepts automatically when it can prove they are in a Rust item compiled only for tests: a top-level `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) module, function, `impl`, constant or static. Whole files, such as a crate's `tests/`, are not, and neither are test functions (`#[test]`, `#[tokio::test]`, `#[rstest]`) outside such a module. Such findings stay in every output, marked with their scope, and never block. Only Opengrep findings in `.rs` files are eligible. Rules that find secrets, Gitleaks rules, other scanners' rules and wildcards broader than three dotted parts are refused. The base branch and the CI environment are trusted: with `--policy-ref`, a pull request keeps test scope only when it changes nothing but Rust source, and CI must fetch the history back to the merge base. Test scope is also off when the tree has a build script, or a Cargo or toolchain file Shoalscan does not fully understand. `allowed_rustc_wrappers` names wrappers, such as sccache, that `.cargo/config.toml` may set. [Test scope](test-scope.md) explains what counts, what does not, and why it is safe.
+`[test_code] rules` lists Opengrep rules whose Rust findings get a **test code** label when they lie inside a top-level `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) module, function, `impl`, constant or static. Labelled findings are grouped apart in the scan output, `findings.json`, the check report and the dashboard. A label is triage help, not a proof: labelled findings block like any other, and only a person accepts one, through the baseline (`shoalscan baseline accept --test-code`) or a dashboard review. Rules that find secrets, Gitleaks rules, other scanners' rules and wildcards broader than three dotted parts are refused. [Test code labels](test-code.md) explains what gets a label, why it is not a proof, and how to accept a labelled finding.
 
 How `check` treats partial parses and other unscanned files is described in [The baseline and the check](baseline-and-check.md#the-check).
 

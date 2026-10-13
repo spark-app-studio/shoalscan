@@ -1,22 +1,23 @@
-"""Rust test scope: prove that a finding sits in an item that is compiled only for tests.
+"""Test code labels: where a Rust finding sits inside an item compiled only for tests.
 
-Opengrep's own Rust parser does the proving. Shoalscan ships a small rule pack
+A label is triage help, never a decision. It tells a reviewer that a finding's
+code is inside a `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) module or item.
+It does not prove the code never ships: an in-repository procedural macro, a
+build tool the build runs, a build script or build configuration can compile
+test code into a release, and a scanner cannot rule that out. A labelled
+finding blocks like any other until a person accepts it.
+
+Opengrep's own Rust parser finds the items. Shoalscan ships a small rule pack
 (`scope/rust-test-scope.yaml`) that runs in the same scan as the security
-rules; its matches give the exact line ranges of:
+rules; its matches give the exact byte ranges of:
 
 - `#[cfg(test)]` and `#[cfg(all(test, ...))]` modules (`cfg_test_module`);
 - such functions, `impl` blocks, constants and statics (`cfg_test_item`).
 
-Only items count, never whole files: code inside a `#[cfg(test)]` item is
-removed from every build without `cfg(test)`, wherever its file is included.
-
-Shoalscan trusts only what it can prove, and turns the feature off otherwise:
-
-- nothing in the repository may be able to set `cfg(test)` in a build that is
-  not a test (see `shoalscan.cargotrust`);
-- a finding counts only when its whole byte range lies inside the item;
-- every match is checked to be spelled exactly as recognised;
-- a file Opengrep reported an error for gets no scope at all.
+A finding is labelled only when its whole byte range lies inside such an item,
+the attribute is spelled exactly as recognised, and Opengrep parsed its file
+without error. A walk of the tree (`shoalscan.cargotrust`) adds a note when the
+label may be unreliable, for example because the tree has a build script.
 """
 
 from __future__ import annotations
@@ -37,9 +38,6 @@ ITEM_RULE = f"{NAMESPACE}.rust-cfg-test-item"
 MODULE_RULE = f"{NAMESPACE}.rust-cfg-test-module"
 
 KINDS = ("cfg_test_module", "cfg_test_item")
-# Who an automatic test-scope review is recorded under. It is not an email
-# address, so it can never be a person signed in to the dashboard.
-AUTO_REVIEWER = "shoalscan (test scope)"
 ELIGIBLE_TOOL = "opengrep"
 ELIGIBLE_SUFFIX = ".rs"
 
@@ -64,7 +62,7 @@ def secret_rule(rule: str) -> bool:
 
 @dataclass(frozen=True)
 class TestScope:
-    """Why a finding is in test-only code: the kind of item and the file and line of its attribute."""
+    """A test code label: the kind of item a finding sits in, and the file and line of its attribute."""
 
     __test__ = False  # not a unittest class
 
@@ -76,11 +74,11 @@ class TestScope:
         return {"kind": self.kind, "path": self.path, "line": self.line}
 
     def description(self) -> str:
-        return f"test-only code: {self.kind} at {self.path}:{self.line}"
+        return f"test code: {self.kind} at {self.path}:{self.line}"
 
 
 def scope_from_json(value: object) -> TestScope | None:
-    """A finding's `test_scope` from findings.json; None for a malformed one."""
+    """A finding's `test_code` from findings.json; None for a malformed one."""
     if not isinstance(value, dict) or set(value) != {"kind", "path", "line"}:
         return None
     kind, path, line = value["kind"], value["path"], value["line"]
@@ -92,12 +90,12 @@ def scope_from_json(value: object) -> TestScope | None:
 
 
 def eligible(tool: str, rule: str, path: str, matcher) -> bool:
-    """Only Opengrep findings in Rust files, for a listed rule that is not about secrets, can be test-scoped."""
+    """Only Opengrep findings in Rust files, for a listed rule that is not about secrets, can be labelled."""
     return tool == ELIGIBLE_TOOL and path.endswith(ELIGIBLE_SUFFIX) and matcher.matches(rule) and not secret_rule(rule)
 
 
-def never_test_scope(path: str) -> bool:
-    """Code under `examples/`, in `build.rs` or under `src/bin/` is never test scope."""
+def never_test_code(path: str) -> bool:
+    """Code under `examples/`, in `build.rs` or under `src/bin/` is never labelled as test code."""
     parts = path.split("/")
     if "examples" in parts[:-1] or parts[-1] == "build.rs":
         return True
@@ -210,7 +208,7 @@ class Repository:
 
     module_names: list[str] = field(default_factory=list)
     names_dropped: int = 0
-    off: str | None = None  # why test scope is off for the whole tree
+    unreliable: str | None = None  # why the labels may be unreliable for this tree
 
 
 def _inside(root: Path, target: Path) -> str | None:
@@ -243,13 +241,13 @@ def special_name(name: str, in_cargo_dir: bool = False) -> str | None:
     return _FOLDED_SPECIAL.get(folded) or (_FOLDED_CONFIG.get(folded) if in_cargo_dir else None)
 
 
-def read_repository(root: Path, allowed_wrappers: tuple[str, ...] = ()) -> Repository:
+def read_repository(root: Path) -> Repository:
     """Read the whole tree under `root` (only `.git` is skipped, `target/` and `node_modules/` included): Rust
     files for module names, and the Cargo and toolchain files that could change how Rust is compiled. Anything
-    Shoalscan cannot read or does not recognise turns test scope off."""
+    Shoalscan cannot read or does not recognise adds a note that the labels may be unreliable."""
     repo = Repository()
     root = root.resolve()
-    cargo = CargoCheck(root, allowed_wrappers)
+    cargo = CargoCheck(root)
     names: set[str] = set()
 
     def walk_error(error: OSError) -> None:
@@ -285,7 +283,7 @@ def read_repository(root: Path, allowed_wrappers: tuple[str, ...] = ()) -> Repos
                     cargo.fail(f"{rel} is a symbolic link")
                 continue
             if name == "build.rs":
-                cargo.fail(f"{rel} is a build script; test scope is off wherever a build script runs")
+                cargo.fail(f"{rel} is a build script, which can change how test code is compiled")
             elif name == "Cargo.toml":
                 cargo.add_manifest(full, rel)
             elif in_cargo_dir and name in _CONFIG_FILES:
@@ -301,41 +299,11 @@ def read_repository(root: Path, allowed_wrappers: tuple[str, ...] = ()) -> Repos
                     cargo.fail(f"{rel} could not be read")
                     continue
                 names |= cfg_test_module_names(strip_code(text))
-    repo.off = cargo.result()
+    repo.unreliable = cargo.result()
     ordered = sorted(names)
     repo.module_names = ordered[:MAX_MODULE_NAMES]
     repo.names_dropped = max(0, len(ordered) - MAX_MODULE_NAMES)
     return repo
-
-
-# ---------------------------------------------------------------- what a change touches
-
-_UNTRUSTED_DIRS = ("target", "node_modules")
-
-
-def change_problem(entries: list[tuple[str, str, str, str]]) -> str | None:
-    """Why a change keeps test scope off, or None when it changes Rust source only.
-
-    `entries` are (status, old mode, new mode, path) from `gitref.changed_entries`.
-    Every changed path must be a regular `.rs` file, added or modified, that is
-    not a special name in any spelling and not under `target/` or `node_modules/`.
-    """
-    for status, old_mode, new_mode, path in sorted(entries, key=lambda e: e[3]):
-        parts = path.split("/")
-        name = parts[-1]
-        if not name.endswith(".rs"):
-            return f"the change touches {path}, which is not Rust source"
-        if special_name(name) or any(special_name(p) or fold(p) == _FOLDED_CARGO_DIR for p in parts[:-1]):
-            return f"the change touches {path}, which Cargo or rustup reads"
-        if any(fold(p) in _UNTRUSTED_DIRS for p in parts[:-1]):
-            return f"the change touches {path}, under a build or package directory"
-        if status == "D":
-            return f"the change deletes {path}"
-        if status not in ("A", "M", "?"):
-            return f"the change {status!r} on {path} is not an addition or a modification"
-        if new_mode not in ("100644", "100755") or (old_mode not in ("000000", new_mode)):
-            return f"the change gives {path} the mode {new_mode} (a link, a submodule or a mode change)"
-    return None
 
 
 # ---------------------------------------------------------------- the rule pack
@@ -408,14 +376,14 @@ def split_results(doc: dict) -> list[dict]:
 
 @dataclass
 class ScopeMap:
-    """Byte ranges that are test-only, per repository path."""
+    """Byte ranges of `#[cfg(test)]` items, per repository path."""
 
     ranges: dict[str, list[tuple[int, int, TestScope]]] = field(default_factory=dict)
     unrecognised: int = 0
 
     def scope_for(self, path: str, start: int | None, end: int | None) -> TestScope | None:
         """The scope whose byte range holds all of [start, end), the finding's own range; None without one."""
-        if never_test_scope(path) or not isinstance(start, int) or not isinstance(end, int) or not 0 <= start <= end:
+        if never_test_code(path) or not isinstance(start, int) or not isinstance(end, int) or not 0 <= start <= end:
             return None
         inside = [r for r in self.ranges.get(path, []) if r[0] <= start and end <= r[1]]
         if not inside:
@@ -474,8 +442,8 @@ def spelled_as_recognised(match_text: str) -> bool:
     """Is the item's own attribute spelled exactly as Shoalscan recognises it?
 
     A second check on every match, after Opengrep's: any spelling Shoalscan
-    does not recognise (`cfg(r#test)`, a macro, a parser surprise) is not
-    test scope.
+    does not recognise (`cfg(r#test)`, a macro, a parser surprise) gets no
+    label.
     """
     return any(_cfg_test_spelling(a) for a in _leading_attributes(strip_code(match_text)))
 

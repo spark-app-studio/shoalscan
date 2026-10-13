@@ -5,7 +5,7 @@ rules:
     languages: [rust]
     pattern: std::env::temp_dir()
   - id: other
-    message: Not listed in test_scope, so it always blocks.
+    message: Not listed in test_code, so it always blocks.
     severity: ERROR
     languages: [rust]
     pattern: std::process::exit(1)

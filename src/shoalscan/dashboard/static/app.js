@@ -619,7 +619,7 @@
           el("td", { "class": "path mono" }, f.path + ":" + f.line),
           el("td", null, fmtDate(f.first_seen)),
           el("td", null, f.new_blocking ? "new, blocking" : (f["new"] ? "new" : "")),
-          el("td", null, badge(f.review), f.test_scope ? el("div", { "class": "muted small", title: f.test_scope.description }, "test-only: " + f.test_scope.kind) : ""),
+          el("td", null, badge(f.review), f.test_code ? el("div", { "class": "muted small", title: f.test_code.description }, "label: test code (" + f.test_code.kind + ")") : ""),
           el("td", null, suggestionCell(f.suggestion)),
           el("td", null, localTime(f.review && f.review.source === "review" ? f.review.resolved_at : null)),
           el("td", null, reviewHref ? internalLink(reviewHref, "Review", "Review " + f.rule + " in " + f.path + " line " + f.line) : "-")));
@@ -704,7 +704,7 @@
       var facts = clear($("finding-facts"));
       [["Severity", f.severity], ["Location", f.path + ":" + f.line], ["Component", f.component], ["Fingerprint", f.fingerprint],
        ["First seen", fmtDate(f.first_seen)],
-       ["Test scope", f.test_scope ? f.test_scope.description + " (never blocking under [test_scope])" : "not in proven test-only code"]].forEach(function (p) { facts.appendChild(el("dt", null, p[0])); facts.appendChild(el("dd", null, p[1])); });
+       ["Test code label", f.test_code ? f.test_code.description + " (triage help, not a proof; it blocks like any other finding)" : "none"]].forEach(function (p) { facts.appendChild(el("dt", null, p[0])); facts.appendChild(el("dd", null, p[1])); });
       $("finding-message").textContent = f.message;
       var r = f.review;
       var current = clear($("review-current"));
@@ -717,6 +717,8 @@
       }
       $("review-baseline").textContent = r.baseline_reason
         ? "From baseline (read-only): " + r.baseline_reason + " (" + r.baseline_issue + ")" : "";
+      $("test-code-accept").hidden = !f.test_code;
+      state.reviewTestCode = f.test_code ? f.test_code.description : null;
       var form = $("review-form");
       fillSelect(form.elements.status, M.USER_STATUSES.map(function (s) { return { value: s, label: M.REVIEW_LABELS[s] }; }),
         r.source === "review" && M.USER_STATUSES.indexOf(r.status) >= 0 ? r.status : "", "Choose a status");
@@ -754,6 +756,18 @@
           el("span", { "class": "review-description" }, decided)));
       });
     }, function () { list.appendChild(el("li", { "class": "muted" }, "Similar findings could not be loaded.")); });
+  }
+
+  // One step for a person to accept a finding labelled as test code: an ordinary review, recorded under
+  // their name and the time by the server, with the reason "test code".
+  function acceptTestCode() {
+    if (!state.reviewTestCode) return;
+    var form = $("review-form");
+    postJson("/api/review", { repo: state.repo, finding_key: state.reviewKey, status: "accepted_risk",
+      description: "Accepted: test code (" + state.reviewTestCode + ")", run_id: Number(form.getAttribute("data-run")) }).then(function (r) {
+      if (r.status === 200) route();
+      else $("review-error").textContent = r.body.error || "error " + r.status;
+    });
   }
 
   function submitReview(ev) {
@@ -1369,6 +1383,7 @@
     $("scan-form").addEventListener("submit", startScan);
     $("bulk-review").addEventListener("submit", submitBulk);
     $("review-form").addEventListener("submit", submitReview);
+    $("test-code-accept-button").addEventListener("click", acceptTestCode);
     fillSelect($("bulk-review").elements.status, M.USER_STATUSES.map(function (s) { return { value: s, label: M.REVIEW_LABELS[s] }; }), "", "Choose a status");
     $("bulk-suggest").addEventListener("click", useSuggestion);
     $("groups-form").addEventListener("submit", function (ev) {

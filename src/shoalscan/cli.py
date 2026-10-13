@@ -8,11 +8,20 @@ import json
 import sys
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from shoalscan import __version__, gitref
 from shoalscan import markdown as md
-from shoalscan.baseline import baseline_from_bytes, entries_from_findings, load_baseline, rename_path, write_baseline
+from shoalscan.baseline import (
+    Entry,
+    baseline_from_bytes,
+    entries_from_findings,
+    load_baseline,
+    rename_path,
+    validate_issue,
+    write_baseline,
+)
 from shoalscan.check import CHECK_JSON, compare, details, render_report, summary_line
 from shoalscan.config import CONFIG_NAME, Config, config_from_bytes, load_config
 from shoalscan.dashboard.commands import add_commands as add_dashboard_commands
@@ -221,21 +230,18 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 f"tools.lock. Run `shoalscan install` with cosign available to verify it.\n{bar}",
                 file=sys.stderr,
             )
-    scope = result.meta.get("test_scope")
-    if isinstance(scope, dict):
-        bar = "!" * 78
-        if scope.get("off"):
+    labels = result.meta.get("test_code")
+    if isinstance(labels, dict):
+        print(
+            f"shoalscan scan: {labels.get('findings', 0)} findings labelled as test code (triage help only; "
+            "they block like any other finding until a person accepts them)"
+        )
+        if labels.get("unreliable"):
+            print(f"shoalscan scan: the test code labels may be unreliable: {md.one_line(labels['unreliable'])}")
+        if labels.get("module_names_dropped"):
             print(
-                f"{bar}\nshoalscan: WARNING: TEST SCOPE IS OFF for this scan: {md.one_line(scope['off'])}.\n"
-                "No finding is accepted as test-only code in this scan.\n"
-                f"{bar}",
-                file=sys.stderr,
-            )
-        if scope.get("module_names_dropped"):
-            print(
-                f"{bar}\nshoalscan: WARNING: {scope['module_names_dropped']} #[cfg(test)] module names were left "
-                f"out of the test-scope rules (the limit is {scope['module_names']}); findings in those modules are "
-                f"not accepted as test-only.\n{bar}",
+                f"shoalscan: WARNING: {labels['module_names_dropped']} #[cfg(test)] module names were left out "
+                f"(the limit is {labels['module_names']}); findings in those modules get no label.",
                 file=sys.stderr,
             )
     counts = result.meta["counts"]
@@ -253,17 +259,10 @@ def _print_adoption(policy: Policy) -> None:
     print(f"ADOPTION: {policy.ref} has no Shoalscan configuration or baseline, so this change's own")
     print("configuration and baseline are used. Review them with care: they set the policy from now on.")
     print("ERROR findings still block.")
-    scope = policy.config.test_scope
-    keys = [
-        f"{key} = {list(value)}"
-        for key, value in (
-            ("non_blocking", scope.non_blocking),
-            ("allowed_rustc_wrappers", scope.allowed_rustc_wrappers),
+    if policy.config.test_code.rules:
+        print(
+            f"ADOPTION: [test_code] from this change: rules = {md.one_line(str(list(policy.config.test_code.rules)))}"
         )
-        if value
-    ]
-    if keys:
-        print(f"ADOPTION: [test_scope] from this change: {md.one_line('; '.join(keys))}")
     print(bar)
 
 
@@ -394,7 +393,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         components=config.components,
         adoption=policy.adoption,
         parse_warn_only=config.parse_warn_only,
-        test_scope=config.test_scope.non_blocking,
+        test_code_rules=config.test_code.rules,
     )
     write_atomic(out / CHECK_JSON, json.dumps(details(result, findings_sha256), sort_keys=True) + "\n")
     print(render_report(result))
@@ -429,13 +428,21 @@ def cmd_baseline_rename_path(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_baseline_prune(args: argparse.Namespace) -> int:
-    """Remove the baseline entries whose findings the configuration's [test_scope] now accepts."""
-    if not args.test_scope:
-        raise SetupError("say what to prune: --test-scope is the only kind for now")
+def cmd_baseline_accept(args: argparse.Namespace) -> int:
+    """A person accepts findings labelled as test code into the baseline: who, when and why are recorded."""
+    if not args.test_code:
+        raise SetupError("say what to accept: --test-code is the only kind for now")
+    who = (args.by or "").strip()
+    if not who or any(c < " " or md.is_format_control(c) for c in who) or len(who) > 200:
+        raise SetupError("--by must name the person who accepts the findings")
+    if not args.issue:
+        raise SetupError("--issue must name the issue that tracks the decision: #123 or a URL")
+    validate_issue(args.issue)
+    if not args.fingerprint and not args.all:
+        raise SetupError("name the findings to accept with --fingerprint (repeatable), or pass --all")
     config = _config(args)
-    if not config.test_scope.non_blocking:
-        raise SetupError(f"{CONFIG_NAME} has no [test_scope] non_blocking rules, so nothing is test-scoped")
+    if not config.test_code.rules:
+        raise SetupError(f"{CONFIG_NAME} has no [test_code] rules, so no finding carries a test code label")
     repo = Path(args.repo)
     out = _out_dir(args)
     baseline_path = _baseline_path(args, config)
@@ -453,21 +460,46 @@ def cmd_baseline_prune(args: argparse.Namespace) -> int:
     leave_out = gitref.baseline_binding_path(repo, baseline_path)
     state = gitref.worktree_state(repo.resolve(), leave_out)
     if state is None and not args.no_git:
-        raise SetupError(f"{repo} is not inside a git work tree; pass --no-git to prune without one")
+        raise SetupError(f"{repo} is not inside a git work tree; pass --no-git to accept without one")
     if not _same_tree(meta, state, findings, leave_out):
         raise SetupError("the findings do not match the current tree; run the scan again")
-    result = compare(findings, entries, config.blocking, test_scope=config.test_scope.non_blocking)
-    remove = {e for _, e in result.baseline_test_scoped}
-    if not remove:
-        print(f"shoalscan baseline prune: no entries of {baseline_path} are covered by test scope")
+    result = compare(findings, entries, config.blocking, test_code_rules=config.test_code.rules)
+    known = {e.key() for e in entries}
+    labelled = [f for f in result.test_code if f.key() not in known]
+    if args.fingerprint:
+        wanted = set(args.fingerprint)
+        chosen = [f for f in labelled if f.fingerprint in wanted]
+        missing = wanted - {f.fingerprint for f in chosen}
+        if missing:
+            raise SetupError(
+                "these fingerprints are not findings labelled as test code that the baseline lacks: "
+                + ", ".join(sorted(md.one_line(m) for m in missing))
+            )
+    else:
+        chosen = labelled
+    if not chosen:
+        print("shoalscan baseline accept: no findings labelled as test code are missing from the baseline")
         return 0
-    write_baseline(baseline_path, [e for e in entries if e not in remove], force=True)
+    when = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    added = [
+        Entry(
+            f.tool,
+            f.rule,
+            f.path,
+            f.fingerprint,
+            validate_issue(args.issue),
+            f"Accepted: test code ({f.test_code.kind} at {f.test_code.path}:{f.test_code.line}); accepted by "
+            f"{who} on {when}",
+        )
+        for f in chosen
+    ]
+    write_baseline(baseline_path, [*entries, *added], force=True)
     print(
-        f"shoalscan baseline prune: removed {len(remove)} entries covered by test scope from {baseline_path}; "
-        "commit the change as its own reviewed pull request"
+        f"shoalscan baseline accept: added {len(added)} entries to {baseline_path}, accepted by {md.one_line(who)}. "
+        "Commit them through a reviewed change on the base branch; a pull request cannot add baseline entries."
     )
-    for f, e in sorted(result.baseline_test_scoped, key=lambda pair: (pair[1].path, pair[1].rule)):
-        print(f"  {md.one_line(e.path)}  {md.one_line(e.rule)}  ({md.one_line(f.test_scope.description())})")
+    for f in chosen:
+        print(f"  {md.one_line(f.path)}:{f.line}  {md.one_line(f.rule)}  ({md.one_line(f.test_code.description())})")
     return 0
 
 
@@ -543,18 +575,20 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--config", help=f"configuration file (default: <repo>/{CONFIG_NAME})")
     r.add_argument("--baseline", help="baseline file (default: from the configuration)")
     r.set_defaults(func=cmd_baseline_rename_path)
-    pr = bsub.add_parser("prune", help="remove baseline entries that the policy no longer needs")
-    pr.add_argument(
-        "--test-scope",
-        action="store_true",
-        help="remove the entries whose findings are in test-only code that [test_scope] accepts",
+    ac = bsub.add_parser(
+        "accept", help="accept findings labelled as test code into the baseline, recording who and why"
     )
-    pr.add_argument("--repo", default=".", help="repository root (default: the current directory)")
-    pr.add_argument("--config", help=f"configuration file (default: <repo>/{CONFIG_NAME})")
-    pr.add_argument("--out", help="directory with findings.json (default: the same default as `scan`)")
-    pr.add_argument("--baseline", help="baseline file (default: from the configuration)")
-    pr.add_argument("--no-git", action="store_true", help="allow a repository directory that is not a git work tree")
-    pr.set_defaults(func=cmd_baseline_prune)
+    ac.add_argument("--test-code", action="store_true", help="accept findings labelled as test code")
+    ac.add_argument("--fingerprint", action="append", default=[], help="a finding to accept (repeatable)")
+    ac.add_argument("--all", action="store_true", help="accept every labelled finding the baseline lacks")
+    ac.add_argument("--by", help="who accepts them, recorded in each entry's reason (required)")
+    ac.add_argument("--issue", help="the issue that tracks the decision: #123 or a URL (required)")
+    ac.add_argument("--repo", default=".", help="repository root (default: the current directory)")
+    ac.add_argument("--config", help=f"configuration file (default: <repo>/{CONFIG_NAME})")
+    ac.add_argument("--out", help="directory with findings.json (default: the same default as `scan`)")
+    ac.add_argument("--baseline", help="baseline file (default: from the configuration)")
+    ac.add_argument("--no-git", action="store_true", help="allow a repository directory that is not a git work tree")
+    ac.set_defaults(func=cmd_baseline_accept)
 
     add_dashboard_commands(sub)
     return parser

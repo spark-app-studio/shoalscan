@@ -1,27 +1,25 @@
-"""Can anything in this tree make `cfg(test)` true in a build that is not a test?
+"""Could this tree compile `#[cfg(test)]` code into a build that is not a test?
 
-Test scope rests on one fact: code inside a `#[cfg(test)]` item is compiled
-only when rustc runs with `--test` (or `--cfg test`). A build script, a
-compiler or linker wrapper, extra compiler flags, a toolchain override, or a
-patched or replaced dependency can change that. These checks read the whole
-tree and trust only what they can parse and recognise:
+Test code labels are triage help, and these checks only add a note when a
+label may be unreliable. They never decide whether a finding blocks. They read
+the whole tree and recognise only what they can parse:
 
-- **Build scripts:** any `build.rs` or `build = ...` in a Cargo.toml turns
-  test scope off. A build script can read, include or run anything.
-- **Cargo.toml and `.cargo/config(.toml)`** are read with tomllib, and every
-  key must be on an allowlist. A file that does not parse, an unknown key,
-  `[replace]`, `[source]`, `paths`, `cargo-features`, a `[patch]` that is not a
-  path inside the repository, a compiler, a linker, a wrapper (except one the
-  policy allows), or a `rustflags` entry other than `-C` (not a linker), `-L`,
-  `-l` and the lint levels turns test scope off.
-- **`rust-toolchain(.toml)`** may name a channel, components, targets and a
-  profile, nothing else.
+- **Build scripts:** any `build.rs` or `build = ...` in a Cargo.toml. A build
+  script can read, include or run anything.
+- **Procedural macros:** a crate with `proc-macro = true` in its `[lib]`. A
+  macro can emit code whatever its input's attributes say.
+- **Cargo.toml and `.cargo/config(.toml)`**, read with tomllib, with every key
+  on an allowlist: a file that does not parse, an unknown key, `[replace]`,
+  `[source]`, `paths`, `cargo-features`, a `[patch]` that is not a path inside
+  the repository, a compiler, a linker, a wrapper, or a `rustflags` entry other
+  than `-C` (not a linker or link argument), `-L`, `-l` and the lint levels.
+- **`rust-toolchain(.toml)`** naming anything but a channel, components,
+  targets and a profile.
 
-What the tree's other files (scripts, CI workflows) do is not searched: a pull
-request keeps test scope only when it changes nothing but Rust source (see
-`shoalscan.testscope`), and the base branch is trusted.
+Scripts, CI workflows and the build environment are not read: they can change
+the build too, which is why a label is never a proof.
 
-The answer is a reason when test scope must be off, or None.
+The answer is a reason the labels may be unreliable, or None.
 """
 
 from __future__ import annotations
@@ -34,7 +32,7 @@ from pathlib import Path
 MAX_TOML_BYTES = 1024 * 1024
 
 # Cargo.toml: the top-level tables and keys Shoalscan understands. Others (patch, replace,
-# cargo-features, and anything new) turn test scope off.
+# cargo-features, and anything new) make the labels unreliable.
 _MANIFEST_TOP = frozenset(
     {
         "package",
@@ -131,8 +129,8 @@ _PROFILE_KEYS = frozenset(
 
 # .cargo/config(.toml): what Shoalscan understands. A compiler or wrapper (build.rustc,
 # build.rustc-wrapper, build.rustc-workspace-wrapper), [patch], [source], paths, [env], include
-# and anything else turn test scope off.
-_CONFIG_BUILD_KEYS = frozenset({"target", "target-dir", "jobs", "incremental", "rustflags", "rustc-wrapper"})
+# and anything else make the labels unreliable.
+_CONFIG_BUILD_KEYS = frozenset({"target", "target-dir", "jobs", "incremental", "rustflags"})
 _CONFIG_UNSTABLE_KEYS = frozenset({"build-std", "build-std-features"})
 # No `linker`: a linker is a program the build runs, as a compiler is.
 _CONFIG_TARGET_KEYS = frozenset({"rustflags", "runner"})
@@ -171,8 +169,9 @@ def rustflags_problem(value: object) -> str | None:
         else:
             value = None
         if value is not None:
-            if flag.startswith("-C") and value.strip().lower().startswith("linker"):
-                return f"rustflags sets a linker ({flag} {value}); a linker is a program the build runs"
+            setting = value.strip().lower()
+            if flag.startswith("-C") and setting.startswith(("linker", "link-arg")):
+                return f"rustflags chooses a linker or passes it arguments ({flag} {value})"
             i += step
             continue
         return f"rustflags has {flag!r}; only -C, -L, -l and -A/-W/-D/-F are accepted"
@@ -183,7 +182,7 @@ def _unknown(table: object, allowed: frozenset[str], where: str) -> str | None:
     if not isinstance(table, dict):
         return f"{where} is not a table"
     extra = sorted(set(table) - allowed)
-    return f"{where} has {', '.join(extra)}, which Shoalscan does not accept with test scope" if extra else None
+    return f"{where} has {', '.join(extra)}, which Shoalscan does not recognise" if extra else None
 
 
 def _patch_problem(patch: object, rel: str) -> str | None:
@@ -259,15 +258,13 @@ def manifest_problem(doc: dict, rel: str) -> str | None:
     return None
 
 
-def config_problem(doc: dict, rel: str, allowed_wrappers: tuple[str, ...] = ()) -> str | None:
+def config_problem(doc: dict, rel: str) -> str | None:
     """Why this .cargo/config(.toml) could change cfg(test) or the code that is built, or None."""
     if problem := _unknown(doc, frozenset({"build", "unstable", "target"}), rel):
         return problem
     build = doc.get("build", {})
     if problem := _unknown(build, _CONFIG_BUILD_KEYS, f"{rel} [build]"):
         return problem
-    if "rustc-wrapper" in build and build["rustc-wrapper"] not in allowed_wrappers:
-        return f"{rel} [build] rustc-wrapper is not one of [test_scope] allowed_rustc_wrappers"
     if "rustflags" in build and (problem := rustflags_problem(build["rustflags"])):
         return f"{rel} [build] {problem}"
     if problem := _unknown(doc.get("unstable", {}), _CONFIG_UNSTABLE_KEYS, f"{rel} [unstable]"):
@@ -323,11 +320,10 @@ def toolchain_problem(text: str, rel: str) -> str | None:
 
 
 class CargoCheck:
-    """Collects a tree walk's Cargo files and decides whether test scope can stay on."""
+    """Collects a tree walk's Cargo files and says why the test code labels may be unreliable."""
 
-    def __init__(self, root: Path, allowed_wrappers: tuple[str, ...] = ()):
+    def __init__(self, root: Path):
         self.root = root
-        self.allowed_wrappers = tuple(allowed_wrappers)
         self.problem: str | None = None
 
     def fail(self, reason: str) -> None:
@@ -341,14 +337,16 @@ class CargoCheck:
         if problem := manifest_problem(doc, rel):
             self.fail(problem)
         elif _has_build_script(doc):
-            self.fail(f"{rel} sets a build script (build = ...); test scope is off wherever a build script runs")
+            self.fail(f"{rel} sets a build script (build = ...), which can change how test code is compiled")
+        elif isinstance(doc.get("lib"), dict) and (doc["lib"].get("proc-macro") or doc["lib"].get("proc_macro")):
+            self.fail(f"{rel} is a procedural macro crate, whose macros can emit test code into any build")
 
     def add_config(self, path: Path, rel: str) -> None:
         doc, error = _load(path, rel)
         if error:
             self.fail(error)
             return
-        if problem := config_problem(doc, rel, self.allowed_wrappers):
+        if problem := config_problem(doc, rel):
             self.fail(problem)
 
     def add_toolchain(self, path: Path, rel: str) -> None:
@@ -367,5 +365,5 @@ class CargoCheck:
             return None
 
     def result(self) -> str | None:
-        """Why test scope is off for the repository, or None."""
+        """Why the test code labels may be unreliable for this tree, or None."""
         return self.problem

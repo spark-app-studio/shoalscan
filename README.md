@@ -74,7 +74,7 @@ shoalscan scan && shoalscan check
 1. [Getting started](docs/getting-started.md): install Shoalscan and the pinned scanners, run the first scan and write the first baseline.
 2. [Configuration](docs/configuration.md): every `.shoalscan.toml` key, and partial parses with `parse_warn_only`.
 3. [The baseline and the check](docs/baseline-and-check.md): findings and fingerprints, the baseline file, `check` and its summary, inline suppressions, renames, and why pull requests read the policy from the base branch.
-4. [Test scope](docs/test-scope.md): findings in proven test-only Rust code that the policy accepts automatically, and why that is safe.
+4. [Test code labels](docs/test-code.md): labels for Rust findings inside `#[cfg(test)]` code, a triage help that never decides whether a finding blocks, and how a reviewer accepts one.
 5. [CI](docs/ci.md): the GitHub Actions workflow, the self-hosted runner script and the recommended CODEOWNERS.
 6. [Scanners](docs/scanners.md): Opengrep, Gitleaks, Hadolint, zizmor and Trivy, and how the scanned repository is kept from silencing them.
 7. [Rules](docs/rules.md): Shoalscan's own rules and the community rules snapshot.

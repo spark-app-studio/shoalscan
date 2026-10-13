@@ -65,18 +65,19 @@ class TrivySettings:
 
 
 @dataclass(frozen=True)
-class TestScopeSettings:
-    """Rules whose findings in proven test-only Rust code do not block (see docs/test-scope.md)."""
+class TestCodeSettings:
+    """Rules whose Rust findings get a test code label when they sit in a `#[cfg(test)]` item (docs/test-code.md).
+
+    A label is triage help only: it never changes whether a finding blocks.
+    """
 
     __test__ = False  # not a unittest class
 
-    # Exact Opengrep rule ids, or `prefix.*`, as in opengrep.exclude_rules. Empty: the feature is off.
-    non_blocking: tuple[str, ...] = ()
-    # Compiler wrappers (such as sccache) that .cargo/config.toml may set as build.rustc-wrapper; bare names.
-    allowed_rustc_wrappers: tuple[str, ...] = ()
+    # Exact Opengrep rule ids, or `prefix.*`, as in opengrep.exclude_rules. Empty: no labels.
+    rules: tuple[str, ...] = ()
 
 
-# Rule id namespaces whose findings can be test-scoped: Opengrep's rule sources.
+# Rule id namespaces whose findings can be labelled: Opengrep's rule sources.
 TEST_SCOPE_NAMESPACES = ("community", "shoalscan", "repo")
 
 
@@ -103,7 +104,7 @@ class Config:
     hadolint: HadolintSettings = HadolintSettings()
     zizmor: ZizmorSettings = ZizmorSettings()
     trivy: TrivySettings = TrivySettings()
-    test_scope: TestScopeSettings = TestScopeSettings()
+    test_code: TestCodeSettings = TestCodeSettings()
     limits: Limits = Limits()
     source: str = "defaults"
 
@@ -213,7 +214,7 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
             "hadolint",
             "zizmor",
             "trivy",
-            "test_scope",
+            "test_code",
             "limits",
         },
         "the top level",
@@ -335,7 +336,7 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
         helm_values.append((chart_dir, paths))
     trivy = TrivySettings(ignore=tuple(sorted(set(checks))), helm_values=tuple(helm_values))
 
-    test_scope = _test_scope(data.get("test_scope", {}))
+    test_code = _test_code(data.get("test_code", {}))
 
     lim_raw = data.get("limits", {})
     if not isinstance(lim_raw, dict):
@@ -373,68 +374,52 @@ def parse_config(data: dict, source: str = CONFIG_NAME) -> Config:
         hadolint=hadolint,
         zizmor=zizmor,
         trivy=trivy,
-        test_scope=test_scope,
+        test_code=test_code,
         limits=limits,
         source=source,
     )
 
 
-def _test_scope(raw: object) -> TestScopeSettings:
-    """`[test_scope]`: specific Opengrep rules only. A secret is a leak wherever it is, so secret rules are refused."""
+def _test_code(raw: object) -> TestCodeSettings:
+    """`[test_code]`: specific Opengrep rules only. A secret is a leak wherever it is, so secret rules are refused."""
     from shoalscan.suppressions import LINT_RULE
     from shoalscan.testscope import secret_rule
 
     if not isinstance(raw, dict):
-        raise SetupError(f"{CONFIG_NAME}: [test_scope] must be a table")
-    if "trusted_build_scripts" in raw:
-        raise SetupError(
-            f"{CONFIG_NAME}: test_scope.trusted_build_scripts is not accepted: a build script can read, include "
-            "or run anything, so no hash of it can vouch for it. Test scope is off in a repository with a build script"
-        )
-    _check_keys(raw, {"non_blocking", "allowed_rustc_wrappers"}, "[test_scope]")
-    wrappers = _str_list(raw.get("allowed_rustc_wrappers", []), "test_scope.allowed_rustc_wrappers")
-    for wrapper in wrappers:
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", wrapper):
-            raise SetupError(
-                f"{CONFIG_NAME}: test_scope.allowed_rustc_wrappers entries must be bare program names such as "
-                f"sccache: {wrapper!r}"
-            )
-    rules = _str_list(raw.get("non_blocking", []), "test_scope.non_blocking")
+        raise SetupError(f"{CONFIG_NAME}: [test_code] must be a table")
+    _check_keys(raw, {"rules"}, "[test_code]")
+    rules = _str_list(raw.get("rules", []), "test_code.rules")
     for pattern in rules:
         namespace = pattern.split(".", 1)[0]
         if namespace == "gitleaks" or pattern.startswith("gitleaks"):
             raise SetupError(
-                f"{CONFIG_NAME}: test_scope.non_blocking cannot list the Gitleaks rule {pattern!r}: a real secret in "
+                f"{CONFIG_NAME}: test_code.rules cannot list the Gitleaks rule {pattern!r}: a real secret in "
                 "test code is still a leaked secret. Rotate it, or record a false positive in the baseline"
             )
         if not _RULE_PATTERN_RE.match(pattern) or "*" in pattern[:-2]:
-            raise SetupError(
-                f"{CONFIG_NAME}: test_scope.non_blocking entries must be a rule id or `prefix.*`: {pattern!r}"
-            )
+            raise SetupError(f"{CONFIG_NAME}: test_code.rules entries must be a rule id or `prefix.*`: {pattern!r}")
         if namespace not in TEST_SCOPE_NAMESPACES or "." not in pattern:
             raise SetupError(
-                f"{CONFIG_NAME}: test_scope.non_blocking lists {pattern!r}, which is not an Opengrep rule; only "
+                f"{CONFIG_NAME}: test_code.rules lists {pattern!r}, which is not an Opengrep rule; only "
                 f"Opengrep rules ({', '.join(n + '.' for n in TEST_SCOPE_NAMESPACES)}...) are eligible, and only "
                 "their findings in Rust files"
             )
         if secret_rule(pattern):
             raise SetupError(
-                f"{CONFIG_NAME}: test_scope.non_blocking cannot list {pattern!r}: it finds secrets (tokens, keys, "
+                f"{CONFIG_NAME}: test_code.rules cannot list {pattern!r}: it finds secrets (tokens, keys, "
                 "passwords), and a real secret in test code is still a leaked secret"
             )
         if pattern.endswith(".*") and len(pattern[:-2].split(".")) < 3:
             raise SetupError(
-                f"{CONFIG_NAME}: test_scope.non_blocking entry {pattern!r} is too broad; name a rule, or a narrow "
+                f"{CONFIG_NAME}: test_code.rules entry {pattern!r} is too broad; name a rule, or a narrow "
                 "family with at least three dotted parts before the `*`, such as community.rust.lang.security.*"
             )
         if pattern == LINT_RULE:
             raise SetupError(
-                f"{CONFIG_NAME}: test_scope.non_blocking cannot list {LINT_RULE}: an inline suppression must name a "
+                f"{CONFIG_NAME}: test_code.rules cannot list {LINT_RULE}: an inline suppression must name a "
                 "rule and an issue in test code too"
             )
-    return TestScopeSettings(
-        non_blocking=tuple(sorted(set(rules))), allowed_rustc_wrappers=tuple(sorted(set(wrappers)))
-    )
+    return TestCodeSettings(rules=tuple(sorted(set(rules))))
 
 
 def config_from_bytes(data: bytes, source: str) -> Config:

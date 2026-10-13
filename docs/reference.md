@@ -10,7 +10,7 @@ What Shoalscan reads and writes, in one place. Each entry links to the guide tha
 | `shoalscan scan` | Runs the scanners over a repository and writes `findings.json` and `findings.sarif`. Makes no network calls. `--require-network-sandbox` makes it fail unless the scanners run in an operating-system network sandbox. | [Getting started](getting-started.md#the-first-scan), [Scanners](scanners.md) |
 | `shoalscan check` | Compares the findings with the baseline and the policy, prints a report and a `SHOALSCAN_SUMMARY` line, and writes `check.json`. | [Baseline and check](baseline-and-check.md#the-check) |
 | `shoalscan baseline init` | Writes the baseline from a full scan, with an issue and a reason. | [Baseline and check](baseline-and-check.md#the-baseline-file) |
-| `shoalscan baseline prune --test-scope` | Removes the baseline entries whose findings the policy's `[test_scope]` now accepts. | [Test scope](test-scope.md#existing-baseline-entries) |
+| `shoalscan baseline accept --test-code` | Adds baseline entries for findings labelled as test code that a person accepts, recording who, when and the reason "test code". | [Test code labels](test-code.md#accepting-a-finding-in-test-code) |
 | `shoalscan baseline rename-path` | Points baseline entries for a moved file or directory at its new path. | [Baseline and check](baseline-and-check.md#moving-and-renaming-files) |
 | `shoalscan record` | Stores a run's findings and check result in the history database (`--embed` also embeds them). | [Dashboard](dashboard.md#recording-a-run) |
 | `shoalscan triage` | Prints the last scan's findings as a prioritised work list. | [Triage](triage.md) |

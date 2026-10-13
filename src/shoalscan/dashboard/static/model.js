@@ -12,15 +12,13 @@
   var SEVERITIES = ["ERROR", "WARNING", "INFO"];
   var FILE_KINDS = ["skipped", "error", "changed_unscanned", "partial_warning", "partial_warn_only", "excluded_changed"];
   var AGE_BUCKETS = 5;
-  var REVIEW_FILTERS = ["untriaged", "suggested", "open", "false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed", "regression", "baselined", "test_scope"];
+  var REVIEW_FILTERS = ["untriaged", "suggested", "open", "false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed", "regression", "baselined", "test_code"];
   var USER_STATUSES = ["open", "false_positive", "accepted_risk", "wont_fix", "fixed"];
   var REVIEW_LABELS = {
     untriaged: "Untriaged", open: "Open", false_positive: "False positive", accepted_risk: "Accepted risk", wont_fix: "Won't fix",
     fixed: "Fixed (awaiting verification)", verified_fixed: "Verified fixed", regression: "Regression", baselined: "Baselined",
-    suggested: "Untriaged, with a suggestion", test_scope: "Accepted: test-only code"
+    suggested: "Untriaged, with a suggestion", test_code: "Labelled as test code"
   };
-  // Who an automatic test-scope review is recorded under (shoalscan.testscope.AUTO_REVIEWER).
-  var TEST_SCOPE_REVIEWER = "shoalscan (test scope)";
   var HEAT_ROWS_SHOWN = 15;
 
   function oneOf(list) { return function (v) { return list.indexOf(v) >= 0; }; }
@@ -203,9 +201,6 @@
   function reviewBadge(review) {
     var r = review || { status: "open", source: "none" };
     var untriaged = r.status === "open" && r.source === "none";
-    if (r.source === "review" && r.updated_by === TEST_SCOPE_REVIEWER && r.status === "accepted_risk") {
-      return { cls: "review-accepted_risk", label: "Accepted: test-only code (automatic)" };
-    }
     return {
       cls: "review-" + (untriaged ? "untriaged" : r.status),
       label: (untriaged ? "Untriaged" : REVIEW_LABELS[r.status] || r.status) + (r.source === "baseline" ? " (from baseline)" : "")
@@ -223,9 +218,9 @@
     tiles.push(tile("Untriaged blocking", r.untriaged_blocking, "no review and no baseline reason",
       r.untriaged_blocking > 0 ? href("findings", { run: r.run, blocking: "1", review: "untriaged", sort: "priority" }) : null,
       "Show the " + r.untriaged_blocking + " untriaged blocking findings"));
-    if (r.test_scoped > 0) {
-      tiles.push(tile("Accepted: test-only code", r.test_scoped, "in proven test-only code; never blocking",
-        href("findings", { run: r.run, review: "test_scope" }), "Show the " + r.test_scoped + " findings in test-only code"));
+    if (r.test_code > 0) {
+      tiles.push(tile("Labelled as test code", r.test_code, "a triage label; they block like any other finding",
+        href("findings", { run: r.run, review: "test_code" }), "Show the " + r.test_code + " findings labelled as test code"));
     }
     if (r.regressions > 0) {
       tiles.push(tile("Regressions", r.regressions, "fixed, then found again",

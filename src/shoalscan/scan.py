@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from shoalscan import __version__, gitleaks, gitref, hadolint, opengrep, process, testscope, trivy, zizmor
+from shoalscan import __version__, gitleaks, hadolint, opengrep, process, testscope, trivy, zizmor
 from shoalscan.check import CHECK_JSON
 from shoalscan.config import Config
 from shoalscan.errors import ScanError, SetupError
@@ -185,37 +185,21 @@ def run_scan(
             excluded = RuleIdFilter(config.opengrep.exclude_rules)
             stats = opengrep.stage_rules(rules_stage, sources, excluded)
             namespaces = [s.namespace for s in sources]
-            # Test scope: the scope rules run in the same scan, staged apart so that no policy
-            # setting (exclude_rules) can leave them out. Off unless the policy lists a rule.
-            scope_on = bool(config.test_scope.non_blocking)
+            # Test code labels: the scope rules run in the same scan, staged apart so that no policy
+            # setting (exclude_rules) can leave them out. Off unless the policy lists a rule. Labels are
+            # triage help: they never change whether a finding blocks.
+            labels_on = bool(config.test_code.rules)
             scope_ids: set[str] = set()
-            if scope_on:
-                repository = testscope.read_repository(root, config.test_scope.allowed_rustc_wrappers)
-                base = (policy or {}).get("commit")
-                change: dict | None = None
-                if repository.off is None and isinstance(base, str):
-                    # A pull request keeps test scope only when it changes Rust source and nothing else.
-                    try:
-                        merge_base, entries = gitref.changed_entries(root, base)
-                        change = {"merge_base": merge_base, "changed_paths": len(entries)}
-                        repository.off = testscope.change_problem(entries)
-                    except SetupError as exc:
-                        repository.off = (
-                            f"the change could not be compared with {base[:12]}: {exc}. CI must fetch the history "
-                            "back to the merge base (fetch-depth: 0)"
-                        )
-                meta["test_scope"] = {
-                    "non_blocking": list(config.test_scope.non_blocking),
-                    "allowed_rustc_wrappers": list(config.test_scope.allowed_rustc_wrappers),
-                    "off": repository.off,
-                    "change": change,
+            if labels_on:
+                repository = testscope.read_repository(root)
+                meta["test_code"] = {
+                    "rules": list(config.test_code.rules),
+                    # Why the labels may be unreliable (a note for reviewers; never affects blocking).
+                    "unreliable": repository.unreliable,
                     "module_names": len(repository.module_names),
                     "module_names_dropped": repository.names_dropped,
                     "findings": 0,
                 }
-                # Something in the repository could set cfg(test) outside tests: no scope can be proved.
-                scope_on = repository.off is None
-            if scope_on:
                 testscope.stage(rules_stage / testscope.NAMESPACE, scope_rules_file(), repository.module_names)
                 scope_ids = testscope.rule_ids(repository.module_names)
                 namespaces.append(testscope.NAMESPACE)
@@ -239,23 +223,23 @@ def run_scan(
             og_findings, sarif_index = opengrep.normalise(doc, root, config.components)
             # Defence in depth: the staging filter already left these rules out.
             og_findings = [f for f in og_findings if not excluded.matches(f.rule)]
-            if scope_on:
+            if labels_on:
                 errored = frozenset(e["path"] for e in unscanned["errors"]) | frozenset(
                     e["path"] for e in unscanned["skipped"]
                 )
                 scopes = testscope.build(root, scope_results, errored)
-                listed = RuleIdFilter(config.test_scope.non_blocking)
+                listed = RuleIdFilter(config.test_code.rules)
                 spans = opengrep.result_spans(doc, root)
                 by_print = {(k[0], k[1], fp): spans.get(k) for k, fp in sarif_index.items()}
                 og_findings = [
-                    replace(f, test_scope=scopes.scope_for(f.path, *(by_print.get(f.key()[1:]) or (None, None))))
+                    replace(f, test_code=scopes.scope_for(f.path, *(by_print.get(f.key()[1:]) or (None, None))))
                     if testscope.eligible(f.tool, f.rule, f.path, listed)
                     else f
                     for f in og_findings
                 ]
-                scoped = {(f.rule, f.path, f.fingerprint): f.test_scope for f in og_findings if f.test_scope}
-                meta["test_scope"].update(
-                    {"findings": len(scoped), "scopes": scopes.counts(), "unrecognised_spelling": scopes.unrecognised}
+                scoped = {(f.rule, f.path, f.fingerprint): f.test_code for f in og_findings if f.test_code}
+                meta["test_code"].update(
+                    {"findings": len(scoped), "items": scopes.counts(), "unrecognised_spelling": scopes.unrecognised}
                 )
             findings += og_findings
             if not sarif_source.is_file():

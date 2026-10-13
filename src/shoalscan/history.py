@@ -28,7 +28,7 @@ from shoalscan import markdown as md
 from shoalscan.check import SUMMARY_PREFIX
 from shoalscan.errors import SetupError
 from shoalscan.findings import Finding, load_findings
-from shoalscan.testscope import AUTO_REVIEWER, TestScope, scope_from_json
+from shoalscan.testscope import scope_from_json
 
 KINDS = ("pr", "scheduled")
 SEVERITIES = ("ERROR", "WARNING", "INFO")
@@ -299,10 +299,11 @@ MIGRATIONS: tuple[str, ...] = (
     ) WITHOUT ROWID;
     CREATE INDEX finding_suggestions_by_neighbour ON finding_suggestions (neighbour_id);
     """,
-    # 14: findings in proven test-only Rust code ([test_scope]): the scope that proves each, as JSON, and the count.
+    # 14: test code labels ([test_code]): the label of each labelled finding, as JSON, and the count. Labels are
+    # triage help only.
     """
-    ALTER TABLE run_findings ADD COLUMN test_scope TEXT;
-    ALTER TABLE runs ADD COLUMN test_scoped INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE run_findings ADD COLUMN test_code TEXT;
+    ALTER TABLE runs ADD COLUMN test_code INTEGER NOT NULL DEFAULT 0;
     """,
 )
 REVIEW_STATUSES = ("open", "false_positive", "accepted_risk", "wont_fix", "fixed", "verified_fixed", "regression")
@@ -563,21 +564,19 @@ def read_details(path: Path, findings_path: Path, summary: dict, findings: list[
         for e in baselined
     ):
         raise SetupError(f"{path}: baselined lists entries that are not findings in {findings_path}")
-    doc.setdefault("test_scoped", [])
-    test_scoped = doc["test_scoped"]
-    if not isinstance(test_scoped, list) or not all(
+    doc.setdefault("test_code", [])
+    test_code = doc["test_code"]
+    if not isinstance(test_code, list) or not all(
         isinstance(e, dict)
         and isinstance(e.get("key"), list)
         and len(e["key"]) == 4
         and tuple(e["key"]) in keys
         and scope_from_json({k: e.get(k) for k in ("kind", "path", "line")}) is not None
-        for e in test_scoped
+        for e in test_code
     ):
-        raise SetupError(f"{path}: test_scoped lists entries that are not findings in {findings_path}")
-    if len(test_scoped) != (_int(summary, "test_scoped") if "test_scoped" in summary else 0):
-        raise SetupError(f"{path}: test_scoped does not match the check summary")
-    if {tuple(e["key"]) for e in test_scoped} & {tuple(k) for k in doc["new_blocking"]}:
-        raise SetupError(f"{path}: a test-scoped finding is listed as new and blocking")
+        raise SetupError(f"{path}: test_code lists entries that are not findings in {findings_path}")
+    if len(test_code) != (_int(summary, "test_code") if "test_code" in summary else 0):
+        raise SetupError(f"{path}: test_code does not match the check summary")
     for name in (
         "stale",
         "baseline_additions",
@@ -733,7 +732,7 @@ def _row(
         "unscanned_skipped": _int(summary, "unscanned", "skipped"),
         "unscanned_errored": _int(summary, "unscanned", "errored"),
         "changed_unscanned": _int(summary, "unscanned", "changed_and_unscanned"),
-        "test_scoped": _int(summary, "test_scoped") if "test_scoped" in summary else 0,
+        "test_code": _int(summary, "test_code") if "test_code" in summary else 0,
         "policy_ref": _text(policy_ref, 256) if isinstance(policy_ref, str) else None,
         "shoalscan_version": _text(version, 64) if isinstance(version, str) else None,
         "scanners": json.dumps(meta.get("scanners") if isinstance(meta.get("scanners"), dict) else {}, sort_keys=True)[
@@ -852,11 +851,11 @@ def record_run(
         {tuple(k) for k in details["blocking_class"]} if details and details.get("blocking_class") is not None else None
     )
     baselined = {tuple(e["key"]): e for e in details.get("baselined", [])} if details else {}
-    # The check decides what is test-scoped: only its list counts, never a mark in findings.json alone.
-    test_scoped = (
+    # The check decides which findings carry a test code label: only its list counts.
+    test_code = (
         {
             tuple(e["key"]): scope_from_json({k: e[k] for k in ("kind", "path", "line")})
-            for e in details.get("test_scoped", [])
+            for e in details.get("test_code", [])
         }
         if details
         else {}
@@ -916,7 +915,7 @@ def record_run(
             conn.execute(
                 "INSERT INTO run_findings (run_id, key_id, severity, line, component, message_id, is_new, "
                 "new_blocking, blocking_class, "
-                "baseline_issue, baseline_reason, test_scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "baseline_issue, baseline_reason, test_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
                     key_id,
@@ -929,9 +928,7 @@ def record_run(
                     None if blocking_class is None else int(raw_key in blocking_class),
                     _text(baselined[raw_key]["issue"], 500) if raw_key in baselined else None,
                     _text(baselined[raw_key]["reason"], 2000) if raw_key in baselined else None,
-                    json.dumps(test_scoped[raw_key].as_json(), sort_keys=True)[:2000]
-                    if raw_key in test_scoped
-                    else None,
+                    json.dumps(test_code[raw_key].as_json(), sort_keys=True)[:2000] if raw_key in test_code else None,
                 ),
             )
         if details:
@@ -973,8 +970,6 @@ def record_run(
         # Only a scan of the branch's tip moves reviews; a rescan of an earlier commit never does.
         if review_transitions and info.kind == "scheduled" and outcome != "scan_error":
             apply_review_transitions(conn, info, run_id, {k for k in seen}, meta)
-            # Without check details nothing is proved, so every automatic review of a present finding is superseded.
-            apply_test_scope_reviews(conn, info, run_id, seen, test_scoped)
         pruned = prune(conn, repo_id, max_runs, keep_pr_days)
         conn.execute("COMMIT")
     except BaseException:
@@ -1283,58 +1278,6 @@ def apply_review_transitions(
                 _change_review(
                     conn, info.repo, key, "verified_fixed", f"No longer found in {where}.", "shoalscan", run_id, at
                 )
-
-
-def apply_test_scope_reviews(
-    conn: sqlite3.Connection, info: RunInfo, run_id: int, present: set, test_scoped: dict[tuple, TestScope]
-) -> None:
-    """Automatic reviews for findings in test-only code, from the newest scheduled run.
-
-    A test-scoped finding without a review gets one: accepted risk, by
-    "shoalscan (test scope)", saying which scope proves it. Its description
-    follows the scope when that changes. A person's review is never replaced.
-    When a finding with an automatic review is found again outside test scope,
-    the review goes back to open, superseded, so the finding is treated
-    like any other again.
-    """
-    newer = conn.execute(
-        "SELECT 1 FROM runs JOIN repos ON repos.id = runs.repo_id WHERE repos.name = ? AND runs.kind = 'scheduled' "
-        "AND runs.outcome != 'scan_error' AND runs.id != ? AND runs.scanned_at > ? LIMIT 1",
-        (info.repo, run_id, info.scanned_at),
-    ).fetchone()
-    if newer:
-        return
-    at = parse_timestamp(None)
-    where = f"the scheduled run of {info.scanned_at} at {info.commit[:12]}"
-    for key, scope in sorted(test_scoped.items()):
-        current = conn.execute(
-            "SELECT status, description, updated_by FROM finding_reviews WHERE repo_name = ? AND tool = ? AND rule = ? "
-            "AND path = ? AND fingerprint = ?",
-            (info.repo, *key),
-        ).fetchone()
-        description = _text(scope.description(), MAX_DESCRIPTION)
-        if current is None or (
-            current[2] == AUTO_REVIEWER and (current[0], current[1]) != ("accepted_risk", description)
-        ):
-            _change_review(conn, info.repo, key, "accepted_risk", description, AUTO_REVIEWER, run_id, at)
-    rows = conn.execute(
-        "SELECT tool, rule, path, fingerprint FROM finding_reviews WHERE repo_name = ? AND updated_by = ? AND status = "
-        "'accepted_risk'",
-        (info.repo, AUTO_REVIEWER),
-    ).fetchall()
-    for row in rows:
-        key = tuple(row)
-        if key in present and key not in test_scoped:
-            _change_review(
-                conn,
-                info.repo,
-                key,
-                "open",
-                f"No longer in test-only code in {where}; the automatic test-scope review is superseded.",
-                AUTO_REVIEWER,
-                run_id,
-                at,
-            )
 
 
 def delete_config_change(db: Path, change_id: int) -> None:
