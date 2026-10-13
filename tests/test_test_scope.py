@@ -307,6 +307,42 @@ class RepositoryTests(unittest.TestCase):
             write(self.root, path, text + "\n")
         self.assertIsNone(self.repo().off)
 
+    def test_comments_and_prose_are_skipped_only_where_sound(self):
+        fine = {
+            "ci.yml": "env:\n  # RUSTC_WRAPPER makes cargo call sccache; see RUSTFLAGS=--cfg test\n  A: b\n",
+            "build.sh": "#!/bin/sh\n# cargo rustc -- --cfg test\ncargo build\n",
+            "Dockerfile.release": "  # ENV RUSTFLAGS=--cfg test\nFROM rust\n",
+            "Makefile": "# RUSTC_WRAPPER=x\nall:\n",
+            "docs/notes.md": "Set `RUSTFLAGS=--cfg test` to see it.\n",
+            "docs/notes.rst": "cargo rustc -- --cfg test\n",
+        }
+        for path, text in fine.items():
+            write(self.root, path, text)
+        repo = self.repo()
+        self.assertIsNone(repo.off)
+        self.assertIn("docs/notes.md", repo.unchecked)
+        tripping = {
+            # A heredoc's body becomes another file's content: comments are not skipped anywhere in the file.
+            "gen.sh": "cat > .envrc <<EOF\n# RUSTFLAGS=--cfg test\nEOF\n",
+            "workflow.yml": 'run: |\n  cat > x.toml <<\'EOF\'\n  # rustflags = ["--cfg", "test"]\n  EOF\n',
+            # `#` is not a comment in an unknown file type, and a shebang is not a comment line here.
+            "notes.txt": "# RUSTFLAGS=--cfg test\n",
+            "run.sh": "#! RUSTC_WRAPPER=x\n",
+            # A flag variable built at run time could read a skipped file.
+            "flags.sh": "export RUSTFLAGS=$(cat docs/notes.md)\n",
+            "flags2.sh": "RUSTFLAGS=`cat docs/notes.md` cargo build\n",
+            "flags3.yml": "env:\n  RUSTFLAGS: ${{ vars.FLAGS }}\n",
+            "flags4.sh": 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$EXTRA" cargo build\n',
+            "flags5.sh": "RUSTDOCFLAGS=${DOC} cargo doc\n",
+            "flags6.sh": "CARGO_BUILD_RUSTFLAGS+=$X\n",
+        }
+        for path, text in tripping.items():
+            write(self.root, path, text)
+            self.assertTrue((self.repo().off or "").startswith(f"{path}:"), path)
+            (self.root / path).unlink()
+        write(self.root, "ok.sh", 'RUSTFLAGS="-C target-cpu=native" cargo build\n')
+        self.assertIsNone(self.repo().off)
+
     def test_allowed_rustc_wrappers(self):
         for line in (
             "export RUSTC_WRAPPER=sccache",

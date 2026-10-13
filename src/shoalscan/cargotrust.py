@@ -18,7 +18,10 @@ might do, Shoalscan trusts only what it can read and recognise:
 - **`rust-toolchain(.toml)`** may name a channel, components, targets and a
   profile, nothing else.
 - **Every other text file** (scripts, Dockerfiles, Makefiles, CI workflows) is
-  searched for compiler settings: `--cfg` followed by anything but a plain
+  searched for compiler settings, except prose (`.md`, `.rst`, `.adoc`) and
+  whole-line `#` comments in files whose comments are `#` and that have no
+  heredoc. Flags built from a command or a variable turn it off, so a skipped
+  file cannot be read into them. The search looks for `--cfg` followed by anything but a plain
   name other than `test`, `RUSTC_WRAPPER` (unless set to an allowed wrapper,
   alone on its line), `RUSTC_WORKSPACE_WRAPPER`, `CARGO_ENCODED_RUSTFLAGS`,
   `RUSTC=`, `cargo rustc`, a compiler set through `--config`, and `--test` in
@@ -338,12 +341,48 @@ _RUSTFLAGS_TEST = re.compile(r"rustflags", re.IGNORECASE)
 _TEST_FLAG = re.compile(r"--test(?![\w-])")
 
 
+# Prose: documentation, never run by a build. A flag variable built from a command or a variable (below) is
+# what could read one, and that turns test scope off.
+PROSE_SUFFIXES = (".md", ".rst", ".adoc")
+# Files whose line comments are `#`, known from the name or the extension.
+_HASH_COMMENT_SUFFIXES = (".sh", ".bash", ".zsh", ".yml", ".yaml", ".mk", ".toml", ".py", ".ini", ".cfg")
+# RUSTFLAGS and friends given a value that is built at run time: from a command, a variable or a CI expression.
+_DYNAMIC_FLAGS = re.compile(
+    r"\b(?:CARGO_BUILD_RUSTFLAGS|CARGO_TARGET_[A-Za-z0-9_]+_RUSTFLAGS|RUSTFLAGS|RUSTDOCFLAGS)\s*\+?[=:]\s*"
+    r"(?P<value>.*)$"
+)
+_DYNAMIC_VALUE = re.compile(r"\$\(|`|\$\{|\$[A-Za-z_]")
+
+
+def hash_comments(name: str) -> bool:
+    """Is `#` a line comment in this file, by its name or extension?"""
+    lower = name.lower()
+    return (
+        lower.endswith(_HASH_COMMENT_SUFFIXES)
+        or lower.startswith("dockerfile")
+        or lower.endswith(".dockerfile")
+        or lower in ("makefile", "gnumakefile", ".envrc")
+    )
+
+
 def text_problem(text: str, rel: str, allowed_wrappers: tuple[str, ...]) -> str | None:
-    """A line of a non-Rust text file that could compile shipped code with cfg(test), as `path:line: why`."""
+    """A line of a non-Rust text file that could compile shipped code with cfg(test), as `path:line: why`.
+
+    Whole-line `#` comments are skipped in files whose comments are `#` (not a
+    `#!` line), unless the file has a heredoc (`<<`): a heredoc's body becomes
+    another file's content, where `#` may not start a comment.
+    """
     allowed = _allowed_wrapper_line(allowed_wrappers)
+    skip_comments = hash_comments(rel.rsplit("/", 1)[-1]) and "<<" not in text
     for number, line in enumerate(text.split("\n"), 1):
+        stripped = line.lstrip()
+        if skip_comments and stripped.startswith("#") and not stripped.startswith("#!"):
+            continue
         why = None
-        for m in _CFG_FLAG.finditer(line):
+        dynamic = _DYNAMIC_FLAGS.search(line)
+        if dynamic and _DYNAMIC_VALUE.search(dynamic.group("value")):
+            why = "sets compiler flags from a command, a variable or an expression"
+        for m in _CFG_FLAG.finditer(line) if why is None else ():
             ok = _CFG_ALLOWED.match(line, m.start())
             if ok is None or ok.group("name") == "test":
                 why = "passes --cfg with something other than a plain name, or test"
@@ -422,6 +461,9 @@ class CargoCheck:
             self.fail(f"{rel} could not be read")
             return
         if b"\0" in data[:8192]:
+            self.unchecked.append(rel)
+            return
+        if rel.lower().endswith(PROSE_SUFFIXES):
             self.unchecked.append(rel)
             return
         if problem := text_problem(data.decode("utf-8", errors="replace"), rel, self.allowed_wrappers):

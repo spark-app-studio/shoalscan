@@ -241,7 +241,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         if scope.get("unchecked_files"):
             print(
                 f"shoalscan: test scope: {scope['unchecked_files']} files were not searched for compiler settings "
-                f"(binary, too large, or under node_modules or a Cargo target directory), for example "
+                f"(prose, binary, too large, or under node_modules or a Cargo target directory), for example "
                 f"{md.one_line(', '.join(scope['unchecked_examples'][:5]))}",
                 file=sys.stderr,
             )
