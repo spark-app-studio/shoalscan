@@ -148,6 +148,17 @@ class IdTokenTests(unittest.TestCase):
         with self.assertRaises(oidc.OidcError):
             self.verify(sign_jwt(self.claims), nonce="other")
 
+    def test_a_non_ascii_nonce_is_a_refusal_not_a_crash(self):
+        # compare_digest raises TypeError on a str outside ASCII; found by fuzz (id_token_claims).
+        for claimed, expected in (("é", "N"), ("N", "é"), ("\ud800", "N"), ("é", "é")):
+            token = sign_jwt(dict(self.claims, nonce=claimed))
+            with self.subTest(claimed=claimed, expected=expected):
+                if claimed == expected:
+                    self.assertEqual(self.verify(token, nonce=expected)["nonce"], claimed)
+                else:
+                    with self.assertRaises(oidc.OidcError):
+                        self.verify(token, nonce=expected)
+
     def test_admin_claims(self):
         is_admin = oidc.is_admin
         self.assertTrue(is_admin(self.config, {"groups": ["dev", "shoal-admin"]}))

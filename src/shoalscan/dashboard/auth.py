@@ -209,8 +209,14 @@ def same_origin(host: str | None, origin: str | None, referer: str | None, allow
     return False
 
 
+def text_equal(a: str, b: str) -> bool:
+    """Constant-time equality of two strings. Compares their UTF-8 bytes: compare_digest
+    raises TypeError on a str with characters outside ASCII, and a request can carry those."""
+    return hmac.compare_digest(a.encode("utf-8", "surrogatepass"), b.encode("utf-8", "surrogatepass"))
+
+
 def csrf_matches(session: Session, value: str | None) -> bool:
-    return bool(value) and len(value) <= MAX_SECRET_CHARS and hmac.compare_digest(session.csrf, value)
+    return bool(value) and len(value) <= MAX_SECRET_CHARS and text_equal(session.csrf, value)
 
 
 def session_cookie(sid: str, role: str) -> str:

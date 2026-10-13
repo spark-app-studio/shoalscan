@@ -226,7 +226,12 @@ class DashboardServerTests(unittest.TestCase):
     def test_logout_needs_the_csrf_token(self):
         cookie = self.session()
         csrf = self.get_json("/api/session", cookie)["csrf"]
-        for headers in ({"Origin": self.origin}, {"Origin": self.origin, "X-CSRF-Token": "wrong"}):
+        # A token with characters outside ASCII is a refusal, not a crash (compare_digest on str).
+        for headers in (
+            {"Origin": self.origin},
+            {"Origin": self.origin, "X-CSRF-Token": "wrong"},
+            {"Origin": self.origin, "X-CSRF-Token": "é" * len(csrf)},
+        ):
             with self.subTest(headers=headers):
                 self.assertEqual(self.request("POST", "/logout", headers=headers, cookie=cookie)[0], 403)
         # The right CSRF token from another origin is still refused.

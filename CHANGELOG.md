@@ -13,6 +13,7 @@ All notable changes to Shoalscan are recorded here.
 
 - `shoalscan serve` migrates an older history database at start, as `record` does, instead of refusing to start (a 0.2.0 dashboard would not open a 0.1.x database). Every migration first writes a copy of the database as it was, `history.sqlite3.bak-schema<N>` (mode 0600), and says so, so an older Shoalscan can be restored with it ([The dashboard](docs/dashboard.md)).
 - Schema version 15 repairs a history database written by an unreleased 0.3.0 development build (other version-14 columns, and automatic "shoalscan (test scope)" reviews, which it removes and reports).
+- Hardening: the dashboard compares the sign-in nonce, the login state and the CSRF token as UTF-8 bytes, so a value with characters outside ASCII is refused instead of ending the request with an error. Found by the `id_token_claims` fuzz target.
 
 ## 0.2.0 (2026-10-12)
 
