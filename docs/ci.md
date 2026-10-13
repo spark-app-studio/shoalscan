@@ -1,6 +1,6 @@
 # CI
 
-Shoalscan runs as one step in any CI system. On a pull request, pass `--policy-ref` with the base commit's full SHA to both `scan` and `check`, so the configuration, the baseline and the rule directories come from the base branch ([why](baseline-and-check.md#pull-requests-the-policy-comes-from-the-base-branch)). Nothing needs a token or a secret.
+Shoalscan runs as one step in any CI system. On a pull request, pass `--policy-ref` with the base commit's full SHA to both `scan` and `check`, so the configuration, the baseline and the rule directories come from the base branch ([why](baseline-and-check.md#pull-requests-the-policy-comes-from-the-base-branch)). Nothing needs a token or a secret. Check out enough history for git to find the merge base of the base commit and the change (with GitHub Actions' checkout, `fetch-depth: 0`); [test scope](test-scope.md#the-trust-model) is off for a scan whose merge base cannot be found.
 
 ## GitHub Actions
 

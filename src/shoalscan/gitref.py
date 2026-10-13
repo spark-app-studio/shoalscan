@@ -126,6 +126,38 @@ def changed_files(repo: Path, commit: str) -> list[str]:
     return sorted({p for p in names if p})
 
 
+def changed_entries(repo: Path, commit: str) -> tuple[str, list[tuple[str, str, str, str]]]:
+    """Every path the scanned tree changes compared with the merge base of `commit` and HEAD.
+
+    Returns the merge base and (status, old mode, new mode, path) for each
+    change: committed, staged or not, and untracked files (status "?", old
+    mode 000000). Renames are not paired (`--no-renames`), so both sides of a
+    rename are listed. Any git error raises SetupError.
+    """
+    base = merge_base(repo, commit)
+    raw = _git(repo, "diff", "--raw", "--no-renames", "--no-ext-diff", "--no-textconv", "-z", base).stdout
+    parts = raw.decode("utf-8", errors="surrogateescape").split("\0")
+    entries: list[tuple[str, str, str, str]] = []
+    i = 0
+    while i < len(parts) - 1:
+        meta = parts[i]
+        if not meta:
+            i += 1
+            continue
+        fields = meta.lstrip(":").split()
+        if len(fields) < 5:
+            raise SetupError("git diff --raw printed a line Shoalscan does not understand")
+        entries.append((fields[4][:1], fields[0], fields[1], parts[i + 1]))
+        i += 2
+    untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").stdout
+    for path in untracked.decode("utf-8", errors="surrogateescape").split("\0"):
+        if path:
+            full = repo / path
+            mode = "120000" if full.is_symlink() else ("040000" if full.is_dir() else "100644")
+            entries.append(("?", "000000", mode, path))
+    return base, entries
+
+
 def diff_against(repo: Path, commit: str, paths: list[str], max_lines: int = 400) -> str:
     """The working tree's diff against `commit` for `paths`, cut to `max_lines` lines."""
     if not paths:

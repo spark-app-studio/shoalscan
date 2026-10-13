@@ -65,7 +65,7 @@ exclude_rules = ["community.python.lang.security.audit.dangerous-subprocess-use-
 # empty (the default). Secret rules, Gitleaks rules, other scanners' rules and
 # wildcards such as community.* are refused.
 non_blocking = ["community.rust.lang.security.temp-dir", "shoalscan.rust-plain-http-url"]
-# Compiler wrappers that may be set with RUSTC_WRAPPER (bare names only).
+# Compiler wrappers .cargo/config.toml may set as build.rustc-wrapper (bare names only).
 allowed_rustc_wrappers = ["sccache"]
 
 [limits]
@@ -101,7 +101,7 @@ The setting only protects pull requests that run under `--policy-ref`: then the 
 
 ## Test scope
 
-`[test_scope] non_blocking` lists Opengrep rules whose findings Shoalscan accepts automatically when it can prove they are in a Rust item compiled only for tests: a top-level `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) module, function, `impl`, constant or static. Whole files, such as a crate's `tests/`, are not, and neither are test functions (`#[test]`, `#[tokio::test]`, `#[rstest]`) outside such a module. Such findings stay in every output, marked with their scope, and never block. Only Opengrep findings in `.rs` files are eligible. Rules that find secrets, Gitleaks rules, other scanners' rules and wildcards broader than three dotted parts are refused. Test scope is off for the run when the repository has a build script, or anything Shoalscan does not recognise that could change how Rust is compiled: an unknown key in a Cargo file, `--cfg` or a compiler wrapper in a script, a Dockerfile or a CI workflow, and the like. `allowed_rustc_wrappers` names wrappers, such as sccache, that may be set. [Test scope](test-scope.md) explains what counts, what does not, and why it is safe.
+`[test_scope] non_blocking` lists Opengrep rules whose findings Shoalscan accepts automatically when it can prove they are in a Rust item compiled only for tests: a top-level `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) module, function, `impl`, constant or static. Whole files, such as a crate's `tests/`, are not, and neither are test functions (`#[test]`, `#[tokio::test]`, `#[rstest]`) outside such a module. Such findings stay in every output, marked with their scope, and never block. Only Opengrep findings in `.rs` files are eligible. Rules that find secrets, Gitleaks rules, other scanners' rules and wildcards broader than three dotted parts are refused. The base branch and the CI environment are trusted: with `--policy-ref`, a pull request keeps test scope only when it changes nothing but Rust source, and CI must fetch the history back to the merge base. Test scope is also off when the tree has a build script, or a Cargo or toolchain file Shoalscan does not fully understand. `allowed_rustc_wrappers` names wrappers, such as sccache, that `.cargo/config.toml` may set. [Test scope](test-scope.md) explains what counts, what does not, and why it is safe.
 
 How `check` treats partial parses and other unscanned files is described in [The baseline and the check](baseline-and-check.md#the-check).
 

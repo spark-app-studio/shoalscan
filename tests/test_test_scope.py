@@ -19,7 +19,7 @@ from pathlib import Path
 import helpers
 from test_end_to_end import TOOLS, tools_ready
 
-from shoalscan import history, testscope
+from shoalscan import gitref, history, testscope
 from shoalscan.check import compare, details
 from shoalscan.cli import main
 from shoalscan.config import config_from_bytes
@@ -246,6 +246,23 @@ class RepositoryTests(unittest.TestCase):
         write(self.root, "Cargo.toml", '[package]\nname = "demo"\nbuild = false\n')
         self.assertIsNone(self.repo().off)
 
+    def test_special_names_that_fold_to_cargo_names_turn_scope_off(self):
+        # Reviewer repro: APFS folds the long s, so cargo runs `build.rſ` and rustup reads `ruſt-toolchain.toml`.
+        for path in ("build.rſ", "crates/x/ruſt-toolchain.toml", "crates/y/\uff23argo.toml"):
+            write(self.root, path, "fn main() {}\n")
+            self.assertIn("case-insensitive", self.repo().off or "", path)
+            (self.root / path).unlink()
+        self.assertEqual(testscope.special_name("ＢＵＩＬＤ.ｒｓ"), "build.rs")  # full-width letters fold by NFKC
+        self.assertIsNone(self.repo().off)
+
+    def test_target_and_node_modules_are_walked(self):
+        for path in ("target/member/Cargo.toml", "node_modules/pkg/Cargo.toml", "a/target/evil/Cargo.toml"):
+            write(self.root, path, '[package]\nname = "x"\n[replace]\n"a:1.0.0" = { path = "a" }\n')
+            self.assertIn(path, self.repo().off or "", path)
+            (self.root / path).unlink()
+        write(self.root, "target/member/build.rs", "fn main() {}\n")
+        self.assertIn("target/member/build.rs", self.repo().off or "")
+
     def test_special_names_in_another_letter_case_turn_scope_off(self):
         for path in (
             "crates/y/cargo.toml",
@@ -257,7 +274,7 @@ class RepositoryTests(unittest.TestCase):
             "RUST-TOOLCHAIN",
         ):
             write(self.root, path, "\n")
-            self.assertIn("letter case", self.repo().off or "", path)
+            self.assertIn("case-insensitive", self.repo().off or "", path)
             (self.root / path).unlink()
             if path.startswith(".Cargo/"):
                 (self.root / ".Cargo").rmdir()
@@ -275,104 +292,22 @@ class RepositoryTests(unittest.TestCase):
             write(self.root, "rust-toolchain", text)
             self.assertIsNotNone(self.repo().off, text)
 
-    def test_compiler_settings_in_other_text_files(self):
-        off = {
-            "Dockerfile": 'ENV RUSTFLAGS="--cfg test"',
-            "Makefile": "build:\n\tRUSTFLAGS='--cfg=test' cargo build --release",
-            ".github/workflows/ci.yml": 'env:\n  RUSTFLAGS: --cfg "test"',
-            ".envrc": 'export RUSTFLAGS="--cfg $FLAG"',
-            "justfile": "release:\n    cargo rustc --release -- --cfg test",
-            "scripts/a.sh": 'RUSTFLAGS="--cfg test=\\"x\\""',
-            "scripts/b.sh": 'RUSTFLAGS="--cfg \\x74est" cargo build',
-            "scripts/c.sh": "export CARGO_ENCODED_RUSTFLAGS=x",
-            "scripts/d.sh": "RUSTC_WORKSPACE_WRAPPER=./w cargo build",
-            "scripts/e.sh": "RUSTC=./my-rustc cargo build",
-            "scripts/f.sh": "cargo build --config 'build.rustc-wrapper=\"./w\"'",
-            "scripts/g.sh": "export RUSTC_WRAPPER=sccache",
-            "scripts/h.sh": 'RUSTFLAGS="--test" cargo build --release',
-            "scripts/i.sh": "RUSTFLAGS=--cfg",
-        }
-        for path, text in off.items():
-            write(self.root, path, text + "\n")
-            problem = self.repo().off or ""
-            self.assertTrue(problem.startswith(f"{path}:"), f"{path}: {problem!r}")
-            (self.root / path).unlink()
-        self.assertIsNone(self.repo().off)
-        fine = {
-            "Dockerfile": 'ENV RUSTFLAGS="--cfg tokio_unstable"',
-            "Makefile": "test:\n\tcargo test --test integration -- --test-threads=1",
-            "README.md": "Build with `--cfg tokio_unstable`.",
-        }
-        for path, text in fine.items():
-            write(self.root, path, text + "\n")
-        self.assertIsNone(self.repo().off)
-
-    def test_comments_and_prose_are_skipped_only_where_sound(self):
-        fine = {
-            "ci.yml": "env:\n  # RUSTC_WRAPPER makes cargo call sccache; see RUSTFLAGS=--cfg test\n  A: b\n",
-            "build.sh": "#!/bin/sh\n# cargo rustc -- --cfg test\ncargo build\n",
-            "Dockerfile.release": "  # ENV RUSTFLAGS=--cfg test\nFROM rust\n",
-            "Makefile": "# RUSTC_WRAPPER=x\nall:\n",
-            "docs/notes.md": "Set `RUSTFLAGS=--cfg test` to see it.\n",
-            "docs/notes.rst": "cargo rustc -- --cfg test\n",
-        }
-        for path, text in fine.items():
-            write(self.root, path, text)
-        repo = self.repo()
-        self.assertIsNone(repo.off)
-        self.assertIn("docs/notes.md", repo.unchecked)
-        tripping = {
-            # A heredoc's body becomes another file's content: comments are not skipped anywhere in the file.
-            "gen.sh": "cat > .envrc <<EOF\n# RUSTFLAGS=--cfg test\nEOF\n",
-            "workflow.yml": 'run: |\n  cat > x.toml <<\'EOF\'\n  # rustflags = ["--cfg", "test"]\n  EOF\n',
-            # `#` is not a comment in an unknown file type, and a shebang is not a comment line here.
-            "notes.txt": "# RUSTFLAGS=--cfg test\n",
-            "run.sh": "#! RUSTC_WRAPPER=x\n",
-            # A flag variable built at run time could read a skipped file.
-            "flags.sh": "export RUSTFLAGS=$(cat docs/notes.md)\n",
-            "flags2.sh": "RUSTFLAGS=`cat docs/notes.md` cargo build\n",
-            "flags3.yml": "env:\n  RUSTFLAGS: ${{ vars.FLAGS }}\n",
-            "flags4.sh": 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="$EXTRA" cargo build\n',
-            "flags5.sh": "RUSTDOCFLAGS=${DOC} cargo doc\n",
-            "flags6.sh": "CARGO_BUILD_RUSTFLAGS+=$X\n",
-        }
-        for path, text in tripping.items():
-            write(self.root, path, text)
-            self.assertTrue((self.repo().off or "").startswith(f"{path}:"), path)
-            (self.root / path).unlink()
-        write(self.root, "ok.sh", 'RUSTFLAGS="-C target-cpu=native" cargo build\n')
-        self.assertIsNone(self.repo().off)
-
     def test_allowed_rustc_wrappers(self):
-        for line in (
-            "export RUSTC_WRAPPER=sccache",
-            "ENV RUSTC_WRAPPER=sccache",
-            "  RUSTC_WRAPPER: sccache",
-            'RUSTC_WRAPPER="sccache"',
-        ):
-            write(self.root, "ci.sh", line + "\n")
-            self.assertIsNone(testscope.read_repository(self.root, ("sccache",)).off, line)
-            self.assertIsNotNone(testscope.read_repository(self.root).off, line)
-        for line in (
-            "export RUSTC_WRAPPER=sccache-evil",
-            "export RUSTC_WRAPPER=$WRAP",
-            "RUSTC_WRAPPER=sccache cargo build",
-            "export RUSTC_WRAPPER=/tmp/sccache",
-        ):
-            write(self.root, "ci.sh", line + "\n")
-            self.assertIn("ci.sh:1", testscope.read_repository(self.root, ("sccache",)).off or "", line)
-        (self.root / "ci.sh").unlink()
         write(self.root, ".cargo/config.toml", '[build]\nrustc-wrapper = "sccache"\n')
         self.assertIsNone(testscope.read_repository(self.root, ("sccache",)).off)
         self.assertIsNotNone(testscope.read_repository(self.root).off)
+        write(self.root, ".cargo/config.toml", '[build]\nrustc-wrapper = "./sccache"\n')
+        self.assertIsNotNone(testscope.read_repository(self.root, ("sccache",)).off)
 
-    def test_binary_and_large_files_are_logged_as_unchecked(self):
-        (self.root / "blob.bin").write_bytes(b"\0--cfg test")
-        with unittest.mock.patch("shoalscan.cargotrust.MAX_TEXT_BYTES", 10):
-            write(self.root, "big.txt", "x" * 20)
-            repo = self.repo()
-        self.assertIsNone(repo.off)
-        self.assertEqual(repo.unchecked, ["big.txt", "blob.bin"])
+    def test_linkers_are_refused(self):
+        for text in (
+            '[target.x86_64-unknown-linux-gnu]\nlinker = "./ld.sh"\n',
+            '[build]\nrustflags = ["-C", "linker=./ld.sh"]\n',
+            '[build]\nrustflags = "-Clinker=./ld.sh"\n',
+            '[target.x]\nrustflags = ["-C", "linker-flavor=ld"]\n',
+        ):
+            write(self.root, ".cargo/config.toml", text)
+            self.assertIn("link", self.repo().off or "", text)
 
     def test_a_directory_that_cannot_be_listed_turns_scope_off(self):
         locked = self.root / "locked"
@@ -448,7 +383,7 @@ class RepositoryTests(unittest.TestCase):
 
         for good in (["-C", "opt-level=3"], "-Copt-level=3 -L native=/x -lfoo -A warnings -Dunsafe_code", []):
             self.assertIsNone(rustflags_problem(good), good)
-        for bad in (["--cfg", "test"], ["-C"], "-Zfoo", ["--cfg=test"], ["@file"], [1], {"a": 1}):
+        for bad in (["--cfg", "test"], ["-C"], "-Zfoo", ["--cfg=test"], ["@file"], [1], {"a": 1}, "-Clinker=x"):
             self.assertIsNotNone(rustflags_problem(bad), bad)
 
     def test_a_linked_directory_turns_scope_off(self):
@@ -512,6 +447,98 @@ class RepositoryTests(unittest.TestCase):
         for path in ("examples/x.rs", "build.rs", "crate/build.rs", "src/bin/tool.rs", "crate/src/bin/a/main.rs"):
             self.assertTrue(testscope.never_test_scope(path), path)
         self.assertFalse(testscope.never_test_scope("src/binary.rs"))
+
+
+# ---------------------------------------------------------------- what a change touches (git, no Opengrep)
+
+# Review 4's repros, each a file a pull request adds. Every one is outside Rust source, so the change loses
+# test scope however the file's content is spelled.
+CHANGE_REPROS = {
+    "shell quoting": ("ci/build.sh", 'RUSTFLAGS="--cfg te"st cargo build --release\n'),
+    "split flag": ("ci/build2.sh", 'RUSTFLAGS="--c""fg test" \\\n  cargo build\n'),
+    "comment in a string": (
+        "ci/gen.py",
+        'open(".cargo/config.toml", "w").write("""\n# x\n[build]\nrustflags=1\n""")\n',
+    ),
+    "Makefile continuation": ("Makefile", 'all:\n\tRUSTFLAGS="--cfg \\\n test" cargo build\n'),
+    "TOML escape": ("ci/cfg.sh", 'cargo build --config \'build.rustflags=["\\u002D-cfg","test"]\'\n'),
+    "YAML escape": (".github/workflows/r.yml", 'env:\n  RUSTFLAGS: "\\x2D\\x2Dcfg test"\n'),
+    "quoted variable name": ("ci/enc.sh", "export 'CARGO_ENCODED_RUSTFLAGS'=--cfg\x1ftest\n"),
+    "argfile in prose": ("docs/flags.md", "--cfg\ntest\n"),
+    "config in prose": ("docs/cfg.md", '[build]\nrustflags = ["--cfg", "test"]\n'),
+    "NUL byte script": ("ci/nul.sh", "\0RUSTFLAGS='--cfg test' cargo build\n"),
+    "CARGO_HOME config": ("ci/home/config.toml", '[build]\nrustflags = ["--cfg", "test"]\n'),
+    "long-s build script": ("build.rſ", 'fn main() { println!("cargo:rustc-cfg=test"); }\n'),
+    "long-s toolchain": ("ruſt-toolchain.toml", '[toolchain]\npath = "/tmp/evil"\n'),
+    "member under target": ("target/m/src/lib.rs", "pub fn f() {}\n"),
+    "member under node_modules": ("node_modules/m/src/lib.rs", "pub fn f() {}\n"),
+    "build script text": ("src/build.rs", 'fn main() { println!("cargo:rustc-cfg=test"); }\n'),
+    "linker setting": (".cargo/config.toml", '[target.x86_64-unknown-linux-gnu]\nlinker = "./ld.sh"\n'),
+}
+
+
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class ChangeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name).resolve()
+        write(self.root, "Cargo.toml", '[package]\nname = "demo"\n')
+        write(self.root, "src/lib.rs", "#[cfg(test)]\nmod tests {}\n")
+        write(self.root, ".gitignore", "/ignored-output/\n")
+        git(self.root, "init", "-q", "-b", "main")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "base")
+        self.base = git(self.root, "rev-parse", "HEAD").strip()
+        git(self.root, "checkout", "-q", "-b", "change")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def problem(self) -> str | None:
+        return testscope.change_problem(gitref.changed_entries(self.root, self.base)[1])
+
+    def test_a_rust_only_change_keeps_scope(self):
+        write(self.root, "src/lib.rs", "#[cfg(test)]\nmod tests { fn t() {} }\n")
+        write(self.root, "src/new.rs", "pub fn f() {}\n")
+        git(self.root, "add", "src/new.rs")
+        git(self.root, "commit", "-q", "-am", "rust")
+        write(self.root, "src/untracked.rs", "pub fn g() {}\n")
+        write(self.root, "ignored-output/x.txt", "build output\n")  # ignored: produced by the trusted CI
+        self.assertIsNone(self.problem())
+
+    def test_every_repro_loses_scope(self):
+        for name, (path, text) in CHANGE_REPROS.items():
+            with self.subTest(name):
+                (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+                (self.root / path).write_text(text, encoding="utf-8")
+                problem = self.problem()
+                self.assertIn(path, problem or "", name)
+                (self.root / path).unlink()
+
+    def test_committed_staged_and_untracked_changes_all_count(self):
+        write(self.root, "ci.yml", "a: b\n")
+        self.assertIn("ci.yml", self.problem() or "")  # untracked
+        git(self.root, "add", "ci.yml")
+        self.assertIn("ci.yml", self.problem() or "")  # staged
+        git(self.root, "commit", "-q", "-m", "yaml")
+        self.assertIn("ci.yml", self.problem() or "")  # committed
+
+    def test_deletions_renames_links_and_modes_lose_scope(self):
+        git(self.root, "mv", "src/lib.rs", "src/moved.rs")
+        git(self.root, "commit", "-q", "-m", "rename")
+        self.assertIn("deletes src/lib.rs", self.problem() or "")  # both sides of a rename count
+        git(self.root, "reset", "-q", "--hard", self.base)
+        os.chmod(self.root / "src/lib.rs", 0o755)
+        self.assertIn("mode", self.problem() or "")
+        os.chmod(self.root / "src/lib.rs", 0o644)
+        os.symlink("lib.rs", self.root / "src/link.rs")
+        self.assertIn("src/link.rs", self.problem() or "")
+
+    def test_an_unresolvable_base_loses_scope(self):
+        git(self.root, "checkout", "-q", "--orphan", "unrelated")
+        git(self.root, "commit", "-q", "-m", "unrelated history")
+        with self.assertRaises(SetupError):
+            gitref.changed_entries(self.root, self.base)
 
 
 # ---------------------------------------------------------------- the scope rules, with Opengrep
@@ -711,7 +738,7 @@ class ScopeRuleTests(unittest.TestCase):
         self.assertIn("shoalscan/test_scope", sarif)
         self.assertNotIn("test-scope.rust-cfg-test-item", doc["rule_ids"])
 
-    def test_build_scripts_and_compiler_settings_turn_scope_off(self):
+    def test_build_scripts_and_linkers_turn_scope_off(self):
         make_crate(self.repo, None)
         write(self.repo, "BUILD.RS", 'fn main() {\n    println!("cargo:rustc\\x2dcfg=test");\n}\n')
         code, _, err = cli("scan", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out))
@@ -721,9 +748,9 @@ class ScopeRuleTests(unittest.TestCase):
         self.assertIn("BUILD.RS", doc["test_scope"]["off"])
         self.assertFalse([f for f in doc["findings"] if "test_scope" in f])
         (self.repo / "BUILD.RS").unlink()
-        write(self.repo, "Dockerfile", 'FROM rust\nENV RUSTFLAGS="--cfg test"\nRUN cargo build --release\n')
+        write(self.repo, ".cargo/config.toml", '[target.x86_64-unknown-linux-gnu]\nlinker = "./ld.sh"\n')
         doc = self.scan()
-        self.assertTrue(doc["test_scope"]["off"].startswith("Dockerfile:2 "))
+        self.assertIn(".cargo/config.toml", doc["test_scope"]["off"])
         self.assertFalse([f for f in doc["findings"] if "test_scope" in f])
 
     def test_test_functions_are_not_scope(self):
@@ -884,34 +911,66 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("a real secret in test code is still a leaked secret", err)
 
-    def test_the_policy_comes_from_the_base(self):
+    def base_with_baseline(self) -> str:
         write(self.repo, "baseline.toml", "version = 1\n")
         git(self.repo, "add", "baseline.toml")
         git(self.repo, "commit", "-q", "-m", "baseline")
-        base = git(self.repo, "rev-parse", "HEAD").strip()
-        path = self.repo / ".shoalscan.toml"
-        without = path.read_text(encoding="utf-8").split("[test_scope]")[0]
-        # The change drops [test_scope] from its own copy: the base's policy still applies.
+        return git(self.repo, "rev-parse", "HEAD").strip()
+
+    def scoped(self, doc: dict) -> int:
+        return sum(1 for f in doc["findings"] if "test_scope" in f)
+
+    def test_a_rust_only_pull_request_keeps_scope(self):
+        base = self.base_with_baseline()
         git(self.repo, "checkout", "-q", "-b", "change")
-        path.write_text(without, encoding="utf-8")
+        lib = self.repo / "src/lib.rs"
+        lib.write_text(lib.read_text(encoding="utf-8") + "\npub fn more() {}\n", encoding="utf-8")
+        git(self.repo, "commit", "-q", "-am", "rust only")
+        doc = self.scan("--policy-ref", base)
+        self.assertIsNone(doc["test_scope"]["off"])
+        self.assertEqual(doc["test_scope"]["change"]["changed_paths"], 1)
+        self.assertEqual(self.scoped(doc), 2)
+        _, summary, _ = self.check("--policy-ref", base)
+        self.assertEqual(summary["test_scoped"], 2)
+
+    def test_a_pull_request_that_touches_anything_else_loses_scope(self):
+        base = self.base_with_baseline()
+        git(self.repo, "checkout", "-q", "-b", "change")
+        write(self.repo, ".github/workflows/ci.yml", "env:\n  RUSTFLAGS: --cfg test\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "a workflow")
+        code, _, err = cli(
+            "scan", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out), "--policy-ref", base
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("TEST SCOPE IS OFF for this scan: the change touches .github/workflows/ci.yml", err)
+        doc = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(self.scoped(doc), 0)
+        # A change to the policy itself is such a change too: the base's [test_scope] cannot be dropped
+        # or turned on by the pull request, and it does not apply to one that touches the policy file.
+        git(self.repo, "checkout", "-q", "-b", "drop-policy", base)
+        path = self.repo / ".shoalscan.toml"
+        path.write_text(path.read_text(encoding="utf-8").split("[test_scope]")[0], encoding="utf-8")
         git(self.repo, "commit", "-q", "-am", "drop the policy")
         doc = self.scan("--policy-ref", base)
-        self.assertEqual(sum(1 for f in doc["findings"] if "test_scope" in f), 2)
-        _, summary, out = self.check("--policy-ref", base)
-        self.assertEqual(summary["test_scoped"], 2)
-        self.assertIn("POLICY CHANGES", out)
-        # The other way round: a change cannot turn the policy on for itself.
-        git(self.repo, "checkout", "-q", "-b", "base-without", base)
-        path.write_text(without, encoding="utf-8")
-        git(self.repo, "commit", "-q", "-am", "a base without the policy")
-        base2 = git(self.repo, "rev-parse", "HEAD").strip()
-        git(self.repo, "checkout", "-q", "-b", "turn-on")
-        git(self.repo, "checkout", "-q", base, "--", ".shoalscan.toml")
-        git(self.repo, "commit", "-q", "-m", "turn it on")
-        doc = self.scan("--policy-ref", base2)
-        self.assertFalse([f for f in doc["findings"] if "test_scope" in f])
-        _, summary, _ = self.check("--policy-ref", base2)
-        self.assertEqual(summary["test_scoped"], 0)
+        self.assertIn(".shoalscan.toml", doc["test_scope"]["off"])
+        self.assertEqual(self.scoped(doc), 0)
+
+    def test_an_unresolvable_base_loses_scope(self):
+        # A base with no history in common with the scanned tree (as in a shallow clone without the merge base).
+        self.base_with_baseline()
+        git(self.repo, "checkout", "-q", "--orphan", "other-base")
+        git(self.repo, "commit", "-q", "-m", "unrelated base")
+        base = git(self.repo, "rev-parse", "HEAD").strip()
+        git(self.repo, "checkout", "-q", "main")
+        code, _, err = cli(
+            "scan", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out), "--policy-ref", base
+        )
+        self.assertEqual(code, 0, err)
+        self.assertIn("could not be compared", err)
+        self.assertIn("fetch-depth", err)
+        doc = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(self.scoped(doc), 0)
 
     def test_moving_out_of_test_scope_blocks_again_and_supersedes_the_review(self):
         self.scan()

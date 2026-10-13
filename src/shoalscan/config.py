@@ -72,7 +72,7 @@ class TestScopeSettings:
 
     # Exact Opengrep rule ids, or `prefix.*`, as in opengrep.exclude_rules. Empty: the feature is off.
     non_blocking: tuple[str, ...] = ()
-    # Compiler wrappers (such as sccache) that may be set with RUSTC_WRAPPER, each a bare program name.
+    # Compiler wrappers (such as sccache) that .cargo/config.toml may set as build.rustc-wrapper; bare names.
     allowed_rustc_wrappers: tuple[str, ...] = ()
 
 

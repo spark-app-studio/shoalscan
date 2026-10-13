@@ -226,8 +226,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
         bar = "!" * 78
         if scope.get("off"):
             print(
-                f"{bar}\nshoalscan: WARNING: TEST SCOPE IS OFF for this repository: {md.one_line(scope['off'])}.\n"
-                "Code may be compiled with cfg(test) outside tests, so no finding is accepted as test-only.\n"
+                f"{bar}\nshoalscan: WARNING: TEST SCOPE IS OFF for this scan: {md.one_line(scope['off'])}.\n"
+                "No finding is accepted as test-only code in this scan.\n"
                 f"{bar}",
                 file=sys.stderr,
             )
@@ -236,13 +236,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 f"{bar}\nshoalscan: WARNING: {scope['module_names_dropped']} #[cfg(test)] module names were left "
                 f"out of the test-scope rules (the limit is {scope['module_names']}); findings in those modules are "
                 f"not accepted as test-only.\n{bar}",
-                file=sys.stderr,
-            )
-        if scope.get("unchecked_files"):
-            print(
-                f"shoalscan: test scope: {scope['unchecked_files']} files were not searched for compiler settings "
-                f"(prose, binary, too large, or under node_modules or a Cargo target directory), for example "
-                f"{md.one_line(', '.join(scope['unchecked_examples'][:5]))}",
                 file=sys.stderr,
             )
     counts = result.meta["counts"]

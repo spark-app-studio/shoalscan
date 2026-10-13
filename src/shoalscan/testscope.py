@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -209,8 +210,7 @@ class Repository:
 
     module_names: list[str] = field(default_factory=list)
     names_dropped: int = 0
-    off: str | None = None  # why test scope is off for the whole repository
-    unchecked: list[str] = field(default_factory=list)  # files the text search skipped (binary, too large)
+    off: str | None = None  # why test scope is off for the whole tree
 
 
 def _inside(root: Path, target: Path) -> str | None:
@@ -220,18 +220,33 @@ def _inside(root: Path, target: Path) -> str | None:
         return None
 
 
-# Names Cargo or rustup read, compared in any letter case: a case-insensitive file system uses any spelling.
+# Names Cargo and rustup read. A file system may treat other spellings as the same name: in another letter
+# case, with a character that folds to these (the long s, `ſ`, folds to `s`), or in another Unicode form.
+_SPECIAL_NAMES = ("Cargo.toml", "build.rs", "rust-toolchain", "rust-toolchain.toml")
 _CARGO_DIR = ".cargo"
-_SPECIAL_FILES = {"cargo.toml": "Cargo.toml", "build.rs": "build.rs"}
-_CONFIG_FILES = {"config": "config", "config.toml": "config.toml"}
-_TOOLCHAIN_FILES = {"rust-toolchain": "rust-toolchain", "rust-toolchain.toml": "rust-toolchain.toml"}
-# Directories whose files the text search does not read; they are logged as unchecked.
-_SKIPPED_DIRS = ("node_modules",)
+_CONFIG_FILES = ("config", "config.toml")
+
+
+def fold(name: str) -> str:
+    """A name as a case-insensitive, normalising file system may compare it."""
+    return unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", name).casefold())
+
+
+_FOLDED_SPECIAL = {fold(n): n for n in _SPECIAL_NAMES}
+_FOLDED_CARGO_DIR = fold(_CARGO_DIR)
+_FOLDED_CONFIG = {fold(n): n for n in _CONFIG_FILES}
+
+
+def special_name(name: str, in_cargo_dir: bool = False) -> str | None:
+    """The special name this file name could stand for, or None."""
+    folded = fold(name)
+    return _FOLDED_SPECIAL.get(folded) or (_FOLDED_CONFIG.get(folded) if in_cargo_dir else None)
 
 
 def read_repository(root: Path, allowed_wrappers: tuple[str, ...] = ()) -> Repository:
-    """Read every file under `root` (only `.git` is skipped): Rust files for module names, and everything that
-    could change how Rust is compiled. Anything Shoalscan cannot read or does not recognise turns test scope off."""
+    """Read the whole tree under `root` (only `.git` is skipped, `target/` and `node_modules/` included): Rust
+    files for module names, and the Cargo and toolchain files that could change how Rust is compiled. Anything
+    Shoalscan cannot read or does not recognise turns test scope off."""
     repo = Repository()
     root = root.resolve()
     cargo = CargoCheck(root, allowed_wrappers)
@@ -252,59 +267,75 @@ def read_repository(root: Path, allowed_wrappers: tuple[str, ...] = ()) -> Repos
                 # A linked directory may hold build settings or code Shoalscan does not walk.
                 cargo.fail(f"{rel_dir} is a symbolic link to a directory")
                 continue
-            if d.lower() == _CARGO_DIR and d != _CARGO_DIR:
-                cargo.fail(f"{rel_dir} is a Cargo configuration directory in another letter case")
-            if d in _SKIPPED_DIRS or (d == "target" and "Cargo.toml" in filenames):
-                repo.unchecked.append(f"{rel_dir}/")
-                continue
+            if fold(d) == _FOLDED_CARGO_DIR and d != _CARGO_DIR:
+                cargo.fail(f"{rel_dir} could stand for {_CARGO_DIR} on a case-insensitive file system")
             keep.append(d)
         dirnames[:] = keep
-        in_cargo_dir = here.name.lower() == _CARGO_DIR
+        in_cargo_dir = fold(here.name) == _FOLDED_CARGO_DIR
         for name in filenames:
             full = here / name
             rel = _inside(root, full) or name
-            lower = name.lower()
-            special = (
-                _SPECIAL_FILES.get(lower) or (in_cargo_dir and _CONFIG_FILES.get(lower)) or _TOOLCHAIN_FILES.get(lower)
-            )
+            special = special_name(name, in_cargo_dir)
             if special and (name != special or (in_cargo_dir and here.name != _CARGO_DIR)):
-                cargo.fail(f"{rel} is named like {special} in another letter case")
+                cargo.fail(f"{rel} could stand for {special} on a case-insensitive file system")
                 continue
             if full.is_symlink():
-                # A link into the repository is read where it points; anything else is unknown.
-                if special or lower.endswith(".rs") or _inside(root, full.resolve()) is None:
+                # A link into the tree is read where it points; anything else is unknown.
+                if special or name.endswith(".rs") or _inside(root, full.resolve()) is None:
                     cargo.fail(f"{rel} is a symbolic link")
                 continue
             if name == "build.rs":
                 cargo.fail(f"{rel} is a build script; test scope is off wherever a build script runs")
-                continue
-            if name == "Cargo.toml":
+            elif name == "Cargo.toml":
                 cargo.add_manifest(full, rel)
-                continue
-            if in_cargo_dir and name in _CONFIG_FILES:
+            elif in_cargo_dir and name in _CONFIG_FILES:
                 cargo.add_config(full, rel)
-                continue
-            if name in _TOOLCHAIN_FILES:
+            elif name in ("rust-toolchain", "rust-toolchain.toml"):
                 cargo.add_toolchain(full, rel)
-                continue
-            if not lower.endswith(".rs"):
-                cargo.add_text(full, rel)
-                continue
-            try:
-                if full.stat().st_size > MAX_FILE_BYTES:
-                    cargo.fail(f"{rel} is larger than {MAX_FILE_BYTES} bytes")
+            elif name.endswith(".rs"):
+                try:
+                    if full.stat().st_size > MAX_FILE_BYTES:
+                        continue  # its module names are not proposed: no scope there
+                    text = full.read_bytes().decode("utf-8", errors="replace")
+                except OSError:
+                    cargo.fail(f"{rel} could not be read")
                     continue
-                text = full.read_bytes().decode("utf-8", errors="replace")
-            except OSError:
-                cargo.fail(f"{rel} could not be read")
-                continue
-            names |= cfg_test_module_names(strip_code(text))
+                names |= cfg_test_module_names(strip_code(text))
     repo.off = cargo.result()
-    repo.unchecked = sorted(repo.unchecked + cargo.unchecked)
     ordered = sorted(names)
     repo.module_names = ordered[:MAX_MODULE_NAMES]
     repo.names_dropped = max(0, len(ordered) - MAX_MODULE_NAMES)
     return repo
+
+
+# ---------------------------------------------------------------- what a change touches
+
+_UNTRUSTED_DIRS = ("target", "node_modules")
+
+
+def change_problem(entries: list[tuple[str, str, str, str]]) -> str | None:
+    """Why a change keeps test scope off, or None when it changes Rust source only.
+
+    `entries` are (status, old mode, new mode, path) from `gitref.changed_entries`.
+    Every changed path must be a regular `.rs` file, added or modified, that is
+    not a special name in any spelling and not under `target/` or `node_modules/`.
+    """
+    for status, old_mode, new_mode, path in sorted(entries, key=lambda e: e[3]):
+        parts = path.split("/")
+        name = parts[-1]
+        if not name.endswith(".rs"):
+            return f"the change touches {path}, which is not Rust source"
+        if special_name(name) or any(special_name(p) or fold(p) == _FOLDED_CARGO_DIR for p in parts[:-1]):
+            return f"the change touches {path}, which Cargo or rustup reads"
+        if any(fold(p) in _UNTRUSTED_DIRS for p in parts[:-1]):
+            return f"the change touches {path}, under a build or package directory"
+        if status == "D":
+            return f"the change deletes {path}"
+        if status not in ("A", "M", "?"):
+            return f"the change {status!r} on {path} is not an addition or a modification"
+        if new_mode not in ("100644", "100755") or (old_mode not in ("000000", new_mode)):
+            return f"the change gives {path} the mode {new_mode} (a link, a submodule or a mode change)"
+    return None
 
 
 # ---------------------------------------------------------------- the rule pack

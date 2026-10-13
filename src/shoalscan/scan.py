@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from shoalscan import __version__, gitleaks, hadolint, opengrep, process, testscope, trivy, zizmor
+from shoalscan import __version__, gitleaks, gitref, hadolint, opengrep, process, testscope, trivy, zizmor
 from shoalscan.check import CHECK_JSON
 from shoalscan.config import Config
 from shoalscan.errors import ScanError, SetupError
@@ -191,14 +191,26 @@ def run_scan(
             scope_ids: set[str] = set()
             if scope_on:
                 repository = testscope.read_repository(root, config.test_scope.allowed_rustc_wrappers)
+                base = (policy or {}).get("commit")
+                change: dict | None = None
+                if repository.off is None and isinstance(base, str):
+                    # A pull request keeps test scope only when it changes Rust source and nothing else.
+                    try:
+                        merge_base, entries = gitref.changed_entries(root, base)
+                        change = {"merge_base": merge_base, "changed_paths": len(entries)}
+                        repository.off = testscope.change_problem(entries)
+                    except SetupError as exc:
+                        repository.off = (
+                            f"the change could not be compared with {base[:12]}: {exc}. CI must fetch the history "
+                            "back to the merge base (fetch-depth: 0)"
+                        )
                 meta["test_scope"] = {
                     "non_blocking": list(config.test_scope.non_blocking),
                     "allowed_rustc_wrappers": list(config.test_scope.allowed_rustc_wrappers),
                     "off": repository.off,
+                    "change": change,
                     "module_names": len(repository.module_names),
                     "module_names_dropped": repository.names_dropped,
-                    "unchecked_files": len(repository.unchecked),
-                    "unchecked_examples": repository.unchecked[:20],
                     "findings": 0,
                 }
                 # Something in the repository could set cfg(test) outside tests: no scope can be proved.

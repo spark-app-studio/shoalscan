@@ -55,34 +55,41 @@ Anything Shoalscan cannot prove stays a normal finding. In particular:
 - **`examples/`, `build.rs` and `src/bin/`**, whatever their attributes.
 - **A file Opengrep reported an error for** (a partial parse, a timeout): a parser that recovered from an error could place an item's end wrongly.
 
-### When the build could set `cfg(test)` itself
+## The trust model
 
-`cfg(test)` means "compiled for tests" only if nothing else sets it, and a build script, a compiler wrapper, compiler flags, a toolchain override or a patched dependency can. Shoalscan does not try to guess what such things do. It accepts only what it can read and recognise, and otherwise test scope is **off for the whole repository**: the scan prints a loud warning and records the reason, with the file (and line, for a text file), in `findings.json` under `test_scope.off`. Shoalscan reads every file but `.git`:
+`cfg(test)` means "compiled for tests" only if nothing else sets it, and a build script, a compiler or linker wrapper, compiler flags, a toolchain override, a CI step or a patched dependency can. Shoalscan does not try to read every script, workflow and configuration a build might use; that cannot be done completely. Instead it trusts two things and checks the rest:
 
-- **Build scripts.** Any `build.rs`, and any Cargo.toml with `build = ...` (other than `false`), turns test scope off. There is no way to trust one: a build script can read, include or run anything, so no review of one file vouches for what it does.
-- **Every `Cargo.toml`**, read as TOML. It turns test scope off when it does not parse, has `[replace]` or `cargo-features`, has a `[patch]` entry that is not a path inside the repository (a patched crate in the repository is held to these same rules), has `rustflags` in a profile, or has any key Shoalscan does not know (the package, target, dependency, feature, workspace, profile, badge and lint settings Cargo documents are known).
-- **Every `.cargo/config` and `.cargo/config.toml`**, read as TOML. Only `[build]` `target`, `target-dir`, `jobs`, `incremental` and `rustflags`, `[unstable]` `build-std` and `build-std-features`, and `[target.<triple>]` `rustflags`, `linker` and `runner` are accepted, plus `[build] rustc-wrapper` set to a wrapper the policy allows. A compiler (`build.rustc`), another wrapper, `[patch]`, `[source]`, `paths`, `[env]` or anything else turns test scope off. Each `rustflags` entry must be `-C`, `-L` or `-l` with its value, or a lint level (`-A`, `-W`, `-D`, `-F`); `--cfg`, `-Z`, `--crate-attr`, `@file` and anything else turn it off.
-- **`rust-toolchain` and `rust-toolchain.toml`** may name a channel, `components`, `targets` and a `profile`; a `path` or anything else turns it off.
-- **Every other text file**, Rust source excepted: shell scripts, Dockerfiles, Makefiles, justfiles, `.envrc`, CI workflows and the rest. A line turns test scope off when it has `--cfg` followed by anything but white space and a plain name other than `test` (so `--cfg tokio_unstable` is fine, and `--cfg test`, `--cfg=x`, `--cfg "x"`, `--cfg $X` and `--cfg test="x"` are not), `RUSTC_WORKSPACE_WRAPPER`, `CARGO_ENCODED_RUSTFLAGS`, `RUSTC=`, `cargo rustc`, a compiler or wrapper given to Cargo with `--config`, `--test` together with `rustflags`, `RUSTC_WRAPPER` other than an allowed one, `RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS`, `CARGO_TARGET_<triple>_RUSTFLAGS` or `RUSTDOCFLAGS` set to a value with `$(`, a backtick, `${` or `$NAME` (a value built at run time, which could read any file, CI expressions such as `${{ vars.FLAGS }}` included).
+- **The base branch is trusted.** It is code that was already reviewed: its scripts, CI workflows, Dockerfiles and documentation are what you decided to build with.
+- **The CI environment is trusted:** the runner, its environment variables (`RUSTFLAGS`, `RUSTC_WRAPPER` and the like set outside the repository), the Cargo home and anything set from outside the checkout. Building release artifacts without `--cfg test` is the operator's responsibility.
+- **A pull request keeps test scope only when it changes nothing but Rust source.** With `--policy-ref`, Shoalscan lists every path the scanned tree changes compared with the merge base of the policy ref and HEAD: committed, staged and unstaged changes and untracked files (not files `.gitignore` ignores), with renames listed as a deletion and an addition (`--no-renames`). Test scope is off for the scan when any changed path:
+  - is not a `.rs` file;
+  - is, or lies under, a name Cargo or rustup reads (`build.rs`, `Cargo.toml`, `.cargo`, `rust-toolchain`, `rust-toolchain.toml`), in any spelling (see below);
+  - is deleted, is a symbolic link or a submodule, or has its mode changed;
+  - lies under a `target/` or `node_modules/` directory.
 
-  Three kinds of text are not searched, because a build cannot run them as they are:
+  The warning names the first such path. So a change that touches a workflow, a script, a Dockerfile, a document or the Shoalscan policy itself loses test scope for that run, whatever it contains, and is reviewed like any other.
+- **The base must be found.** If git cannot find the merge base (a shallow clone without it, an unrelated history) or fails, test scope is off for the scan, with a loud reason. In CI, fetch the history back to the merge base: with GitHub Actions' checkout, `fetch-depth: 0`, as `examples/github-actions/shoalscan.yml` does.
+- **Without a policy ref** (a scheduled scan of the default branch, or a local scan of a tree you trust), there is no change to check, and the whole tree is trusted, subject to the checks below.
 
-  - **Prose:** `.md`, `.rst` and `.adoc` files. The scan lists them as unchecked. A flag variable built from a command or a variable turns test scope off (above), so `RUSTFLAGS=$(cat notes.md)` cannot read one in. A script that passes a prose file's content to Cargo some other way, such as `cargo build $(cat notes.md)`, is not caught: Dockerfiles and scripts use command substitution on `cargo` lines too often (`--target "$(uname -m)-..."`) for that to be a useful signal.
-  - **Whole-line comments** in files whose comments are `#`, known from the name or extension: shell scripts (`.sh`, `.bash`, `.zsh`), YAML, Dockerfiles, Makefiles (`Makefile`, `.mk`), TOML, Python, `.ini` and `.cfg` files, and `.envrc`. A line is skipped only when its first character after white space is `#` and it is not a `#!` line. A file with a heredoc (`<<`) keeps all its comments in the search, because a heredoc's body becomes another file's content, where `#` may not start a comment.
-  - **Binary and large files:** those with a NUL byte in their first 8 KiB or larger than 2 MiB, and `node_modules` and Cargo `target` directories. The scan lists them as unchecked.
-- **Names in another letter case.** Cargo and rustup look for `Cargo.toml`, `build.rs`, `.cargo/config(.toml)` and `rust-toolchain(.toml)`, and a case-insensitive file system (the default on macOS and Windows) finds `BUILD.RS` or `.Cargo/Config.Toml` too. Any such name in another letter case turns test scope off.
-- **Symbolic links** to a directory, a Rust file, one of the names above, or anything outside the repository, and any directory Shoalscan cannot list, turn it off.
+### Checks on the whole tree
 
-To use a compiler cache such as sccache, allow it by name in the policy (read from the base branch under `--policy-ref`):
+These still run on every scan, so that the base itself cannot hold what would set `cfg(test)` where Shoalscan can see it. Shoalscan walks the whole tree, `target/` and `node_modules/` included (only `.git` is skipped), and turns test scope off for the whole scan when it finds:
+
+- **A build script.** Any `build.rs`, and any Cargo.toml with `build = ...` (other than `false`). There is no way to trust one: a build script can read, include or run anything.
+- **A `Cargo.toml` it does not fully understand**, read as TOML: one that does not parse, has `[replace]` or `cargo-features`, a `[patch]` entry that is not a path inside the repository (a patched crate in the repository is held to these same rules), `rustflags` in a profile, or any key Shoalscan does not know (the package, target, dependency, feature, workspace, profile, badge and lint settings Cargo documents are known).
+- **A `.cargo/config` or `.cargo/config.toml` outside its allowlist**, read as TOML. Only `[build]` `target`, `target-dir`, `jobs`, `incremental` and `rustflags`, `[unstable]` `build-std` and `build-std-features`, and `[target.<triple>]` `rustflags` and `runner` are accepted, plus `[build] rustc-wrapper` set to a wrapper the policy allows. A compiler (`build.rustc`), a linker (`[target] linker`), another wrapper, `[patch]`, `[source]`, `paths`, `[env]` or anything else turns test scope off. Each `rustflags` entry must be `-C` (not a linker setting such as `-C linker=` or `-Clinker-flavor=`), `-L` or `-l` with its value, or a lint level (`-A`, `-W`, `-D`, `-F`); `--cfg`, `-Z`, `--crate-attr`, `@file` and anything else turn it off.
+- **A `rust-toolchain` or `rust-toolchain.toml`** that names anything but a channel, `components`, `targets` and a `profile` (a `path`, for one).
+- **A name that could stand for one of these on a case-insensitive file system** (the default on macOS and Windows). Shoalscan compares names after Unicode normalisation (NFKC) and full case folding, so `BUILD.RS`, `.Cargo/Config.Toml`, `build.rſ` (a long s, which folds to `s`) and full-width letters all count as the special name, and any spelling other than the exact one turns test scope off.
+- **Symbolic links** to a directory, a Rust file, one of the names above or anything outside the tree, and any directory that cannot be listed.
+
+To use a compiler cache such as sccache from `.cargo/config.toml`, allow it by name in the policy (read from the base branch under `--policy-ref`):
 
 ```toml
 [test_scope]
 allowed_rustc_wrappers = ["sccache"]
 ```
 
-Then a line that sets `RUSTC_WRAPPER` to exactly `sccache`, and nothing else (`export RUSTC_WRAPPER=sccache`, `ENV RUSTC_WRAPPER=sccache`, `RUSTC_WRAPPER: sccache`), is accepted, and so is `rustc-wrapper = "sccache"` in `.cargo/config.toml`. Any other value, a variable, a path, or more on the line turns test scope off.
-
-What Shoalscan cannot see is anything set from outside the checkout: the CI runner's environment (`RUSTFLAGS`, `RUSTC_WRAPPER` and the like set in a runner's configuration or by the system), a `.cargo/config.toml` in a parent directory or the Cargo home, a build script in a dependency from a registry, and commands typed or run by tools outside the repository. Building release artifacts without `--cfg test` there is the operator's responsibility.
+Then `[build] rustc-wrapper = "sccache"` is accepted. A wrapper set in the CI environment (`RUSTC_WRAPPER`) is part of the trusted environment and is not checked.
 
 ## How Shoalscan proves it
 
@@ -116,7 +123,8 @@ shoalscan baseline prune --test-scope --out "$OUT"
 
 - Opengrep sees only top-level attributed items, so test code nested in ordinary modules is not recognised; whole files and test functions are never test scope.
 - A repository with a build script gets no test scope at all.
-- Settings from outside the checkout (the CI runner's environment, a parent directory's Cargo configuration, a dependency's build script) are not seen.
-- With the feature on, a scan takes a little longer: the pack adds a few rules to the Rust files, and Shoalscan reads every file of the repository once.
+- A pull request that changes anything but Rust source gets no test scope for that run.
+- The base branch and the CI environment are trusted, not checked line by line: settings from outside the checkout (the runner's environment, a parent directory's Cargo configuration, a dependency's build script) and the base's own scripts and workflows are not searched.
+- With the feature on, a scan takes a little longer: the pack adds a few rules to the Rust files, and Shoalscan walks the whole tree once.
 
 **See also:** [Configuration](configuration.md), [The baseline and the check](baseline-and-check.md), [Security model](security-model.md).
