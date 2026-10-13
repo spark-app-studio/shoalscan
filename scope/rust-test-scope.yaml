@@ -1,21 +1,22 @@
 # Shoalscan's internal scope rules: they prove, with Opengrep's own Rust
-# parser, which code is compiled only for tests. They run in the same scan as
+# parser, which items are compiled only for tests. They run in the same scan as
 # the security rules when `[test_scope] non_blocking` lists a rule, and their
 # matches are never findings: Shoalscan reads their line ranges and removes
 # them from the output. See docs/test-scope.md.
 #
-# Each pattern names the attribute exactly. `#[cfg(any(test, ...))]`,
-# `#[cfg(all(test, ...))]`, `#[cfg(not(test))]`, `#[cfg_attr(test, ...)]` and
-# `#[cfg(feature = "test")]` do not match, so they are never test scope.
+# Each pattern names the attribute exactly, and Shoalscan checks the spelling
+# of every match again. `#[cfg(test)]`, and `#[cfg(all(..., test, ...))]`
+# (test and something else), count. `#[cfg(any(test, ...))]`,
+# `#[cfg(not(test))]`, `#[cfg_attr(..., cfg(test))]`, `#[cfg(feature = "test")]`
+# and `#[cfg(r#test)]` do not.
 #
 # Opengrep's Rust parser keeps the attributes of top-level items only; inside
 # a module body they are dropped. So these rules see top-level items only, and
 # an attributed item nested in another module is not test scope (fail closed).
 #
-# The rule for `#[cfg(test)] mod NAME { ... }` is not in this file: Opengrep
-# binds no metavariable to a module's name, so Shoalscan writes one pattern per
-# module name that follows a #[cfg(test)] in the scanned files (see
-# shoalscan/testscope.py).
+# The module rule is not in this file: Opengrep binds no metavariable to a
+# module's name, so Shoalscan writes one pattern per module name that follows
+# such an attribute in the scanned files (see shoalscan/testscope.py).
 rules:
   - id: rust-cfg-test-item
     message: An item compiled only for tests (#[cfg(test)]).
@@ -39,12 +40,26 @@ rules:
       - pattern: |
           #[cfg(test)]
           static $C: $TY = $V;
+      - pattern: |
+          #[cfg(all(..., test, ...))]
+          fn $F(...) { ... }
+      - pattern: |
+          #[cfg(all(..., test, ...))]
+          impl $T { ... }
+      - pattern: |
+          #[cfg(all(..., test, ...))]
+          impl $TRAIT for $T { ... }
+      - pattern: |
+          #[cfg(all(..., test, ...))]
+          const $C: $TY = $V;
+      - pattern: |
+          #[cfg(all(..., test, ...))]
+          static $C: $TY = $V;
 
-  # #[tokio::test] and #[rstest] expand to #[test] functions (rstest's
-  # parametrised cases to a #[cfg(test)] module and function). #[test_case] is
-  # left out on purpose: it keeps the original function, with its body, as a
-  # plain function outside cfg(test). One rule per attribute, because each name
-  # can be shadowed in its own way (see shoalscan/testscope.py).
+  # Only the built-in #[test]. #[tokio::test] and #[rstest] are names a
+  # dependency (a path crate called tokio, a [patch]) or an import can redefine,
+  # so they are not test scope. #[test_case] keeps the original function as a
+  # plain function outside cfg(test).
   - id: rust-test-fn
     message: A test function (#[test]).
     severity: INFO
@@ -53,28 +68,4 @@ rules:
       category: test-scope
     pattern: |
       #[test]
-      fn $F(...) { ... }
-
-  - id: rust-tokio-test-fn
-    message: A test function (#[tokio::test]).
-    severity: INFO
-    languages: [rust]
-    metadata:
-      category: test-scope
-    pattern-either:
-      - pattern: |
-          #[tokio::test]
-          fn $F(...) { ... }
-      - pattern: |
-          #[tokio::test(...)]
-          fn $F(...) { ... }
-
-  - id: rust-rstest-fn
-    message: A test function (#[rstest]).
-    severity: INFO
-    languages: [rust]
-    metadata:
-      category: test-scope
-    pattern: |
-      #[rstest]
       fn $F(...) { ... }

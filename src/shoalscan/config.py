@@ -72,6 +72,12 @@ class TestScopeSettings:
 
     # Exact Opengrep rule ids, or `prefix.*`, as in opengrep.exclude_rules. Empty: the feature is off.
     non_blocking: tuple[str, ...] = ()
+    # Build scripts the policy has reviewed, by repository path, with their SHA-256. Any other
+    # build script in the repository turns test scope off.
+    trusted_build_scripts: tuple[tuple[str, str], ...] = ()
+
+    def trusted_build_scripts_map(self) -> dict[str, str]:
+        return dict(self.trusted_build_scripts)
 
 
 # Rule id namespaces whose findings can be test-scoped: Opengrep's rule sources.
@@ -384,7 +390,23 @@ def _test_scope(raw: object) -> TestScopeSettings:
 
     if not isinstance(raw, dict):
         raise SetupError(f"{CONFIG_NAME}: [test_scope] must be a table")
-    _check_keys(raw, {"non_blocking"}, "[test_scope]")
+    _check_keys(raw, {"non_blocking", "trusted_build_scripts"}, "[test_scope]")
+    scripts_raw = raw.get("trusted_build_scripts", {})
+    if not isinstance(scripts_raw, dict):
+        raise SetupError(f"{CONFIG_NAME}: test_scope.trusted_build_scripts must be a table of path = sha256")
+    scripts = []
+    for script, digest in sorted(scripts_raw.items()):
+        path = relative_repo_path(script, f"test_scope.trusted_build_scripts key {script!r}")
+        if path != script or not path.endswith(".rs"):
+            raise SetupError(
+                f"{CONFIG_NAME}: test_scope.trusted_build_scripts keys must be normalised repository paths of "
+                f".rs files: {script!r}"
+            )
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise SetupError(
+                f"{CONFIG_NAME}: test_scope.trusted_build_scripts.{script} must be a lowercase hexadecimal SHA-256"
+            )
+        scripts.append((path, digest))
     rules = _str_list(raw.get("non_blocking", []), "test_scope.non_blocking")
     for pattern in rules:
         namespace = pattern.split(".", 1)[0]
@@ -418,7 +440,7 @@ def _test_scope(raw: object) -> TestScopeSettings:
                 f"{CONFIG_NAME}: test_scope.non_blocking cannot list {LINT_RULE}: an inline suppression must name a "
                 "rule and an issue in test code too"
             )
-    return TestScopeSettings(non_blocking=tuple(sorted(set(rules))))
+    return TestScopeSettings(non_blocking=tuple(sorted(set(rules))), trusted_build_scripts=tuple(scripts))
 
 
 def config_from_bytes(data: bytes, source: str) -> Config:

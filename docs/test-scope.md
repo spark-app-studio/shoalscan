@@ -36,43 +36,53 @@ Only items count: the code inside an attribute's item, at the top level of a fil
 | --- | --- |
 | `cfg_test_module` | A `#[cfg(test)] mod NAME { ... }` block, with everything in it, nested modules included |
 | `cfg_test_item` | A function, `impl` block (inherent or trait), constant or static with `#[cfg(test)]` |
-| `test_fn` | A function with `#[test]`, `#[tokio::test]` (with or without arguments) or `#[rstest]` |
+| `test_fn` | A function with the built-in `#[test]` attribute |
 
-The scope's location is the file and line of the attribute. Other attributes may sit next to the one that matters (`#[allow(...)]`, `#[should_panic]`, `#[case(...)]`), an attribute may be split over several lines, and doc comments may come between the attribute and the item.
+`#[cfg(all(test, ...))]`, which needs `test` and something more, counts like `#[cfg(test)]`. The scope's location is the file and line of the attribute. Other attributes may sit next to the one that matters (`#[allow(...)]`, `#[should_panic]`), an attribute may be split over several lines, and doc comments may come between the attribute and the item.
 
-This is sound wherever the file is used. Code inside a `#[cfg(test)]` item is removed from every build without `cfg(test)`, however the file that holds it is included. A `#[cfg(test)]` module that is `pub` and is referred to elsewhere is still test-only: in a build without `cfg(test)` the module does not exist, so code that refers to it would not compile unless it is itself compiled only for tests. The compiler removes `#[test]` functions from non-test builds, and `#[tokio::test]` and `#[rstest]` expand to `#[test]` functions (and `#[cfg(test)]` items).
+This is sound wherever the file is used. Code inside a `#[cfg(test)]` item is removed from every build without `cfg(test)`, however the file that holds it is included. A `#[cfg(test)]` module that is `pub` and is referred to elsewhere is still test-only: in a build without `cfg(test)` the module does not exist, so code that refers to it would not compile unless it is itself compiled only for tests. The compiler removes `#[test]` functions from builds that are not tests.
 
 ## What does not count
 
 Anything Shoalscan cannot prove stays a normal finding. In particular:
 
+- **`#[tokio::test]`, `#[rstest]` and other test macros.** They are names that a dependency or an import can redefine: a path dependency whose library is called `tokio`, a `[patch]`, a glob import of a module named `tokio`, or `extern crate other as tokio;` all make `#[tokio::test]` mean something else, and Shoalscan cannot prove which crate a name resolves to. A finding in such a function counts as test-only only when it is also inside a `#[cfg(test)]` module. This may change in a later release.
 - **Whole files.** A crate's `tests/` and `benches/` directories, and the file a `#[cfg(test)] mod NAME;` declaration loads, are not test scope. Whether a file is reachable only from tests cannot be proved from the source: shipped code can include it with a path built at compile time (`include!(concat!(env!("CARGO_MANIFEST_DIR"), ...))`), through a macro, or from another crate. Inside such files, `#[cfg(test)]` items and `#[test]` functions still count. For other findings there, decide in review: exclude test fixtures with `excludes`, or accept findings in the baseline with a reason.
-- **Conditions that also hold outside tests:** `#[cfg(any(test, ...))]`, `#[cfg(all(test, ...))]` (Shoalscan does not reason about the other predicates), `#[cfg(not(test))]`, `#[cfg(feature = "...")]` (even `feature = "test"`) and `#[cfg_attr(test, ...)]`.
+- **Conditions that also hold outside tests:** `#[cfg(any(test, ...))]`, `#[cfg(not(test))]` (also inside `all(...)`), `#[cfg(feature = "...")]` (even `feature = "test"`), `#[cfg_attr(test, ...)]` and `#[cfg_attr(..., cfg(test))]`.
+- **Any spelling Shoalscan does not recognise**, such as `#[cfg(r#test)]`. Every match is checked again: the item's own attributes, with comments and white space removed, must include exactly `#[cfg(test)]`, `#[cfg(all(..., test, ...))]` or `#[test]`. An attribute never carries over to the next item: `#[cfg(test)] struct S;` covers only `S`.
 - **`#[test_case(...)]` functions.** The `test-case` crate keeps the original function, with its body, as a plain function outside `cfg(test)`.
 - **Attributed items inside another module.** Opengrep's Rust parser keeps the attributes of a file's top-level items only. So `mod outer { #[cfg(test)] mod inner { ... } }` and a `#[test]` function inside an ordinary module are not test scope.
 - **Other items:** `#[cfg(test)] use ...`, structs, traits, macros and inner attributes (`#![cfg(test)]`).
 - **`examples/`, `build.rs` and `src/bin/`**, whatever their attributes.
-- **A file Opengrep reported an error for** (a partial parse, a timeout): a parser that recovered from an error could place an item's end wrongly.
-- **Macros that generate tests** other than `#[tokio::test]` and `#[rstest]`.
+- **A file Opengrep reported an error for** (invalid Rust, a partial parse, a timeout): a parser that recovered from an error could place an item's end wrongly.
 
-### Shadowed test attributes
+### A rebound `#[test]`
 
-`#[test]`, `#[tokio::test]` and `#[rstest]` are names, and a file can rebind them: `use test_log::test;` (a documented pattern), `use x::passthrough as test;`, a `mod tokio`, or `extern crate other as tokio;`. Then `#[test]` may not mean a test at all. So a file that binds `test`, `tokio` or `rstest` itself gets no `test_fn` scope: one with `... as test` (or `rstest`, `tokio`), an item or `macro_rules!` of that name, or a `use` that imports one, except a `use` of the real crates (`use tokio::test;`, `use rstest::rstest;`). No file gets `test_fn` scope when any crate uses `#[macro_use] extern crate`, or a `Cargo.toml` takes `tokio` or `rstest` from a path, git or another registry, or renames another crate to that name. The search ignores comments and strings and is deliberately broad: a false alarm only means a missed scope. `cfg(test)` cannot be shadowed, so `cfg_test_module` and `cfg_test_item` are not affected. A glob import (`use helpers::*;`) is not searched: Shoalscan relies on rustc reporting an attribute named `test` brought in by a glob import as ambiguous with the built-in one.
+`test` is a name a file can rebind: `use test_log::test;` (a documented pattern), `use tokio::test;`, `use x::passthrough as test;`. Then `#[test]` may not mean a test at all. So a file that binds `test` itself gets no `test_fn` scope: one with `... as test`, an item or macro named `test`, or a `use` that imports a `test`. No file gets `test_fn` scope when the repository has any `extern crate`, which can bring names into scope for a whole crate. The search ignores comments and strings and is deliberately broad: a false alarm only means a missed scope. A glob import (`use helpers::*;`) is not searched: rustc rejects an attribute named `test` brought in by a glob import as ambiguous with the built-in one (E0659). `cfg(test)` cannot be rebound, so `cfg_test_module` and `cfg_test_item` are not affected.
 
-### When the repository can set `cfg(test)` itself
+### When the build could set `cfg(test)` itself
 
-`cfg(test)` means "compiled for tests" only if nothing else sets it. A build script can (`cargo:rustc-cfg=test`), and so can compiler flags (`--cfg test`). If anything in the repository might, test scope is **off for the whole repository**: the scan prints a loud warning and records the reason in `findings.json` under `test_scope.off`. Shoalscan looks, ignoring nothing but `.git`, for:
+`cfg(test)` means "compiled for tests" only if nothing else sets it, and a build script, a compiler wrapper, compiler flags or a patched dependency can. Shoalscan does not try to guess what such things do. It accepts only what it can read and recognise, and otherwise test scope is **off for the whole repository**: the scan prints a loud warning and records the reason in `findings.json` under `test_scope.off`. Shoalscan reads every file but `.git`:
 
-- a Rust file (a build script or a helper it uses, under any name) that emits a `rustc-cfg` whose value is or starts with `test`, or one built from a variable or a macro (`cargo:rustc-cfg={name}`, `autocfg`'s `emit_rustc_cfg(name)`, `cfg_aliases!`);
-- `--cfg` followed by `test` in any `.cargo/config` or `.cargo/config.toml`, or anywhere in a `Cargo.toml` (such as a `[profile]` section).
+- **Build scripts.** Any `build.rs`, and any script a `Cargo.toml` names with `build = "..."`, turns test scope off, unless the policy trusts it by its repository path and SHA-256:
 
-Shoalscan cannot see flags set outside the repository: the `RUSTFLAGS` and `CARGO_ENCODED_RUSTFLAGS` environment variables, a `.cargo/config.toml` in a parent directory or the home directory, or a build script in a dependency. Building release artifacts without `--cfg test` is the operator's responsibility.
+  ```toml
+  [test_scope]
+  trusted_build_scripts = { "crates/ffi/build.rs" = "3b4c...e9" }
+  ```
+
+  A script whose content no longer matches turns it off again. Trusting a script means reviewing everything it does: every file it reads, includes or runs, and every crate it uses, since any of them could make it emit `cargo:rustc-cfg=test`. Like the rest of the policy, the list comes from the base branch under `--policy-ref`.
+- **Every `Cargo.toml`**, read as TOML. It turns test scope off when it does not parse, has `[replace]` or `cargo-features`, has a `[patch]` entry that is not a path inside the repository (a patched crate in the repository is held to these same rules), has `rustflags` in a profile, or has any key Shoalscan does not know (the package, target, dependency, feature, workspace, profile, badge and lint settings Cargo documents are known).
+- **Every `.cargo/config` and `.cargo/config.toml`**, read as TOML. Only `[build]` `target`, `target-dir`, `jobs`, `incremental` and `rustflags`, `[unstable]` `build-std` and `build-std-features`, and `[target.<triple>]` `rustflags`, `linker` and `runner` are accepted. A compiler or wrapper (`build.rustc`, `build.rustc-wrapper`, `build.rustc-workspace-wrapper`), `[patch]`, `[source]`, `paths`, `[env]` or anything else turns test scope off. Each `rustflags` entry must be `-C`, `-L` or `-l` with its value, or a lint level (`-A`, `-W`, `-D`, `-F`); `--cfg`, `-Z`, `--crate-attr`, `@file` and anything else turn it off.
+- **Symbolic links** to a directory, or named like a Rust file, turn it off, because Shoalscan does not follow them.
+
+Shoalscan cannot see what is outside the repository: the `RUSTFLAGS` and `CARGO_ENCODED_RUSTFLAGS` environment variables, a `.cargo/config.toml` in a parent directory or the Cargo home, a wrapper set in the environment (`RUSTC_WRAPPER`), or a build script in a dependency from a registry. Building release artifacts without `--cfg test` is the operator's responsibility.
 
 ## How Shoalscan proves it
 
 **Opengrep's own parser does the proving.** Shoalscan ships a small rule pack, `scope/rust-test-scope.yaml`, pinned with Shoalscan like its other rules. When `[test_scope]` lists a rule, the pack runs in the same Opengrep scan as the security rules, so the code is parsed once, and its matches give the exact line ranges of the items above. Comments and strings that contain `#[cfg(test)]` are never matches, because the parser does not see them as attributes. The pack's matches are input for Shoalscan, never findings: they are taken out of the results before anything counts or writes them, and out of the SARIF file. No policy setting, such as `exclude_rules`, can turn them off.
 
-Opengrep cannot bind a module's name to a metavariable (`mod $M { ... }` matches nothing), so Shoalscan writes one pattern per module name that follows a `#[cfg(test)]` attribute in the repository's Rust files, after removing comments and strings. A name only proposes a pattern: Opengrep still has to find a module of that name, with exactly `#[cfg(test)]`, in the parsed code. Up to 2,000 names are used, which is several times what a large monorepo needs; when there are more, the scan warns and records how many were left out (`test_scope.module_names_dropped`), and findings in those modules are not accepted.
+Opengrep cannot bind a module's name to a metavariable (`mod $M { ... }` matches nothing), so Shoalscan writes one pattern per module name that follows a `#[cfg(test)]` or `#[cfg(all(...))]` attribute in the repository's Rust files, after removing comments and strings. A name only proposes a pattern: Opengrep still has to find a module of that name, with exactly `#[cfg(test)]`, in the parsed code. Up to 2,000 names are used, which is several times what a large monorepo needs; when there are more, the scan warns and records how many were left out (`test_scope.module_names_dropped`), and findings in those modules are not accepted.
 
 ## What happens to a test-scoped finding
 

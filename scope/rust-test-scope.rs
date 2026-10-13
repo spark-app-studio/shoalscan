@@ -1,6 +1,6 @@
 // Tests for the scope rules: `opengrep scan --test scope/`.
 
-// ok: rust-cfg-test-item, rust-test-fn, rust-tokio-test-fn, rust-rstest-fn
+// ok: rust-cfg-test-item, rust-test-fn
 fn shipped() {}
 
 // ruleid: rust-cfg-test-item
@@ -40,9 +40,29 @@ static TEST_LABEL: &str = "fixture";
 #[cfg(any(test, feature = "x"))]
 fn any_test() {}
 
-// ok: rust-cfg-test-item
+// ruleid: rust-cfg-test-item
 #[cfg(all(test, unix))]
 fn all_test() {}
+
+// ruleid: rust-cfg-test-item
+#[cfg(all(unix, test))]
+impl Fixture {}
+
+// ok: rust-cfg-test-item
+#[cfg(all(unix, not(test)))]
+fn all_not_test() {}
+
+// ok: rust-cfg-test-item
+#[cfg(all(any(test, unix), unix))]
+fn all_any_test() {}
+
+// ok: rust-cfg-test-item
+#[cfg(r#test)]
+fn raw_test() {}
+
+// ok: rust-cfg-test-item
+#[cfg_attr(feature = "x", cfg(test))]
+fn cfg_attr_cfg_test() {}
 
 // ok: rust-cfg-test-item
 #[cfg(not(test))]
@@ -81,24 +101,20 @@ fn panics() {}
 #[test]
 fn ignored() {}
 
-// ruleid: rust-tokio-test-fn
+// ok: rust-test-fn
 #[tokio::test]
 async fn async_test() {}
 
-// ruleid: rust-tokio-test-fn
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn async_test_with_arguments() {}
-
-// ruleid: rust-rstest-fn
+// ok: rust-test-fn
 #[rstest]
 #[case(1)]
 fn parametrised(#[case] x: u8) {}
 
-// ok: rust-test-fn, rust-rstest-fn
+// ok: rust-test-fn
 #[test_case(1; "one")]
 fn test_case_keeps_its_function(x: u8) {}
 
-// ok: rust-tokio-test-fn
+// ok: rust-test-fn
 #[tokio::main]
 async fn main() {}
 

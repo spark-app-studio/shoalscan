@@ -5,8 +5,10 @@ and are skipped without them; the rest run anywhere.
 """
 
 import contextlib
+import hashlib
 import io
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -99,6 +101,20 @@ class PolicyTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(SetupError, "it finds secrets", msg=rule):
                 self.parse(f'[test_scope]\nnon_blocking = ["{rule}"]\n')
+
+    def test_trusted_build_scripts(self):
+        digest = "a" * 64
+        config = self.parse(f'[test_scope]\ntrusted_build_scripts = {{ "crates/x/build.rs" = "{digest}" }}\n')
+        self.assertEqual(config.test_scope.trusted_build_scripts_map(), {"crates/x/build.rs": digest})
+        for table in (
+            '{ "build.rs" = "ABC" }',
+            f'{{ "../build.rs" = "{digest}" }}',
+            f'{{ "./build.rs" = "{digest}" }}',
+            f'{{ "build.sh" = "{digest}" }}',
+            '"build.rs"',
+        ):
+            with self.assertRaises(SetupError, msg=table):
+                self.parse(f"[test_scope]\ntrusted_build_scripts = {table}\n")
 
     def test_broad_wildcards_are_refused(self):
         for rule in ("community.*", "shoalscan.*", "repo.*", "repo.rules.*", "community.rust.*"):
@@ -208,61 +224,113 @@ class RepositoryTests(unittest.TestCase):
         self.assertIsNone(repo.off)
         self.assertEqual(repo.module_names, ["tests"])
 
-    def test_a_build_script_that_may_set_cfg_test_turns_scope_off(self):
+    def test_an_untrusted_build_script_turns_scope_off(self):
+        # Every evasion of a text search (escapes, concat!, include!, values read at run time) is moot:
+        # any build script turns test scope off unless the policy trusts it by its SHA-256.
         for text in (
-            'fn main() { println!("cargo:rustc-cfg=test"); }',
-            'fn main() { println!("cargo::rustc-cfg=test_utils"); }',
-            'fn main() { let n = "test"; println!("cargo:rustc-cfg={n}"); }',
-            'fn main() { println!("cargo:rustc-cfg={}", name()); }',
-            'fn main() { println!(concat!("cargo:rustc-cfg=", "te", "st")); }',
-            "fn main() { autocfg::new().emit_rustc_cfg(NAME); }",
-            "fn main() { cfg_aliases::cfg_aliases! { x: { unix } } }",
+            'fn main() { println!("cargo:rustc\\x2dcfg=test"); }',
+            'fn main() { println!(concat!("cargo:rustc-", "c\\x66g=test")); }',
+            'include!("gen.in");',
+            'fn main() { println!("{}", std::fs::read_to_string("flags").unwrap()); }',
+            "fn main() {}",
         ):
             write(self.root, "build.rs", text)
-            self.assertIn("rustc-cfg", self.repo().off or "", text)
-        for text in ('fn main() { println!("cargo:rustc-cfg=has_foo"); }', 'fn main() { ac.emit_cfg("has_x"); }'):
-            write(self.root, "build.rs", text)
-            self.assertIsNone(self.repo().off, text)
-        # Any Rust file can be a build script's helper, under any name.
+            self.assertIn("build.rs is a build script", self.repo().off or "", text)
+        digest = hashlib.sha256((self.root / "build.rs").read_bytes()).hexdigest()
+        self.assertIsNone(testscope.read_repository(self.root, {"build.rs": digest}).off)
+        self.assertIn("does not match", testscope.read_repository(self.root, {"build.rs": "0" * 64}).off)
         (self.root / "build.rs").unlink()
-        write(self.root, "build/helper.rs", 'pub fn emit() { println!("cargo:rustc-cfg=test"); }')
-        self.assertIsNotNone(self.repo().off)
+        write(self.root, "Cargo.toml", '[package]\nname = "demo"\nbuild = "tools/gen.rs"\n')
+        write(self.root, "tools/gen.rs", "fn main() {}\n")
+        self.assertIn("tools/gen.rs is a build script", self.repo().off or "")
 
-    def test_cargo_configuration_that_passes_cfg_test_turns_scope_off(self):
-        cases = {
-            ".cargo/config.toml": '[build]\nrustflags = ["--cfg", "test"]\n',
-            "crates/a/.cargo/config": '[target.x86_64-unknown-linux-gnu]\nrustflags = "--cfg test"\n',
-            "Cargo.toml": '[package]\nname = "demo"\n[profile.release]\nrustflags = ["--cfg=test"]\n',
-            "a/target/evil/Cargo.toml": '[package]\nname = "x"\n[profile.dev]\nrustflags = ["--cfg", "test"]\n',
+    def test_cargo_files_must_be_fully_understood(self):
+        off = {
+            ".cargo/config.toml": [
+                '[build]\nrustflags = ["--cfg", "test"]\n',
+                '[build]\nrustflags = ["--cfg", "\\u0074est"]\n',
+                '[build]\nrustflags = "-Z unstable-options"\n',
+                '[build]\nrustflags = ["@argfile"]\n',
+                '[build]\nrustflags = ["--crate-attr=cfg(test)"]\n',
+                '[build]\nrustc-wrapper = "./wrap.sh"\n',
+                '[build]\nrustc = "./rustc"\n',
+                '[build]\nrustc-workspace-wrapper = "./wrap.sh"\n',
+                'paths = ["vendor/tokio"]\n',
+                '[source.crates-io]\nreplace-with = "vendored"\n',
+                '[patch.crates-io]\ntokio = { path = "vendor/tokio" }\n',
+                '[env]\nRUSTFLAGS = "--cfg test"\n',
+                '[target.x86_64-unknown-linux-gnu]\nrustflags = ["-C", "link-arg=-s", "--cfg=test"]\n',
+                "not toml [",
+            ],
+            "Cargo.toml": [
+                '[package]\nname = "demo"\n[patch.crates-io]\ntokio = { git = "https://example.invalid/tokio" }\n',
+                '[package]\nname = "demo"\n[patch.crates-io]\ntokio = { path = "../outside/tokio" }\n',
+                '[package]\nname = "demo"\n[replace]\n"tokio:1.0.0" = { path = "vendor/tokio" }\n',
+                'cargo-features = ["profile-rustflags"]\n[package]\nname = "demo"\n',
+                '[package]\nname = "demo"\n[profile.release]\nrustflags = ["--cfg", "test"]\n',
+                '[package]\nname = "demo"\nunknown-key = 1\n',
+                '[package]\nname = "demo"\n[target.x]\nrustflags = []\n',
+                "[package\n",
+            ],
+            "nested/target/evil/Cargo.toml": ['[package]\nname = "x"\n[replace]\n"a:1.0.0" = { path = "a" }\n'],
         }
-        for path, text in cases.items():
-            write(self.root, path, text)
-            self.assertIn("--cfg test", self.repo().off or "", path)
+        for path, texts in off.items():
+            for text in texts:
+                write(self.root, path, text)
+                self.assertIsNotNone(self.repo().off, f"{path}: {text}")
             if path == "Cargo.toml":
                 write(self.root, path, '[package]\nname = "demo"\n')
             else:
                 (self.root / path).unlink()
-        write(self.root, ".cargo/config.toml", '[build]\nrustflags = ["--cfg", "tokio_unstable"]\n')
+        self.assertIsNone(self.repo().off)
+        # What the reviewed repository uses stays on.
+        write(
+            self.root,
+            "a/.cargo/config.toml",
+            '[build]\ntarget = "bpfel-unknown-none"\n[unstable]\nbuild-std = ["core"]\n',
+        )
+        write(
+            self.root,
+            "b/.cargo/config.toml",
+            '[target.x86_64-unknown-linux-gnu]\nrustflags = ["-C", "link-arg=-Wl,-z,relro", "-Ctarget-cpu=native"]\n',
+        )
+        write(
+            self.root,
+            "Cargo.toml",
+            '[package]\nname = "demo"\nedition = "2021"\n[dependencies]\ntokio = { version = "1", features = ["rt"] }\n'
+            "[profile.release]\nlto = true\n[profile.release.package.x]\nopt-level = 3\n"
+            '[target.\'cfg(unix)\'.dependencies]\nlibc = "0.2"\n[workspace]\nmembers = ["a"]\n'
+            '[patch.crates-io]\npingora-rustls = { path = "vendor/pingora-rustls" }\n',
+        )
         self.assertIsNone(self.repo().off)
 
-    def test_shadowed_test_attributes(self):
+    def test_rustflags_forms(self):
+        from shoalscan.cargotrust import rustflags_problem
+
+        for good in (["-C", "opt-level=3"], "-Copt-level=3 -L native=/x -lfoo -A warnings -Dunsafe_code", []):
+            self.assertIsNone(rustflags_problem(good), good)
+        for bad in (["--cfg", "test"], ["-C"], "-Zfoo", ["--cfg=test"], ["@file"], [1], {"a": 1}):
+            self.assertIsNotNone(rustflags_problem(bad), bad)
+
+    def test_a_linked_directory_turns_scope_off(self):
+        os.symlink(self.root / "src", self.root / "linked")
+        self.assertIn("symbolic link", self.repo().off or "")
+
+    def test_shadowed_test_attribute(self):
         shadowing = [
             "use test_log::test;",
+            "use tokio::test;",
             "use x::passthrough as test;",
-            "use x::{passthrough as rstest};",
             "use other::{test, b};",
-            "mod tokio { }",
-            "extern crate fake as tokio;",
             "macro_rules! test { () => {} }",
-            "fn rstest() {}",
+            "fn test() {}",
+            "pub use pm2::test;",
         ]
         for line in shadowing:
             self.assertTrue(testscope.shadows_test_attributes(testscope.strip_code(line)), line)
         for line in (
             "use tokio::sync::Mutex;",
-            "use tokio::test;",
             "use rstest::rstest;",
-            "use rstest::{fixture, rstest};",
             "use super::*;",
             "fn test_helper() {}",
             "// use test_log::test;",
@@ -272,13 +340,23 @@ class RepositoryTests(unittest.TestCase):
         write(self.root, "src/a.rs", "use test_log::test;\n")
         self.assertEqual(self.repo().shadowed, {"src/a.rs"})
 
-    def test_a_renamed_tokio_or_macro_use_turns_test_fn_off(self):
-        write(self.root, "Cargo.toml", '[package]\nname = "demo"\n[dev-dependencies]\ntokio = { path = "fake" }\n')
-        self.assertIn("tokio", self.repo().shadowed_everywhere or "")
-        write(self.root, "Cargo.toml", '[package]\nname = "demo"\n[dev-dependencies]\ntokio = "1"\n')
-        self.assertIsNone(self.repo().shadowed_everywhere)
-        write(self.root, "src/lib.rs", "#[macro_use]\nextern crate test_log;\n")
-        self.assertIn("macro_use", self.repo().shadowed_everywhere or "")
+    def test_an_extern_crate_turns_test_fn_off(self):
+        write(self.root, "src/lib.rs", "extern crate pm2 as tokio;\n")
+        self.assertIn("extern crate", self.repo().shadowed_everywhere or "")
+
+    def test_spelling_is_checked_again(self):
+        self.assertTrue(testscope.spelled_as_recognised("#[cfg( test )]\n/// doc\nfn a() {}", "cfg_test_item"))
+        self.assertTrue(testscope.spelled_as_recognised("#[allow(x)]\n#[cfg(all(unix, test))]\nmod m {}", "x"))
+        for text in (
+            "#[cfg(r#test)]\nfn a() {}",
+            "#[cfg(all(not(test), unix))]\nfn a() {}",
+            "#[cfg(any(test, unix))]\nfn a() {}",
+            '#[cfg_attr(feature = "x", cfg(test))]\nfn a() {}',
+            "// #[cfg(test)]\nfn a() {}",
+        ):
+            self.assertFalse(testscope.spelled_as_recognised(text, "cfg_test_item"), text)
+        self.assertTrue(testscope.spelled_as_recognised("#[test]\nfn a() {}", "test_fn"))
+        self.assertFalse(testscope.spelled_as_recognised("#[tokio::test]\nfn a() {}", "test_fn"))
 
     def test_module_names_come_only_after_cfg_test(self):
         write(
@@ -303,6 +381,7 @@ class RepositoryTests(unittest.TestCase):
         self.assertEqual(code.count("\n"), 2)
 
     def test_matches_in_a_file_opengrep_could_not_parse_are_not_used(self):
+        write(self.root, "src/lib.rs", "#[cfg(test)]\nfn helper() {}\n")
         match = {
             "check_id": testscope.ITEM_RULE,
             "path": str(self.root / "src/lib.rs"),
@@ -405,12 +484,36 @@ mod fixture;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn async_test() {{ {CALL} }}
+
+#[rstest]
+fn rstest_case() {{ {CALL} }}
+
+#[cfg(all(test, unix))]
+fn all_test() {{ {CALL} }}
+
+#[cfg(all(unix, not(test)))]
+fn all_not_test() {{ {CALL} }}
+
+#[cfg(r#test)]
+fn raw_test() {{ {CALL} }}
+
+#[cfg_attr(feature = "x", cfg(test))]
+fn cfg_attr_cfg_test() {{ {CALL} }}
+
+#[cfg(test)]
+struct Carried;
+fn after_a_cfg_test_struct() {{ {CALL} }}
+
+#[cfg(all(test, unix))]
+mod all_module {{
+    fn i() {{ {CALL} }}
+}}
 """
 
 # The function name on each call's line, and the scope kind it must get (None: not test scope).
 EXPECTED = {
     "a": None,
-    "b": None,
+    "b": "cfg_test_module",
     "c": None,
     "test_in_a_plain_module": None,
     "top_level_test": "test_fn",
@@ -425,7 +528,14 @@ EXPECTED = {
     "test_case_keeps_its_function": None,
     "after_a_cfg_test_use": None,
     "h": "cfg_test_module",
-    "async_test": "test_fn",
+    "async_test": None,
+    "rstest_case": None,
+    "all_test": "cfg_test_item",
+    "all_not_test": None,
+    "raw_test": None,
+    "cfg_attr_cfg_test": None,
+    "after_a_cfg_test_struct": None,
+    "i": "cfg_test_module",
 }
 
 
@@ -486,20 +596,44 @@ class ScopeRuleTests(unittest.TestCase):
         self.assertIn("shoalscan/test_scope", sarif)
         self.assertNotIn("test-scope.rust-cfg-test-item", doc["rule_ids"])
 
-    def test_a_build_time_cfg_test_turns_scope_off(self):
+    def test_untrusted_build_scripts_and_cargo_settings_turn_scope_off(self):
         make_crate(self.repo, None)
-        write(self.repo, "build.rs", 'fn main() {\n    println!("cargo:rustc-cfg=test");\n}\n')
+        write(self.repo, "build.rs", 'fn main() {\n    println!("cargo:rustc\\x2dcfg=test");\n}\n')
         code, _, err = cli("scan", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out))
         self.assertEqual(code, 0, err)
         self.assertIn("TEST SCOPE IS OFF", err)
         doc = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
         self.assertIn("build.rs", doc["test_scope"]["off"])
         self.assertFalse([f for f in doc["findings"] if "test_scope" in f])
-        (self.repo / "build.rs").unlink()
-        write(self.repo, ".cargo/config.toml", '[build]\nrustflags = ["--cfg", "test"]\n')
+        shutil.copy(FIXTURE / "build.rs", self.repo / "build.rs")
+        write(self.repo, ".cargo/config.toml", '[build]\nrustc-wrapper = "./add-cfg-test.sh"\n')
         doc = self.scan()
         self.assertIn(".cargo/config.toml", doc["test_scope"]["off"])
         self.assertFalse([f for f in doc["findings"] if "test_scope" in f])
+
+    def test_a_glob_imported_or_renamed_test_macro_is_not_scope(self):
+        # Reviewer repros: a crate that exports `test` and `rstest`, reached through a glob import or an
+        # `extern crate ... as tokio`. Only the built-in #[test] can be scope, and an extern crate turns that off.
+        lib = (
+            "pub mod prelude {\n    pub mod tokio { pub use pm2::test; }\n    pub use pm2::rstest;\n}\n"
+            f"#[test]\nfn builtin() {{ {CALL} }}\n"
+        )
+        make_crate(self.repo, lib)
+        glob = f"use crate::prelude::*;\n#[tokio::test]\npub fn f() {{ {CALL} }}\n#[rstest]\npub fn g() {{ {CALL} }}\n"
+        write(self.repo, "src/a.rs", glob)
+        doc = self.scan()
+        self.assertFalse([f for f in doc["findings"] if f["path"] == "src/a.rs" and "test_scope" in f])
+        write(self.repo, "src/lib.rs", "extern crate pm2 as tokio;\n" + lib)
+        doc = self.scan()
+        self.assertFalse([f for f in doc["findings"] if "test_scope" in f and f["test_scope"]["kind"] == "test_fn"])
+        self.assertIn("extern crate", doc["test_scope"]["test_fn_off"])
+
+    def test_a_file_that_does_not_parse_gets_no_scope(self):
+        make_crate(self.repo, None)
+        write(self.repo, "src/broken.rs", f"#[cfg(test)]\nmod tests {{\n    fn x() {{ {CALL} }}\n}}\nfn ( {{\n")
+        doc = self.scan()
+        self.assertFalse([f for f in doc["findings"] if f["path"] == "src/broken.rs" and "test_scope" in f])
+        self.assertIn("src/broken.rs", {e["path"] for e in doc["unscanned"]["errors"]})
 
     def test_a_shadowed_test_attribute_is_not_scope(self):
         lib = (FIXTURE / "src/lib.rs").read_text(encoding="utf-8")

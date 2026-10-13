@@ -4,28 +4,21 @@ Opengrep's own Rust parser does the proving. Shoalscan ships a small rule pack
 (`scope/rust-test-scope.yaml`) that runs in the same scan as the security
 rules; its matches give the exact line ranges of:
 
-- `#[cfg(test)] mod NAME { ... }` blocks (`cfg_test_module`);
-- `#[cfg(test)]` functions, `impl` blocks, constants and statics
-  (`cfg_test_item`);
-- `#[test]`, `#[tokio::test]` and `#[rstest]` functions (`test_fn`).
+- `#[cfg(test)]` and `#[cfg(all(test, ...))]` modules (`cfg_test_module`);
+- such functions, `impl` blocks, constants and statics (`cfg_test_item`);
+- functions with the built-in `#[test]` attribute (`test_fn`).
 
-Only items count, never whole files. Code inside a `#[cfg(test)]` item is
-removed from every build without `cfg(test)`, wherever its file is included
-from, so the scope holds however the file is reached. Whether a whole file
-(a crate's `tests/`, or the target of `#[cfg(test)] mod NAME;`) is reachable
-only from tests cannot be proved: an `include!` can build its path at compile
-time.
+Only items count, never whole files: code inside a `#[cfg(test)]` item is
+removed from every build without `cfg(test)`, wherever its file is included.
 
-Three things turn the proof off or narrow it, each found by a generous text
-search that can only take scope away:
+Shoalscan trusts only what it can prove, and turns the feature off otherwise:
 
-- a repository that can set `cfg(test)` outside tests: a build script that
-  emits a `rustc-cfg` starting with `test` (or one it builds from a variable),
-  or `--cfg test` in a `.cargo/config(.toml)` or a `Cargo.toml`, turns the
-  feature off for the whole repository;
-- `#[test]`, `#[tokio::test]` and `#[rstest]` can be shadowed by imports and
-  local items (`use test_log::test;`), so a file that names `test`, `tokio` or
-  `rstest` in such a way gets no `test_fn` scope; `cfg(test)` cannot be shadowed;
+- the repository's Cargo files and build scripts must not be able to set
+  `cfg(test)` (see `shoalscan.cargotrust`);
+- `#[test]` is a name a file can rebind (`use test_log::test;`), so a file that
+  binds `test` gets no `test_fn` scope, and no file does when any `extern crate`
+  exists; `cfg(test)` cannot be rebound;
+- every match is checked to be spelled exactly as recognised;
 - a file Opengrep reported an error for gets no scope at all.
 """
 
@@ -34,15 +27,16 @@ from __future__ import annotations
 import json
 import os
 import re
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from shoalscan.cargotrust import CargoCheck
 
 NAMESPACE = "test-scope"
 RULES_FILE = "rust-test-scope.yaml"
 MODULE_RULES_FILE = "rust-test-scope-modules.yaml"
 ITEM_RULE = f"{NAMESPACE}.rust-cfg-test-item"
-TEST_FN_RULES = frozenset(f"{NAMESPACE}.{r}" for r in ("rust-test-fn", "rust-tokio-test-fn", "rust-rstest-fn"))
+TEST_FN_RULE = f"{NAMESPACE}.rust-test-fn"
 MODULE_RULE = f"{NAMESPACE}.rust-cfg-test-module"
 
 KINDS = ("cfg_test_module", "cfg_test_item", "test_fn")
@@ -175,7 +169,8 @@ def _blank(s: str) -> str:
     return "".join("\n" if ch == "\n" else " " for ch in s)
 
 
-_CFG_TEST = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+# `#[cfg(test)]` or `#[cfg(all(...))]` (the arguments are checked on each match, see `_spelled`).
+_CFG_TEST = re.compile(r"#\s*\[\s*cfg\s*\(\s*(?:test|all\s*\([^\]]*\))\s*\)\s*\]")
 _ATTRIBUTE = re.compile(r"\s*#\s*\[")
 _VISIBILITY = re.compile(r"\s*pub\s*(\(\s*(crate|self|super|in\s+[\w:\s]+)\s*\))?")
 _MODULE = re.compile(r"\s*mod\s+([A-Za-z_][A-Za-z0-9_]*)(?![#\w])")
@@ -196,7 +191,7 @@ def _skip_attribute(text: str, i: int) -> int:
 
 
 def cfg_test_module_names(code: str) -> set[str]:
-    """Names of modules that follow a `#[cfg(test)]` attribute in comment- and string-free code."""
+    """Names of modules after a `#[cfg(test)]` or `#[cfg(all(...))]` attribute in comment- and string-free code."""
     names = set()
     for m in _CFG_TEST.finditer(code):
         i = m.end()
@@ -209,45 +204,26 @@ def cfg_test_module_names(code: str) -> set[str]:
     return names
 
 
-# Names that, bound in a file, can shadow the test attributes.
-_SHADOW_NAMES = "test|rstest|tokio"
+# Binding `test` in a file can shadow the built-in `#[test]` attribute.
 _SHADOW_ITEM = re.compile(
-    rf"\b(?:as|fn|mod|struct|enum|const|static|type|trait|union|macro_rules\s*!)\s*(?:r#)?(?:{_SHADOW_NAMES})\b"
+    r"\b(?:as|fn|mod|struct|enum|const|static|type|trait|union|macro_rules\s*!|macro)\s*(?:r#)?test\b"
 )
 _USE = re.compile(r"\buse\s+([^;]*);")
-_USE_LEAF = re.compile(rf"(?:^|::|\{{|,)\s*(?:r#)?(?:{_SHADOW_NAMES})\s*(?=$|,|\}})")
-_REAL_CRATE_USE = re.compile(r"^\s*(?:::\s*)?(?:tokio|rstest)\s*::")
+_USE_LEAF = re.compile(r"(?:^|::|\{|,)\s*(?:r#)?test\s*(?=$|,|\})")
+_EXTERN_CRATE = re.compile(r"\bextern\s+crate\b")
 
 
 def shadows_test_attributes(code: str) -> bool:
-    """Could `#[test]`, `#[tokio::test]` or `#[rstest]` mean something else in this (comment-free) file?
+    """Could `#[test]` mean something other than the built-in attribute in this (comment-free) file?
 
-    True when the file binds `test`, `tokio` or `rstest` itself: `... as test`,
-    an item or macro of that name, or a `use` that imports one, except a `use`
-    of the real crates (`use tokio::test;`, `use rstest::rstest;`).
+    True when the file binds `test` itself: `... as test`, an item or macro
+    named `test`, or a `use` that imports a `test` (any crate's, `tokio::test`
+    included). A glob import that brings in a `test` attribute is rejected by
+    rustc as ambiguous with the built-in one (E0659).
     """
     if _SHADOW_ITEM.search(code):
         return True
-    return any(_USE_LEAF.search(u.group(1)) and not _REAL_CRATE_USE.match(u.group(1)) for u in _USE.finditer(code))
-
-
-_MACRO_USE_CRATE = re.compile(r"#\s*\[\s*macro_use\s*\]\s*(?:#\s*\[[^\]]*\]\s*)*extern\s+crate\b")
-
-
-# ---------------------------------------------------------------- cfg(test) outside tests
-
-_CFG_EMIT = re.compile(r"rustc[-_]cfg|emit_rustc_cfg|emit_cfg|cfg_aliases")
-_CFG_LITERAL = re.compile(r"(?:rustc[-_]cfg\s*=\s*|emit_(?:rustc_)?cfg\s*\(\s*\"\s*)([A-Za-z_][A-Za-z0-9_]*)")
-_FLAG_CFG_TEST = re.compile(r"--cfg[\s\"',=]*\"?'?test")
-
-
-def _emits_test_cfg(code_with_strings: str) -> bool:
-    """Does this Rust text set a cfg that is or may be `test` (a literal starting with `test`, or not a literal)?"""
-    for m in _CFG_EMIT.finditer(code_with_strings):
-        literal = _CFG_LITERAL.match(code_with_strings, m.start())
-        if literal is None or literal.group(1).startswith("test"):
-            return True
-    return False
+    return any(_USE_LEAF.search(u.group(1)) for u in _USE.finditer(code))
 
 
 # ---------------------------------------------------------------- the repository
@@ -259,9 +235,10 @@ class Repository:
 
     module_names: list[str] = field(default_factory=list)
     names_dropped: int = 0
-    shadowed: set[str] = field(default_factory=set)  # files where test attributes may be shadowed
+    shadowed: set[str] = field(default_factory=set)  # files where #[test] may be shadowed
     shadowed_everywhere: str | None = None  # why no file can have test_fn scope
     off: str | None = None  # why test scope is off for the whole repository
+    build_scripts: list[str] = field(default_factory=list)
 
 
 def _inside(root: Path, target: Path) -> str | None:
@@ -271,24 +248,41 @@ def _inside(root: Path, target: Path) -> str | None:
         return None
 
 
-def read_repository(root: Path) -> Repository:
-    """Read every Rust file, Cargo manifest and Cargo configuration under `root` (only `.git` is skipped)."""
+def read_repository(root: Path, trusted_build_scripts: dict[str, str] | None = None) -> Repository:
+    """Read every Rust file, Cargo.toml and Cargo configuration under `root` (only `.git` is skipped)."""
     repo = Repository()
     root = root.resolve()
+    cargo = CargoCheck(root, trusted_build_scripts or {})
     names: set[str] = set()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = sorted(d for d in dirnames if d != ".git")
         here = Path(dirpath)
+        keep = []
+        for d in sorted(dirnames):
+            if d == ".git":
+                continue
+            full = here / d
+            if full.is_symlink():
+                # A linked directory may hold Cargo files or code Shoalscan does not walk.
+                repo.off = repo.off or f"{_inside(root, full)} is a symbolic link to a directory"
+                continue
+            keep.append(d)
+        dirnames[:] = keep
         in_cargo_dir = here.name == ".cargo"
         for name in filenames:
             full = here / name
             rel = _inside(root, full) or name
-            config = in_cargo_dir and name in ("config", "config.toml")
-            if not (name.endswith(".rs") or name == "Cargo.toml" or config):
+            if name == "Cargo.toml":
+                cargo.add_manifest(full, rel)
                 continue
+            if in_cargo_dir and name in ("config", "config.toml"):
+                cargo.add_config(full, rel)
+                continue
+            if not name.endswith(".rs"):
+                continue
+            if name == "build.rs":
+                cargo.add_build_rs(rel)
             if full.is_symlink():
-                if config or name in ("build.rs", "Cargo.toml"):
-                    repo.off = repo.off or f"{rel} is a symbolic link"
+                repo.off = repo.off or f"{rel} is a symbolic link"
                 continue
             try:
                 if full.stat().st_size > MAX_FILE_BYTES:
@@ -298,61 +292,25 @@ def read_repository(root: Path) -> Repository:
             except OSError:
                 repo.off = repo.off or f"{rel} could not be read"
                 continue
-            if name == "Cargo.toml" or config:
-                if _FLAG_CFG_TEST.search(text):
-                    repo.off = repo.off or f"{rel} passes --cfg test to the compiler"
-                if name == "Cargo.toml":
-                    why = _renamed_test_crate(text)
-                    if why:
-                        repo.shadowed_everywhere = repo.shadowed_everywhere or f"{rel}: {why}"
-                continue
-            if _emits_test_cfg(text):
-                repo.off = repo.off or f"{rel} may set a test cfg in a build (rustc-cfg)"
             code = strip_code(text)
             names |= cfg_test_module_names(code)
             if shadows_test_attributes(code):
                 repo.shadowed.add(rel)
-            if _MACRO_USE_CRATE.search(code):
-                repo.shadowed_everywhere = repo.shadowed_everywhere or f"{rel} uses #[macro_use] extern crate"
+            if _EXTERN_CRATE.search(code):
+                repo.shadowed_everywhere = repo.shadowed_everywhere or f"{rel} has an extern crate"
+    repo.off = repo.off or cargo.result()
+    repo.build_scripts = sorted(cargo.build_scripts)
     ordered = sorted(names)
     repo.module_names = ordered[:MAX_MODULE_NAMES]
     repo.names_dropped = max(0, len(ordered) - MAX_MODULE_NAMES)
     return repo
 
 
-def _renamed_test_crate(text: str) -> str | None:
-    """A `tokio` or `rstest` dependency that may not be the real crate (renamed, a path or a git source)."""
-    try:
-        doc = tomllib.loads(text)
-    except (tomllib.TOMLDecodeError, RecursionError):
-        return "not valid TOML, so its tokio and rstest dependencies are unknown"
-    tables = []
-
-    def collect(node: object) -> None:
-        if not isinstance(node, dict):
-            return
-        for key, value in node.items():
-            if key in ("dependencies", "dev-dependencies", "build-dependencies") and isinstance(value, dict):
-                tables.append(value)
-            elif isinstance(value, dict):
-                collect(value)
-
-    collect(doc)
-    for table in tables:
-        for crate in ("tokio", "rstest"):
-            spec = table.get(crate)
-            if isinstance(spec, dict) and (
-                spec.get("package", crate) != crate or "path" in spec or "git" in spec or "registry" in spec
-            ):
-                return f"the {crate} dependency is renamed or comes from a path, git or another registry"
-    return None
-
-
 # ---------------------------------------------------------------- the rule pack
 
 
 def module_rules(names: list[str]) -> dict:
-    """The `#[cfg(test)] mod NAME` rule, one pattern per module name.
+    """The `#[cfg(test)] mod NAME` rule (and `cfg(all(..., test, ...))`), one pattern per module name.
 
     Opengrep binds no metavariable to a module's name (`mod $M { ... }` never
     matches), so each name is written out. A name only proposes a pattern:
@@ -367,7 +325,11 @@ def module_rules(names: list[str]) -> dict:
                 "severity": "INFO",
                 "languages": ["rust"],
                 "metadata": {"category": "test-scope"},
-                "pattern-either": [{"pattern": f"#[cfg(test)]\nmod {n} {{ ... }}\n"} for n in names],
+                "pattern-either": [
+                    {"pattern": f"{attr}\nmod {n} {{ ... }}\n"}
+                    for n in names
+                    for attr in ("#[cfg(test)]", "#[cfg(all(..., test, ...))]")
+                ],
             }
         ]
     }
@@ -383,7 +345,7 @@ def stage(dest: Path, pack: Path, names: list[str]) -> None:
 
 
 def rule_ids(names: list[str]) -> set[str]:
-    ids = {ITEM_RULE, *TEST_FN_RULES}
+    ids = {ITEM_RULE, TEST_FN_RULE}
     if names:
         ids.add(MODULE_RULE)
     return ids
@@ -418,6 +380,7 @@ class ScopeMap:
 
     ranges: dict[str, list[tuple[int, int, TestScope]]] = field(default_factory=dict)
     test_fn_dropped: int = 0
+    unrecognised: int = 0
 
     def scope_for(self, path: str, line: int) -> TestScope | None:
         if never_test_scope(path):
@@ -443,16 +406,63 @@ def _rel(path: object, root: Path) -> str | None:
     return _inside(root, p if p.is_absolute() else root / p)
 
 
+def _leading_attributes(code: str) -> list[str]:
+    """The attributes at the start of comment-free code, each with its white space removed."""
+    attrs, i = [], 0
+    while a := _ATTRIBUTE.match(code, i):
+        end = _skip_attribute(code, a.start())
+        attrs.append("".join(code[a.end() - 1 : end].split()))
+        i = end
+    return attrs
+
+
+def _top_level_args(text: str) -> list[str]:
+    args, depth, current = [], 0, ""
+    for ch in text:
+        if ch == "," and depth == 0:
+            args.append(current)
+            current = ""
+            continue
+        depth += ch == "("
+        depth -= ch == ")"
+        current += ch
+    return [*args, current] if current or args else []
+
+
+def _cfg_test_spelling(attr: str) -> bool:
+    """`[cfg(test)]`, or `[cfg(all(...))]` with `test` as one of its own arguments."""
+    if attr == "[cfg(test)]":
+        return True
+    if attr.startswith("[cfg(all(") and attr.endswith("))]"):
+        return "test" in _top_level_args(attr[len("[cfg(all(") : -len("))]")])
+    return False
+
+
+def spelled_as_recognised(match_text: str, kind: str) -> bool:
+    """Is the item's own attribute spelled exactly as Shoalscan recognises it?
+
+    A second check on every match, after Opengrep's: any spelling Shoalscan
+    does not recognise (`cfg(r#test)`, a macro, a parser surprise) is not
+    test scope.
+    """
+    attrs = _leading_attributes(strip_code(match_text))
+    if kind == "test_fn":
+        return "[test]" in attrs
+    return any(_cfg_test_spelling(a) for a in attrs)
+
+
 def build(root: Path, results: list[dict], repo: Repository, unparsed: frozenset[str] = frozenset()) -> ScopeMap:
     """Turn the scope rules' matches into a scope map.
 
     Matches in a file Opengrep reported an error for (`unparsed`) are not
     used: a parser that recovered from an error could place an item's end
-    wrongly. `test_fn` matches are not used in a file that may shadow the test
-    attributes, nor anywhere when the repository may (see `Repository`).
+    wrongly. Each match's attribute must be spelled as recognised. `test_fn`
+    matches are not used in a file that may shadow `#[test]`, nor anywhere
+    when the repository may (see `Repository`).
     """
     root = root.resolve()
     scopes = ScopeMap()
+    sources: dict[str, bytes | None] = {}
     for r in results:
         rule = r.get("check_id")
         rel = _rel(r.get("path"), root)
@@ -467,12 +477,23 @@ def build(root: Path, results: list[dict], repo: Repository, unparsed: frozenset
             kind = "cfg_test_item"
         elif rule == MODULE_RULE:
             kind = "cfg_test_module"
-        elif rule in TEST_FN_RULES:
+        elif rule == TEST_FN_RULE:
             if repo.shadowed_everywhere or rel in repo.shadowed:
                 scopes.test_fn_dropped += 1
                 continue
             kind = "test_fn"
         else:
+            continue
+        if rel not in sources:
+            try:
+                sources[rel] = (root / rel).read_bytes()
+            except OSError:
+                sources[rel] = None
+        data, a, b = sources[rel], start.get("offset"), end.get("offset")
+        if data is None or not isinstance(a, int) or not isinstance(b, int) or not 0 <= a < b <= len(data):
+            continue
+        if not spelled_as_recognised(data[a:b].decode("utf-8", errors="replace"), kind):
+            scopes.unrecognised += 1
             continue
         scopes.ranges.setdefault(rel, []).append((first, last, TestScope(kind, rel, first)))
     return scopes

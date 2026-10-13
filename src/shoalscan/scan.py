@@ -190,7 +190,7 @@ def run_scan(
             scope_on = bool(config.test_scope.non_blocking)
             scope_ids: set[str] = set()
             if scope_on:
-                repository = testscope.read_repository(root)
+                repository = testscope.read_repository(root, config.test_scope.trusted_build_scripts_map())
                 meta["test_scope"] = {
                     "non_blocking": list(config.test_scope.non_blocking),
                     "off": repository.off,
@@ -198,6 +198,7 @@ def run_scan(
                     "module_names_dropped": repository.names_dropped,
                     "test_fn_shadowed_files": len(repository.shadowed),
                     "test_fn_off": repository.shadowed_everywhere,
+                    "build_scripts": repository.build_scripts[:100],
                     "findings": 0,
                 }
                 # Something in the repository can set cfg(test) outside tests: no scope can be proved.
@@ -240,7 +241,12 @@ def run_scan(
                 ]
                 scoped = {(f.rule, f.path, f.fingerprint): f.test_scope for f in og_findings if f.test_scope}
                 meta["test_scope"].update(
-                    {"findings": len(scoped), "scopes": scopes.counts(), "test_fn_dropped": scopes.test_fn_dropped}
+                    {
+                        "findings": len(scoped),
+                        "scopes": scopes.counts(),
+                        "test_fn_dropped": scopes.test_fn_dropped,
+                        "unrecognised_spelling": scopes.unrecognised,
+                    }
                 )
             findings += og_findings
             if not sarif_source.is_file():

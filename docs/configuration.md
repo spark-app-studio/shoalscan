@@ -65,6 +65,9 @@ exclude_rules = ["community.python.lang.security.audit.dangerous-subprocess-use-
 # empty (the default). Secret rules, Gitleaks rules, other scanners' rules and
 # wildcards such as community.* are refused.
 non_blocking = ["community.rust.lang.security.temp-dir", "shoalscan.rust-plain-http-url"]
+# Build scripts reviewed for test scope, by path, with their SHA-256. Any other
+# build script turns test scope off.
+trusted_build_scripts = { "crates/ffi/build.rs" = "<sha256 of the file>" }
 
 [limits]
 scan_timeout_seconds = 1800
@@ -99,7 +102,7 @@ The setting only protects pull requests that run under `--policy-ref`: then the 
 
 ## Test scope
 
-`[test_scope] non_blocking` lists Opengrep rules whose findings Shoalscan accepts automatically when it can prove they are in a Rust item compiled only for tests: a top-level `#[cfg(test)]` module, function, `impl`, constant or static, or a `#[test]`, `#[tokio::test]` or `#[rstest]` function. Whole files, such as a crate's `tests/`, are not. Such findings stay in every output, marked with their scope, and never block. Only Opengrep findings in `.rs` files are eligible. Rules that find secrets, Gitleaks rules, other scanners' rules and wildcards broader than three dotted parts are refused. When the repository can set `cfg(test)` itself (a build script's `rustc-cfg`, or `--cfg test` in Cargo configuration), test scope is off for the run. [Test scope](test-scope.md) explains what counts, what does not, and why it is safe.
+`[test_scope] non_blocking` lists Opengrep rules whose findings Shoalscan accepts automatically when it can prove they are in a Rust item compiled only for tests: a top-level `#[cfg(test)]` (or `#[cfg(all(test, ...))]`) module, function, `impl`, constant or static, or a function with the built-in `#[test]`. Whole files, such as a crate's `tests/`, are not, and neither are `#[tokio::test]` and `#[rstest]` functions. Such findings stay in every output, marked with their scope, and never block. Only Opengrep findings in `.rs` files are eligible. Rules that find secrets, Gitleaks rules, other scanners' rules and wildcards broader than three dotted parts are refused. Test scope is off for the run unless Shoalscan understands every Cargo file and trusts every build script: `trusted_build_scripts` names reviewed build scripts with their SHA-256. [Test scope](test-scope.md) explains what counts, what does not, and why it is safe.
 
 How `check` treats partial parses and other unscanned files is described in [The baseline and the check](baseline-and-check.md#the-check).
 
