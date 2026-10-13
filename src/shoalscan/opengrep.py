@@ -275,6 +275,21 @@ def normalise(doc: dict, root: Path, components: dict[str, str]) -> tuple[list[F
     return findings, index
 
 
+def result_spans(doc: dict, root: Path) -> dict[tuple[str, str, int, int], tuple[int, int]]:
+    """Each result's byte range in its file, keyed like the SARIF index: (rule, path, line, column)."""
+    spans = {}
+    for r in doc["results"]:
+        try:
+            start, end = r["start"], r["end"]
+            key = (r["check_id"], relative_path(r["path"], root), start["line"], start.get("col", 0))
+            a, b = start["offset"], end["offset"]
+        except (KeyError, TypeError, ScanError):
+            continue
+        if isinstance(a, int) and isinstance(b, int) and not isinstance(a, bool) and 0 <= a <= b:
+            spans[key] = (a, b)
+    return spans
+
+
 # Rule metadata kept for the work list and reports. Rule files can come from
 # the scanned repository, so every value is checked and bounded, and only
 # http(s) links are kept.

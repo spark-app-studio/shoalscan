@@ -8,8 +8,6 @@ rule_dirs = ["rules"]
 
 [test_scope]
 non_blocking = ["repo.rules.temp-dir"]
-# The fixture's build script, reviewed: it only calls temp_dir().
-trusted_build_scripts = { "build.rs" = "ffdd38bb2af8a2924af470580461c701a0dc2867bd8227f5ead417aa431f0c4b" }
 
 [limits]
 scan_timeout_seconds = 300

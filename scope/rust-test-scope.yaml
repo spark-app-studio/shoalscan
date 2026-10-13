@@ -55,17 +55,3 @@ rules:
       - pattern: |
           #[cfg(all(..., test, ...))]
           static $C: $TY = $V;
-
-  # Only the built-in #[test]. #[tokio::test] and #[rstest] are names a
-  # dependency (a path crate called tokio, a [patch]) or an import can redefine,
-  # so they are not test scope. #[test_case] keeps the original function as a
-  # plain function outside cfg(test).
-  - id: rust-test-fn
-    message: A test function (#[test]).
-    severity: INFO
-    languages: [rust]
-    metadata:
-      category: test-scope
-    pattern: |
-      #[test]
-      fn $F(...) { ... }

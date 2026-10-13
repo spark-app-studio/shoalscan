@@ -5,7 +5,6 @@ and are skipped without them; the rest run anywhere.
 """
 
 import contextlib
-import hashlib
 import io
 import json
 import os
@@ -102,19 +101,29 @@ class PolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(SetupError, "it finds secrets", msg=rule):
                 self.parse(f'[test_scope]\nnon_blocking = ["{rule}"]\n')
 
-    def test_trusted_build_scripts(self):
-        digest = "a" * 64
-        config = self.parse(f'[test_scope]\ntrusted_build_scripts = {{ "crates/x/build.rs" = "{digest}" }}\n')
-        self.assertEqual(config.test_scope.trusted_build_scripts_map(), {"crates/x/build.rs": digest})
-        for table in (
-            '{ "build.rs" = "ABC" }',
-            f'{{ "../build.rs" = "{digest}" }}',
-            f'{{ "./build.rs" = "{digest}" }}',
-            f'{{ "build.sh" = "{digest}" }}',
-            '"build.rs"',
-        ):
-            with self.assertRaises(SetupError, msg=table):
-                self.parse(f"[test_scope]\ntrusted_build_scripts = {table}\n")
+    def test_trusted_build_scripts_are_refused(self):
+        with self.assertRaisesRegex(SetupError, "no hash of it can vouch for it"):
+            self.parse(f'[test_scope]\ntrusted_build_scripts = {{ "build.rs" = "{"a" * 64}" }}\n')
+
+    def test_adoption_names_the_test_scope_keys_from_the_change(self):
+        from shoalscan.cli import Policy, _print_adoption
+
+        config = self.parse('[test_scope]\nnon_blocking = ["repo.rules.x.y"]\nallowed_rustc_wrappers = ["sccache"]\n')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            _print_adoption(Policy(config, "refs/heads/main", "0" * 40, "x", adoption=True))
+        self.assertIn(
+            "ADOPTION: [test_scope] from this change: non_blocking = ['repo.rules.x.y']; "
+            "allowed_rustc_wrappers = ['sccache']",
+            out.getvalue(),
+        )
+
+    def test_allowed_rustc_wrappers(self):
+        config = self.parse('[test_scope]\nallowed_rustc_wrappers = ["sccache"]\n')
+        self.assertEqual(config.test_scope.allowed_rustc_wrappers, ("sccache",))
+        for value in ('["sccache --x"]', '["/usr/bin/sccache"]', '["$WRAP"]', '"sccache"'):
+            with self.assertRaises(SetupError, msg=value):
+                self.parse(f"[test_scope]\nallowed_rustc_wrappers = {value}\n")
 
     def test_broad_wildcards_are_refused(self):
         for rule in ("community.*", "shoalscan.*", "repo.*", "repo.rules.*", "community.rust.*"):
@@ -224,25 +233,119 @@ class RepositoryTests(unittest.TestCase):
         self.assertIsNone(repo.off)
         self.assertEqual(repo.module_names, ["tests"])
 
-    def test_an_untrusted_build_script_turns_scope_off(self):
-        # Every evasion of a text search (escapes, concat!, include!, values read at run time) is moot:
-        # any build script turns test scope off unless the policy trusts it by its SHA-256.
-        for text in (
-            'fn main() { println!("cargo:rustc\\x2dcfg=test"); }',
-            'fn main() { println!(concat!("cargo:rustc-", "c\\x66g=test")); }',
-            'include!("gen.in");',
-            'fn main() { println!("{}", std::fs::read_to_string("flags").unwrap()); }',
-            "fn main() {}",
+    def test_any_build_script_turns_scope_off(self):
+        # A build script can read, include or run anything, so none is trusted, whatever its content.
+        for name in ("build.rs", "BUILD.RS", "Build.rs", "crates/x/build.rs"):
+            write(self.root, name, "fn main() {}\n")
+            self.assertIn(name, self.repo().off or "", name)
+            (self.root / name).unlink()
+        self.assertIsNone(self.repo().off)
+        for build in ('"tools/gen.rs"', "true"):
+            write(self.root, "Cargo.toml", f'[package]\nname = "demo"\nbuild = {build}\n')
+            self.assertIn("build script", self.repo().off or "", build)
+        write(self.root, "Cargo.toml", '[package]\nname = "demo"\nbuild = false\n')
+        self.assertIsNone(self.repo().off)
+
+    def test_special_names_in_another_letter_case_turn_scope_off(self):
+        for path in (
+            "crates/y/cargo.toml",
+            "crates/x/CARGO.TOML",
+            ".Cargo/config.toml",
+            ".cargo/Config.Toml",
+            ".cargo/CONFIG",
+            "Rust-Toolchain.toml",
+            "RUST-TOOLCHAIN",
         ):
-            write(self.root, "build.rs", text)
-            self.assertIn("build.rs is a build script", self.repo().off or "", text)
-        digest = hashlib.sha256((self.root / "build.rs").read_bytes()).hexdigest()
-        self.assertIsNone(testscope.read_repository(self.root, {"build.rs": digest}).off)
-        self.assertIn("does not match", testscope.read_repository(self.root, {"build.rs": "0" * 64}).off)
-        (self.root / "build.rs").unlink()
-        write(self.root, "Cargo.toml", '[package]\nname = "demo"\nbuild = "tools/gen.rs"\n')
-        write(self.root, "tools/gen.rs", "fn main() {}\n")
-        self.assertIn("tools/gen.rs is a build script", self.repo().off or "")
+            write(self.root, path, "\n")
+            self.assertIn("letter case", self.repo().off or "", path)
+            (self.root / path).unlink()
+            if path.startswith(".Cargo/"):
+                (self.root / ".Cargo").rmdir()
+        self.assertIsNone(self.repo().off)
+
+    def test_rust_toolchain(self):
+        for text in (
+            "stable\n",
+            '[toolchain]\nchannel = "1.98.1"\ncomponents = ["clippy"]\n'
+            'targets = ["wasm32-unknown-unknown"]\nprofile = "minimal"\n',
+        ):
+            write(self.root, "rust-toolchain.toml", text)
+            self.assertIsNone(self.repo().off, text)
+        for text in ('[toolchain]\npath = "/opt/evil"\n', '[toolchain]\nchannel = "x y"\n', "[other]\n", "not toml ["):
+            write(self.root, "rust-toolchain", text)
+            self.assertIsNotNone(self.repo().off, text)
+
+    def test_compiler_settings_in_other_text_files(self):
+        off = {
+            "Dockerfile": 'ENV RUSTFLAGS="--cfg test"',
+            "Makefile": "build:\n\tRUSTFLAGS='--cfg=test' cargo build --release",
+            ".github/workflows/ci.yml": 'env:\n  RUSTFLAGS: --cfg "test"',
+            ".envrc": 'export RUSTFLAGS="--cfg $FLAG"',
+            "justfile": "release:\n    cargo rustc --release -- --cfg test",
+            "scripts/a.sh": 'RUSTFLAGS="--cfg test=\\"x\\""',
+            "scripts/b.sh": 'RUSTFLAGS="--cfg \\x74est" cargo build',
+            "scripts/c.sh": "export CARGO_ENCODED_RUSTFLAGS=x",
+            "scripts/d.sh": "RUSTC_WORKSPACE_WRAPPER=./w cargo build",
+            "scripts/e.sh": "RUSTC=./my-rustc cargo build",
+            "scripts/f.sh": "cargo build --config 'build.rustc-wrapper=\"./w\"'",
+            "scripts/g.sh": "export RUSTC_WRAPPER=sccache",
+            "scripts/h.sh": 'RUSTFLAGS="--test" cargo build --release',
+            "scripts/i.sh": "RUSTFLAGS=--cfg",
+        }
+        for path, text in off.items():
+            write(self.root, path, text + "\n")
+            problem = self.repo().off or ""
+            self.assertTrue(problem.startswith(f"{path}:"), f"{path}: {problem!r}")
+            (self.root / path).unlink()
+        self.assertIsNone(self.repo().off)
+        fine = {
+            "Dockerfile": 'ENV RUSTFLAGS="--cfg tokio_unstable"',
+            "Makefile": "test:\n\tcargo test --test integration -- --test-threads=1",
+            "README.md": "Build with `--cfg tokio_unstable`.",
+        }
+        for path, text in fine.items():
+            write(self.root, path, text + "\n")
+        self.assertIsNone(self.repo().off)
+
+    def test_allowed_rustc_wrappers(self):
+        for line in (
+            "export RUSTC_WRAPPER=sccache",
+            "ENV RUSTC_WRAPPER=sccache",
+            "  RUSTC_WRAPPER: sccache",
+            'RUSTC_WRAPPER="sccache"',
+        ):
+            write(self.root, "ci.sh", line + "\n")
+            self.assertIsNone(testscope.read_repository(self.root, ("sccache",)).off, line)
+            self.assertIsNotNone(testscope.read_repository(self.root).off, line)
+        for line in (
+            "export RUSTC_WRAPPER=sccache-evil",
+            "export RUSTC_WRAPPER=$WRAP",
+            "RUSTC_WRAPPER=sccache cargo build",
+            "export RUSTC_WRAPPER=/tmp/sccache",
+        ):
+            write(self.root, "ci.sh", line + "\n")
+            self.assertIn("ci.sh:1", testscope.read_repository(self.root, ("sccache",)).off or "", line)
+        (self.root / "ci.sh").unlink()
+        write(self.root, ".cargo/config.toml", '[build]\nrustc-wrapper = "sccache"\n')
+        self.assertIsNone(testscope.read_repository(self.root, ("sccache",)).off)
+        self.assertIsNotNone(testscope.read_repository(self.root).off)
+
+    def test_binary_and_large_files_are_logged_as_unchecked(self):
+        (self.root / "blob.bin").write_bytes(b"\0--cfg test")
+        with unittest.mock.patch("shoalscan.cargotrust.MAX_TEXT_BYTES", 10):
+            write(self.root, "big.txt", "x" * 20)
+            repo = self.repo()
+        self.assertIsNone(repo.off)
+        self.assertEqual(repo.unchecked, ["big.txt", "blob.bin"])
+
+    def test_a_directory_that_cannot_be_listed_turns_scope_off(self):
+        locked = self.root / "locked"
+        locked.mkdir()
+        locked.chmod(0)
+        try:
+            self.assertIn("could not be listed", self.repo().off or "")
+        finally:
+            locked.chmod(0o700)
 
     def test_cargo_files_must_be_fully_understood(self):
         off = {
@@ -316,37 +419,9 @@ class RepositoryTests(unittest.TestCase):
         os.symlink(self.root / "src", self.root / "linked")
         self.assertIn("symbolic link", self.repo().off or "")
 
-    def test_shadowed_test_attribute(self):
-        shadowing = [
-            "use test_log::test;",
-            "use tokio::test;",
-            "use x::passthrough as test;",
-            "use other::{test, b};",
-            "macro_rules! test { () => {} }",
-            "fn test() {}",
-            "pub use pm2::test;",
-        ]
-        for line in shadowing:
-            self.assertTrue(testscope.shadows_test_attributes(testscope.strip_code(line)), line)
-        for line in (
-            "use tokio::sync::Mutex;",
-            "use rstest::rstest;",
-            "use super::*;",
-            "fn test_helper() {}",
-            "// use test_log::test;",
-            'const S: &str = "use x as test;";',
-        ):
-            self.assertFalse(testscope.shadows_test_attributes(testscope.strip_code(line)), line)
-        write(self.root, "src/a.rs", "use test_log::test;\n")
-        self.assertEqual(self.repo().shadowed, {"src/a.rs"})
-
-    def test_an_extern_crate_turns_test_fn_off(self):
-        write(self.root, "src/lib.rs", "extern crate pm2 as tokio;\n")
-        self.assertIn("extern crate", self.repo().shadowed_everywhere or "")
-
     def test_spelling_is_checked_again(self):
-        self.assertTrue(testscope.spelled_as_recognised("#[cfg( test )]\n/// doc\nfn a() {}", "cfg_test_item"))
-        self.assertTrue(testscope.spelled_as_recognised("#[allow(x)]\n#[cfg(all(unix, test))]\nmod m {}", "x"))
+        self.assertTrue(testscope.spelled_as_recognised("#[cfg( test )]\n/// doc\nfn a() {}"))
+        self.assertTrue(testscope.spelled_as_recognised("#[allow(x)]\n#[cfg(all(unix, test))]\nmod m {}"))
         for text in (
             "#[cfg(r#test)]\nfn a() {}",
             "#[cfg(all(not(test), unix))]\nfn a() {}",
@@ -354,9 +429,8 @@ class RepositoryTests(unittest.TestCase):
             '#[cfg_attr(feature = "x", cfg(test))]\nfn a() {}',
             "// #[cfg(test)]\nfn a() {}",
         ):
-            self.assertFalse(testscope.spelled_as_recognised(text, "cfg_test_item"), text)
-        self.assertTrue(testscope.spelled_as_recognised("#[test]\nfn a() {}", "test_fn"))
-        self.assertFalse(testscope.spelled_as_recognised("#[tokio::test]\nfn a() {}", "test_fn"))
+            self.assertFalse(testscope.spelled_as_recognised(text), text)
+        self.assertFalse(testscope.spelled_as_recognised("#[test]\nfn a() {}"))
 
     def test_module_names_come_only_after_cfg_test(self):
         write(
@@ -388,10 +462,15 @@ class RepositoryTests(unittest.TestCase):
             "start": {"line": 1, "col": 1, "offset": 0},
             "end": {"line": 2, "col": 15, "offset": 27},
         }
-        repo = self.repo()
-        self.assertEqual(testscope.build(self.root, [match], repo).scope_for("src/lib.rs", 2).kind, "cfg_test_item")
+        self.assertEqual(testscope.build(self.root, [match]).scope_for("src/lib.rs", 13, 27).kind, "cfg_test_item")
         unparsed = frozenset({"src/lib.rs"})
-        self.assertIsNone(testscope.build(self.root, [match], repo, unparsed).scope_for("src/lib.rs", 2))
+        self.assertIsNone(testscope.build(self.root, [match], unparsed).scope_for("src/lib.rs", 13, 27))
+
+    def test_a_finding_must_lie_wholly_inside_the_item(self):
+        scopes = testscope.ScopeMap({"a.rs": [(10, 20, TestScope("cfg_test_item", "a.rs", 1))]})
+        self.assertIsNotNone(scopes.scope_for("a.rs", 10, 20))
+        for start, end in ((5, 12), (15, 25), (0, 9), (21, 30), (None, 12)):
+            self.assertIsNone(scopes.scope_for("a.rs", start, end), (start, end))
 
     def test_never_test_scope(self):
         for path in ("examples/x.rs", "build.rs", "crate/build.rs", "src/bin/tool.rs", "crate/src/bin/a/main.rs"):
@@ -516,7 +595,7 @@ EXPECTED = {
     "b": "cfg_test_module",
     "c": None,
     "test_in_a_plain_module": None,
-    "top_level_test": "test_fn",
+    "top_level_test": None,
     "d": "cfg_test_item",
     "e": "cfg_test_module",
     "f": "cfg_test_module",
@@ -596,24 +675,24 @@ class ScopeRuleTests(unittest.TestCase):
         self.assertIn("shoalscan/test_scope", sarif)
         self.assertNotIn("test-scope.rust-cfg-test-item", doc["rule_ids"])
 
-    def test_untrusted_build_scripts_and_cargo_settings_turn_scope_off(self):
+    def test_build_scripts_and_compiler_settings_turn_scope_off(self):
         make_crate(self.repo, None)
-        write(self.repo, "build.rs", 'fn main() {\n    println!("cargo:rustc\\x2dcfg=test");\n}\n')
+        write(self.repo, "BUILD.RS", 'fn main() {\n    println!("cargo:rustc\\x2dcfg=test");\n}\n')
         code, _, err = cli("scan", "--repo", str(self.repo), "--tools-dir", str(TOOLS), "--out", str(self.out))
         self.assertEqual(code, 0, err)
         self.assertIn("TEST SCOPE IS OFF", err)
         doc = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
-        self.assertIn("build.rs", doc["test_scope"]["off"])
+        self.assertIn("BUILD.RS", doc["test_scope"]["off"])
         self.assertFalse([f for f in doc["findings"] if "test_scope" in f])
-        shutil.copy(FIXTURE / "build.rs", self.repo / "build.rs")
-        write(self.repo, ".cargo/config.toml", '[build]\nrustc-wrapper = "./add-cfg-test.sh"\n')
+        (self.repo / "BUILD.RS").unlink()
+        write(self.repo, "Dockerfile", 'FROM rust\nENV RUSTFLAGS="--cfg test"\nRUN cargo build --release\n')
         doc = self.scan()
-        self.assertIn(".cargo/config.toml", doc["test_scope"]["off"])
+        self.assertTrue(doc["test_scope"]["off"].startswith("Dockerfile:2 "))
         self.assertFalse([f for f in doc["findings"] if "test_scope" in f])
 
-    def test_a_glob_imported_or_renamed_test_macro_is_not_scope(self):
-        # Reviewer repros: a crate that exports `test` and `rstest`, reached through a glob import or an
-        # `extern crate ... as tokio`. Only the built-in #[test] can be scope, and an extern crate turns that off.
+    def test_test_functions_are_not_scope(self):
+        # Reviewer repros: `#[test]` can mean another macro (an include!d `use pm::test`, a nightly
+        # `macro_rules! test` attribute), and so can #[tokio::test] and #[rstest]: none is test scope in 0.3.0.
         lib = (
             "pub mod prelude {\n    pub mod tokio { pub use pm2::test; }\n    pub use pm2::rstest;\n}\n"
             f"#[test]\nfn builtin() {{ {CALL} }}\n"
@@ -622,11 +701,26 @@ class ScopeRuleTests(unittest.TestCase):
         glob = f"use crate::prelude::*;\n#[tokio::test]\npub fn f() {{ {CALL} }}\n#[rstest]\npub fn g() {{ {CALL} }}\n"
         write(self.repo, "src/a.rs", glob)
         doc = self.scan()
-        self.assertFalse([f for f in doc["findings"] if f["path"] == "src/a.rs" and "test_scope" in f])
-        write(self.repo, "src/lib.rs", "extern crate pm2 as tokio;\n" + lib)
+        scoped = [f for f in doc["findings"] if "test_scope" in f]
+        self.assertFalse([f for f in scoped if f["path"] in ("src/a.rs",) or f["line"] == 6])
+        self.assertNotIn("test_fn", {f["test_scope"]["kind"] for f in scoped})
+
+    def test_shipped_code_on_the_same_line_as_a_test_item_is_not_scope(self):
+        shipped = "pub fn shipped() -> std::path::PathBuf { std::env::temp_dir() }"
+        lib = (
+            f"{shipped} #[cfg(test)] fn before() {{}}\n"
+            f"#[cfg(test)] fn after() {{}} {shipped}\n"
+            f"#[cfg(test)]\nmod tests {{\n    fn x() {{}}\n}} {shipped}\n"
+            f"#[cfg(test)] const X: u8 = 1; {shipped}\n"
+            f"#[cfg(test)] fn inside() {{ {CALL} }}\n"
+        )
+        make_crate(self.repo, lib)
         doc = self.scan()
-        self.assertFalse([f for f in doc["findings"] if "test_scope" in f and f["test_scope"]["kind"] == "test_fn"])
-        self.assertIn("extern crate", doc["test_scope"]["test_fn_off"])
+        found = {f["line"]: f.get("test_scope") for f in doc["findings"] if f["path"] == "src/lib.rs"}
+        self.assertEqual(sorted(found), [1, 2, 6, 7, 8])
+        self.assertEqual(
+            {line: bool(scope) for line, scope in found.items()}, {1: False, 2: False, 6: False, 7: False, 8: True}
+        )
 
     def test_a_file_that_does_not_parse_gets_no_scope(self):
         make_crate(self.repo, None)
@@ -634,14 +728,6 @@ class ScopeRuleTests(unittest.TestCase):
         doc = self.scan()
         self.assertFalse([f for f in doc["findings"] if f["path"] == "src/broken.rs" and "test_scope" in f])
         self.assertIn("src/broken.rs", {e["path"] for e in doc["unscanned"]["errors"]})
-
-    def test_a_shadowed_test_attribute_is_not_scope(self):
-        lib = (FIXTURE / "src/lib.rs").read_text(encoding="utf-8")
-        make_crate(self.repo, "use test_log::test;\n" + lib)
-        doc = self.scan()
-        kinds = {f["test_scope"]["kind"] for f in doc["findings"] if f["path"] == "src/lib.rs" and "test_scope" in f}
-        self.assertEqual(kinds, {"cfg_test_module", "cfg_test_item"})
-        self.assertEqual(doc["test_scope"]["test_fn_dropped"], 1)
 
     def test_the_module_name_cap_warns(self):
         make_crate(self.repo, None)
@@ -726,23 +812,21 @@ class EndToEndTests(unittest.TestCase):
             scoped,
             {
                 ("src/lib.rs", "cfg_test_module"),
-                ("src/lib.rs", "test_fn"),
                 ("src/lib.rs", "cfg_test_item"),
-                ("tests/integration.rs", "test_fn"),
             },
         )
         code, summary, out = self.check()
         self.assertEqual(code, 1)
-        self.assertEqual(summary["test_scoped"], 4)
-        self.assertEqual(summary["new_blocking"], len(doc["findings"]) - 4)
-        self.assertIn("Accepted as test-only code (never blocking): 4", out)
+        self.assertEqual(summary["test_scoped"], 2)
+        self.assertEqual(summary["new_blocking"], len(doc["findings"]) - 2)
+        self.assertIn("Accepted as test-only code (never blocking): 2", out)
         blocked = json.loads((self.out / "check.json").read_text(encoding="utf-8"))["new_blocking"]
         # The rule [test_scope] does not list blocks even inside the test module.
         self.assertIn("repo.rules.other", {k[1] for k in blocked})
         # Whole files are never test scope: not a crate's tests/ (outside a test function), not the file a
         # #[cfg(test)] mod NAME; declaration loads.
         self.assertTrue(
-            {"build.rs", "examples/demo.rs", "src/lib.rs", "src/helpers.rs", "tests/common/mod.rs"}
+            {"examples/demo.rs", "src/lib.rs", "src/helpers.rs", "tests/common/mod.rs", "tests/integration.rs"}
             <= {k[2] for k in blocked}
         )
 
@@ -776,9 +860,9 @@ class EndToEndTests(unittest.TestCase):
         path.write_text(without, encoding="utf-8")
         git(self.repo, "commit", "-q", "-am", "drop the policy")
         doc = self.scan("--policy-ref", base)
-        self.assertEqual(sum(1 for f in doc["findings"] if "test_scope" in f), 4)
+        self.assertEqual(sum(1 for f in doc["findings"] if "test_scope" in f), 2)
         _, summary, out = self.check("--policy-ref", base)
-        self.assertEqual(summary["test_scoped"], 4)
+        self.assertEqual(summary["test_scoped"], 2)
         self.assertIn("POLICY CHANGES", out)
         # The other way round: a change cannot turn the policy on for itself.
         git(self.repo, "checkout", "-q", "-b", "base-without", base)
@@ -804,7 +888,7 @@ class EndToEndTests(unittest.TestCase):
             ).fetchall()
         finally:
             conn.close()
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(len(rows), 2)
         for _path, status, who, description, resolved in rows:
             self.assertEqual((status, who), ("accepted_risk", AUTO_REVIEWER))
             self.assertTrue(description.startswith("test-only code: "), description)
@@ -829,7 +913,7 @@ class EndToEndTests(unittest.TestCase):
         self.scan()
         code, summary, _ = self.check()
         self.assertEqual(code, 1)
-        self.assertEqual(summary["test_scoped"], 3)
+        self.assertEqual(summary["test_scoped"], 1)
         blocked = json.loads((self.out / "check.json").read_text(encoding="utf-8"))["new_blocking"]
         self.assertIn(("src/lib.rs", RULE), {(k[2], k[1]) for k in blocked})
         self.record(code, "2026-10-02T02:00:00Z")
@@ -882,7 +966,7 @@ class EndToEndTests(unittest.TestCase):
         data = self.dashboard()
         try:
             page = data.findings(self.repo_id, self.run_id, review="test_scope")
-            self.assertEqual(page["total"], 4)
+            self.assertEqual(page["total"], 2)
             helper = [f for f in page["findings"] if f["test_scope"]["kind"] == "cfg_test_module"][0]
             self.assertEqual(
                 helper["test_scope"],
@@ -895,9 +979,9 @@ class EndToEndTests(unittest.TestCase):
             )
             self.assertEqual(helper["review"]["updated_by"], AUTO_REVIEWER)
             self.assertEqual(helper["review"]["status"], "accepted_risk")
-            self.assertEqual(data.review_counts(self.repo_id, self.run_id)["test_scoped"], 4)
-            self.assertEqual(data.overview(self.repo_id)["latest_trend_run"]["test_scoped"], 4)
-            shipped = data.findings(self.repo_id, self.run_id, path="build.rs")["findings"][0]
+            self.assertEqual(data.review_counts(self.repo_id, self.run_id)["test_scoped"], 2)
+            self.assertEqual(data.overview(self.repo_id)["latest_trend_run"]["test_scoped"], 2)
+            shipped = data.findings(self.repo_id, self.run_id, path="examples/demo.rs")["findings"][0]
             self.assertIsNone(shipped["test_scope"])
         finally:
             self.conn.close()
@@ -908,14 +992,14 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(code, 0, err)
         size = (self.repo / "baseline.toml").read_text(encoding="utf-8").count("[[finding]]")
         code, summary, out = self.check()
-        self.assertEqual((code, summary["stale"], summary["baseline_test_scoped"]), (0, 0, 4))
+        self.assertEqual((code, summary["stale"], summary["baseline_test_scoped"]), (0, 0, 2))
         self.assertIn("shoalscan baseline prune --test-scope", out)
         code, out, err = cli("baseline", "prune", "--test-scope", "--repo", str(self.repo), "--out", str(self.out))
         self.assertEqual(code, 0, err)
-        self.assertIn("removed 4 entries", out)
-        self.assertEqual((self.repo / "baseline.toml").read_text(encoding="utf-8").count("[[finding]]"), size - 4)
+        self.assertIn("removed 2 entries", out)
+        self.assertEqual((self.repo / "baseline.toml").read_text(encoding="utf-8").count("[[finding]]"), size - 2)
         code, summary, _ = self.check()
-        self.assertEqual((code, summary["new"], summary["new_blocking"], summary["test_scoped"]), (0, 4, 0, 4))
+        self.assertEqual((code, summary["new"], summary["new_blocking"], summary["test_scoped"]), (0, 2, 0, 2))
         code, out, _ = cli("baseline", "prune", "--test-scope", "--repo", str(self.repo), "--out", str(self.out))
         self.assertIn("no entries", out)
         # Prune refuses findings made under another configuration.

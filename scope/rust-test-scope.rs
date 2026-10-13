@@ -1,6 +1,6 @@
 // Tests for the scope rules: `opengrep scan --test scope/`.
 
-// ok: rust-cfg-test-item, rust-test-fn
+// ok: rust-cfg-test-item
 fn shipped() {}
 
 // ruleid: rust-cfg-test-item
@@ -87,34 +87,34 @@ const S: &str = "#[cfg(test)] fn in_a_string() {}";
 // ok: rust-cfg-test-item
 fn after_a_comment() {}
 
-// ruleid: rust-test-fn
+// ok: rust-cfg-test-item
 #[test]
 fn unit() {}
 
-// ruleid: rust-test-fn
+// ok: rust-cfg-test-item
 #[test]
 #[should_panic]
 fn panics() {}
 
-// ruleid: rust-test-fn
+// ok: rust-cfg-test-item
 #[ignore]
 #[test]
 fn ignored() {}
 
-// ok: rust-test-fn
+// ok: rust-cfg-test-item
 #[tokio::test]
 async fn async_test() {}
 
-// ok: rust-test-fn
+// ok: rust-cfg-test-item
 #[rstest]
 #[case(1)]
 fn parametrised(#[case] x: u8) {}
 
-// ok: rust-test-fn
+// ok: rust-cfg-test-item
 #[test_case(1; "one")]
 fn test_case_keeps_its_function(x: u8) {}
 
-// ok: rust-test-fn
+// ok: rust-cfg-test-item
 #[tokio::main]
 async fn main() {}
 
@@ -125,7 +125,7 @@ mod outer {
     #[cfg(test)]
     fn nested_helper() {}
 
-    // ok: rust-test-fn
+    // ok: rust-cfg-test-item
     #[test]
     fn nested_test() {}
 }

@@ -2,28 +2,38 @@
 
 Test scope rests on one fact: code inside a `#[cfg(test)]` item is compiled
 only when rustc runs with `--test` (or `--cfg test`). A build script, a
-compiler wrapper, extra compiler flags, or a patched or replaced dependency
-can change that. Rather than look for what such things might do, Shoalscan
-trusts only what it can read and recognise:
+compiler wrapper, extra compiler flags, a toolchain override, or a patched or
+replaced dependency can change that. Rather than look for what such things
+might do, Shoalscan trusts only what it can read and recognise:
 
-- **Build scripts** (any `build.rs`, and any `build = "..."` in a Cargo.toml)
-  are trusted only when the policy names each one with its SHA-256 under
-  `[test_scope] trusted_build_scripts`. Any other build script turns test
-  scope off.
+- **Build scripts:** any `build.rs` (in any letter case) or `build = ...` in
+  a Cargo.toml turns test scope off. A build script can read, include or run
+  anything, so no hash of one file can vouch for it.
 - **Cargo.toml and `.cargo/config(.toml)`** are read with tomllib, and every
   key must be on an allowlist. A file that does not parse, an unknown key,
   `[replace]`, `[source]`, `paths`, `cargo-features`, a `[patch]` that is not a
-  path inside the repository, a compiler or
-  wrapper setting, or a `rustflags` entry other than `-C`, `-L`, `-l` and the
-  lint levels turns test scope off.
+  path inside the repository, a compiler or wrapper setting (except a wrapper
+  the policy allows), or a `rustflags` entry other than `-C`, `-L`, `-l` and
+  the lint levels turns test scope off.
+- **`rust-toolchain(.toml)`** may name a channel, components, targets and a
+  profile, nothing else.
+- **Every other text file** (scripts, Dockerfiles, Makefiles, CI workflows) is
+  searched for compiler settings: `--cfg` followed by anything but a plain
+  name other than `test`, `RUSTC_WRAPPER` (unless set to an allowed wrapper,
+  alone on its line), `RUSTC_WORKSPACE_WRAPPER`, `CARGO_ENCODED_RUSTFLAGS`,
+  `RUSTC=`, `cargo rustc`, a compiler set through `--config`, and `--test` in
+  rustflags.
+- **Special names in any letter case** that are not spelled exactly
+  (`BUILD.RS`, `.Cargo/Config.Toml`, `cargo.toml`) turn it off: a
+  case-insensitive file system would use them.
 
 The answer is a reason when test scope must be off, or None.
 """
 
 from __future__ import annotations
 
-import hashlib
 import posixpath
+import re
 import tomllib
 from pathlib import Path
 
@@ -128,7 +138,7 @@ _PROFILE_KEYS = frozenset(
 # .cargo/config(.toml): what Shoalscan understands. A compiler or wrapper (build.rustc,
 # build.rustc-wrapper, build.rustc-workspace-wrapper), [patch], [source], paths, [env], include
 # and anything else turn test scope off.
-_CONFIG_BUILD_KEYS = frozenset({"target", "target-dir", "jobs", "incremental", "rustflags"})
+_CONFIG_BUILD_KEYS = frozenset({"target", "target-dir", "jobs", "incremental", "rustflags", "rustc-wrapper"})
 _CONFIG_UNSTABLE_KEYS = frozenset({"build-std", "build-std-features"})
 _CONFIG_TARGET_KEYS = frozenset({"rustflags", "linker", "runner"})
 # Compiler flags that cannot set a cfg: codegen options, search paths, libraries and lint levels.
@@ -249,13 +259,15 @@ def manifest_problem(doc: dict, rel: str) -> str | None:
     return None
 
 
-def config_problem(doc: dict, rel: str) -> str | None:
+def config_problem(doc: dict, rel: str, allowed_wrappers: tuple[str, ...] = ()) -> str | None:
     """Why this .cargo/config(.toml) could change cfg(test) or the code that is built, or None."""
     if problem := _unknown(doc, frozenset({"build", "unstable", "target"}), rel):
         return problem
     build = doc.get("build", {})
     if problem := _unknown(build, _CONFIG_BUILD_KEYS, f"{rel} [build]"):
         return problem
+    if "rustc-wrapper" in build and build["rustc-wrapper"] not in allowed_wrappers:
+        return f"{rel} [build] rustc-wrapper is not one of [test_scope] allowed_rustc_wrappers"
     if "rustflags" in build and (problem := rustflags_problem(build["rustflags"])):
         return f"{rel} [build] {problem}"
     if problem := _unknown(doc.get("unstable", {}), _CONFIG_UNSTABLE_KEYS, f"{rel} [unstable]"):
@@ -272,67 +284,159 @@ def config_problem(doc: dict, rel: str) -> str | None:
     return None
 
 
-def _build_script(manifest: dict, crate_dir: str) -> str | None:
-    """The path a Cargo.toml's `package.build` names, or None (none, `true` or `false`)."""
+def _has_build_script(manifest: dict) -> bool:
+    """Does a Cargo.toml set `build` (to anything but false)?"""
     for key in ("package", "project"):
         package = manifest.get(key)
-        if isinstance(package, dict) and isinstance(package.get("build"), str):
-            return posixpath.normpath(posixpath.join(crate_dir, package["build"]))
+        if isinstance(package, dict) and "build" in package and package["build"] is not False:
+            return True
+    return False
+
+
+_TOOLCHAIN_KEYS = frozenset({"channel", "components", "targets", "profile"})
+_CHANNEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def toolchain_problem(text: str, rel: str) -> str | None:
+    """A rust-toolchain(.toml) may name a channel, components, targets and a profile; nothing else, not a `path`."""
+    stripped = text.strip()
+    if "\n" not in stripped and _CHANNEL.match(stripped):
+        return None  # the legacy one-line form: a channel name
+    try:
+        doc = tomllib.loads(text)
+    except (tomllib.TOMLDecodeError, RecursionError):
+        return f"{rel} could not be read as TOML"
+    if set(doc) != {"toolchain"} or not isinstance(doc["toolchain"], dict):
+        return f"{rel} has something other than a [toolchain] table"
+    toolchain = doc["toolchain"]
+    if problem := _unknown(toolchain, _TOOLCHAIN_KEYS, f"{rel} [toolchain]"):
+        return problem
+    if "channel" in toolchain and not (isinstance(toolchain["channel"], str) and _CHANNEL.match(toolchain["channel"])):
+        return f"{rel} has a channel Shoalscan does not recognise"
+    for key in ("components", "targets"):
+        value = toolchain.get(key, [])
+        if not isinstance(value, list) or not all(isinstance(v, str) and _CHANNEL.match(v) for v in value):
+            return f"{rel} [toolchain] {key} is not a list of names"
+    if "profile" in toolchain and not (isinstance(toolchain["profile"], str) and _CHANNEL.match(toolchain["profile"])):
+        return f"{rel} [toolchain] profile is not a name"
     return None
 
 
-def sha256_file(path: Path) -> str | None:
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
+# Compiler settings in any other text file. `--cfg` must be followed by white space and a plain name that is
+# not `test`, then a delimiter.
+_CFG_FLAG = re.compile(r"--cfg")
+_CFG_ALLOWED = re.compile(r"--cfg[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?=$|[\s\"'`,\])};])")
+_SETTINGS = (
+    (re.compile(r"RUSTC_WORKSPACE_WRAPPER"), "sets RUSTC_WORKSPACE_WRAPPER"),
+    (re.compile(r"CARGO_ENCODED_RUSTFLAGS"), "sets CARGO_ENCODED_RUSTFLAGS"),
+    (re.compile(r"RUSTC\s*="), "sets RUSTC"),
+    (re.compile(r"\bcargo\s+(?:\+\S+\s+)?rustc\b"), "runs cargo rustc"),
+    (re.compile(r"rustc-(?:workspace-)?wrapper|build\.rustc\b", re.IGNORECASE), "sets a compiler or wrapper for Cargo"),
+)
+_WRAPPER = re.compile(r"RUSTC_WRAPPER")
+_RUSTFLAGS_TEST = re.compile(r"rustflags", re.IGNORECASE)
+_TEST_FLAG = re.compile(r"--test(?![\w-])")
+
+
+def text_problem(text: str, rel: str, allowed_wrappers: tuple[str, ...]) -> str | None:
+    """A line of a non-Rust text file that could compile shipped code with cfg(test), as `path:line: why`."""
+    allowed = _allowed_wrapper_line(allowed_wrappers)
+    for number, line in enumerate(text.split("\n"), 1):
+        why = None
+        for m in _CFG_FLAG.finditer(line):
+            ok = _CFG_ALLOWED.match(line, m.start())
+            if ok is None or ok.group("name") == "test":
+                why = "passes --cfg with something other than a plain name, or test"
+                break
+        if why is None:
+            for pattern, what in _SETTINGS:
+                if pattern.search(line):
+                    why = what
+                    break
+        if why is None and _WRAPPER.search(line) and not (allowed and allowed.match(line)):
+            why = "sets RUSTC_WRAPPER to something other than a wrapper [test_scope] allowed_rustc_wrappers names"
+        if why is None and _RUSTFLAGS_TEST.search(line) and _TEST_FLAG.search(line):
+            why = "passes --test in rustflags"
+        if why:
+            return f"{rel}:{number} {why}"
+    return None
+
+
+def _allowed_wrapper_line(allowed_wrappers: tuple[str, ...]) -> re.Pattern | None:
+    """A line that sets RUSTC_WRAPPER to one allowed wrapper and nothing else."""
+    if not allowed_wrappers:
         return None
+    names = "|".join(re.escape(w) for w in allowed_wrappers)
+    return re.compile(
+        rf"^\s*(?:export\s+|ENV\s+|-\s+)?(?:CARGO_BUILD_)?RUSTC_WRAPPER\s*(?:=|:|\s)\s*([\"']?)(?:{names})\1\s*$"
+    )
+
+
+MAX_TEXT_BYTES = 2 * 1024 * 1024
+_BUILD_RS = "build.rs"
 
 
 class CargoCheck:
-    """Collects the Cargo files of a repository walk and decides whether test scope can stay on."""
+    """Collects a repository walk's build-related files and decides whether test scope can stay on."""
 
-    def __init__(self, root: Path, trusted_build_scripts: dict[str, str]):
+    def __init__(self, root: Path, allowed_wrappers: tuple[str, ...] = ()):
         self.root = root
-        self.trusted = dict(trusted_build_scripts)
-        self.build_scripts: set[str] = set()
+        self.allowed_wrappers = tuple(allowed_wrappers)
         self.problem: str | None = None
+        self.unchecked: list[str] = []  # files the text search skipped: binary or too large
 
-    def _fail(self, reason: str) -> None:
+    def fail(self, reason: str) -> None:
         self.problem = self.problem or reason
 
     def add_manifest(self, path: Path, rel: str) -> None:
         doc, error = _load(path, rel)
         if error:
-            self._fail(error)
+            self.fail(error)
             return
         if problem := manifest_problem(doc, rel):
-            self._fail(problem)
-            return
-        crate_dir = rel.rsplit("/", 1)[0] if "/" in rel else ""
-        script = _build_script(doc, crate_dir)
-        if script is not None:
-            self.build_scripts.add(script)
+            self.fail(problem)
+        elif _has_build_script(doc):
+            self.fail(f"{rel} sets a build script (build = ...); test scope is off wherever a build script runs")
 
     def add_config(self, path: Path, rel: str) -> None:
         doc, error = _load(path, rel)
         if error:
-            self._fail(error)
+            self.fail(error)
             return
-        if problem := config_problem(doc, rel):
-            self._fail(problem)
+        if problem := config_problem(doc, rel, self.allowed_wrappers):
+            self.fail(problem)
 
-    def add_build_rs(self, rel: str) -> None:
-        self.build_scripts.add(rel)
+    def add_toolchain(self, path: Path, rel: str) -> None:
+        text = self._read(path, rel, MAX_TOML_BYTES)
+        if text is not None and (problem := toolchain_problem(text, rel)):
+            self.fail(problem)
+
+    def add_text(self, path: Path, rel: str) -> None:
+        """Search a non-Rust file for compiler settings; a binary or too large file is logged as unchecked."""
+        try:
+            if path.stat().st_size > MAX_TEXT_BYTES:
+                self.unchecked.append(rel)
+                return
+            data = path.read_bytes()
+        except OSError:
+            self.fail(f"{rel} could not be read")
+            return
+        if b"\0" in data[:8192]:
+            self.unchecked.append(rel)
+            return
+        if problem := text_problem(data.decode("utf-8", errors="replace"), rel, self.allowed_wrappers):
+            self.fail(problem)
+
+    def _read(self, path: Path, rel: str, limit: int) -> str | None:
+        try:
+            if path.is_symlink() or path.stat().st_size > limit:
+                self.fail(f"{rel} is a symbolic link or too large")
+                return None
+            return path.read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            self.fail(f"{rel} could not be read")
+            return None
 
     def result(self) -> str | None:
         """Why test scope is off for the repository, or None."""
-        if self.problem:
-            return self.problem
-        for script in sorted(self.build_scripts):
-            expected = self.trusted.get(script)
-            if expected is None:
-                return f"{script} is a build script that [test_scope] trusted_build_scripts does not list"
-            actual = sha256_file(self.root / script) if not (self.root / script).is_symlink() else None
-            if actual != expected:
-                return f"{script} does not match the SHA-256 that [test_scope] trusted_build_scripts gives it"
-        return None
+        return self.problem

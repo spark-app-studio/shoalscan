@@ -190,18 +190,18 @@ def run_scan(
             scope_on = bool(config.test_scope.non_blocking)
             scope_ids: set[str] = set()
             if scope_on:
-                repository = testscope.read_repository(root, config.test_scope.trusted_build_scripts_map())
+                repository = testscope.read_repository(root, config.test_scope.allowed_rustc_wrappers)
                 meta["test_scope"] = {
                     "non_blocking": list(config.test_scope.non_blocking),
+                    "allowed_rustc_wrappers": list(config.test_scope.allowed_rustc_wrappers),
                     "off": repository.off,
                     "module_names": len(repository.module_names),
                     "module_names_dropped": repository.names_dropped,
-                    "test_fn_shadowed_files": len(repository.shadowed),
-                    "test_fn_off": repository.shadowed_everywhere,
-                    "build_scripts": repository.build_scripts[:100],
+                    "unchecked_files": len(repository.unchecked),
+                    "unchecked_examples": repository.unchecked[:20],
                     "findings": 0,
                 }
-                # Something in the repository can set cfg(test) outside tests: no scope can be proved.
+                # Something in the repository could set cfg(test) outside tests: no scope can be proved.
                 scope_on = repository.off is None
             if scope_on:
                 testscope.stage(rules_stage / testscope.NAMESPACE, scope_rules_file(), repository.module_names)
@@ -231,22 +231,19 @@ def run_scan(
                 errored = frozenset(e["path"] for e in unscanned["errors"]) | frozenset(
                     e["path"] for e in unscanned["skipped"]
                 )
-                scopes = testscope.build(root, scope_results, repository, errored)
+                scopes = testscope.build(root, scope_results, errored)
                 listed = RuleIdFilter(config.test_scope.non_blocking)
+                spans = opengrep.result_spans(doc, root)
+                by_print = {(k[0], k[1], fp): spans.get(k) for k, fp in sarif_index.items()}
                 og_findings = [
-                    replace(f, test_scope=scopes.scope_for(f.path, f.line))
+                    replace(f, test_scope=scopes.scope_for(f.path, *(by_print.get(f.key()[1:]) or (None, None))))
                     if testscope.eligible(f.tool, f.rule, f.path, listed)
                     else f
                     for f in og_findings
                 ]
                 scoped = {(f.rule, f.path, f.fingerprint): f.test_scope for f in og_findings if f.test_scope}
                 meta["test_scope"].update(
-                    {
-                        "findings": len(scoped),
-                        "scopes": scopes.counts(),
-                        "test_fn_dropped": scopes.test_fn_dropped,
-                        "unrecognised_spelling": scopes.unrecognised,
-                    }
+                    {"findings": len(scoped), "scopes": scopes.counts(), "unrecognised_spelling": scopes.unrecognised}
                 )
             findings += og_findings
             if not sarif_source.is_file():

@@ -5,19 +5,16 @@ Opengrep's own Rust parser does the proving. Shoalscan ships a small rule pack
 rules; its matches give the exact line ranges of:
 
 - `#[cfg(test)]` and `#[cfg(all(test, ...))]` modules (`cfg_test_module`);
-- such functions, `impl` blocks, constants and statics (`cfg_test_item`);
-- functions with the built-in `#[test]` attribute (`test_fn`).
+- such functions, `impl` blocks, constants and statics (`cfg_test_item`).
 
 Only items count, never whole files: code inside a `#[cfg(test)]` item is
 removed from every build without `cfg(test)`, wherever its file is included.
 
 Shoalscan trusts only what it can prove, and turns the feature off otherwise:
 
-- the repository's Cargo files and build scripts must not be able to set
-  `cfg(test)` (see `shoalscan.cargotrust`);
-- `#[test]` is a name a file can rebind (`use test_log::test;`), so a file that
-  binds `test` gets no `test_fn` scope, and no file does when any `extern crate`
-  exists; `cfg(test)` cannot be rebound;
+- nothing in the repository may be able to set `cfg(test)` in a build that is
+  not a test (see `shoalscan.cargotrust`);
+- a finding counts only when its whole byte range lies inside the item;
 - every match is checked to be spelled exactly as recognised;
 - a file Opengrep reported an error for gets no scope at all.
 """
@@ -36,10 +33,9 @@ NAMESPACE = "test-scope"
 RULES_FILE = "rust-test-scope.yaml"
 MODULE_RULES_FILE = "rust-test-scope-modules.yaml"
 ITEM_RULE = f"{NAMESPACE}.rust-cfg-test-item"
-TEST_FN_RULE = f"{NAMESPACE}.rust-test-fn"
 MODULE_RULE = f"{NAMESPACE}.rust-cfg-test-module"
 
-KINDS = ("cfg_test_module", "cfg_test_item", "test_fn")
+KINDS = ("cfg_test_module", "cfg_test_item")
 # Who an automatic test-scope review is recorded under. It is not an email
 # address, so it can never be a person signed in to the dashboard.
 AUTO_REVIEWER = "shoalscan (test scope)"
@@ -204,28 +200,6 @@ def cfg_test_module_names(code: str) -> set[str]:
     return names
 
 
-# Binding `test` in a file can shadow the built-in `#[test]` attribute.
-_SHADOW_ITEM = re.compile(
-    r"\b(?:as|fn|mod|struct|enum|const|static|type|trait|union|macro_rules\s*!|macro)\s*(?:r#)?test\b"
-)
-_USE = re.compile(r"\buse\s+([^;]*);")
-_USE_LEAF = re.compile(r"(?:^|::|\{|,)\s*(?:r#)?test\s*(?=$|,|\})")
-_EXTERN_CRATE = re.compile(r"\bextern\s+crate\b")
-
-
-def shadows_test_attributes(code: str) -> bool:
-    """Could `#[test]` mean something other than the built-in attribute in this (comment-free) file?
-
-    True when the file binds `test` itself: `... as test`, an item or macro
-    named `test`, or a `use` that imports a `test` (any crate's, `tokio::test`
-    included). A glob import that brings in a `test` attribute is rejected by
-    rustc as ambiguous with the built-in one (E0659).
-    """
-    if _SHADOW_ITEM.search(code):
-        return True
-    return any(_USE_LEAF.search(u.group(1)) for u in _USE.finditer(code))
-
-
 # ---------------------------------------------------------------- the repository
 
 
@@ -235,10 +209,8 @@ class Repository:
 
     module_names: list[str] = field(default_factory=list)
     names_dropped: int = 0
-    shadowed: set[str] = field(default_factory=set)  # files where #[test] may be shadowed
-    shadowed_everywhere: str | None = None  # why no file can have test_fn scope
     off: str | None = None  # why test scope is off for the whole repository
-    build_scripts: list[str] = field(default_factory=list)
+    unchecked: list[str] = field(default_factory=list)  # files the text search skipped (binary, too large)
 
 
 def _inside(root: Path, target: Path) -> str | None:
@@ -248,58 +220,87 @@ def _inside(root: Path, target: Path) -> str | None:
         return None
 
 
-def read_repository(root: Path, trusted_build_scripts: dict[str, str] | None = None) -> Repository:
-    """Read every Rust file, Cargo.toml and Cargo configuration under `root` (only `.git` is skipped)."""
+# Names Cargo or rustup read, compared in any letter case: a case-insensitive file system uses any spelling.
+_CARGO_DIR = ".cargo"
+_SPECIAL_FILES = {"cargo.toml": "Cargo.toml", "build.rs": "build.rs"}
+_CONFIG_FILES = {"config": "config", "config.toml": "config.toml"}
+_TOOLCHAIN_FILES = {"rust-toolchain": "rust-toolchain", "rust-toolchain.toml": "rust-toolchain.toml"}
+# Directories whose files the text search does not read; they are logged as unchecked.
+_SKIPPED_DIRS = ("node_modules",)
+
+
+def read_repository(root: Path, allowed_wrappers: tuple[str, ...] = ()) -> Repository:
+    """Read every file under `root` (only `.git` is skipped): Rust files for module names, and everything that
+    could change how Rust is compiled. Anything Shoalscan cannot read or does not recognise turns test scope off."""
     repo = Repository()
     root = root.resolve()
-    cargo = CargoCheck(root, trusted_build_scripts or {})
+    cargo = CargoCheck(root, allowed_wrappers)
     names: set[str] = set()
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+
+    def walk_error(error: OSError) -> None:
+        cargo.fail(f"{_inside(root, Path(error.filename)) if error.filename else root} could not be listed")
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=walk_error):
         here = Path(dirpath)
         keep = []
         for d in sorted(dirnames):
             if d == ".git":
                 continue
             full = here / d
+            rel_dir = _inside(root, full)
             if full.is_symlink():
-                # A linked directory may hold Cargo files or code Shoalscan does not walk.
-                repo.off = repo.off or f"{_inside(root, full)} is a symbolic link to a directory"
+                # A linked directory may hold build settings or code Shoalscan does not walk.
+                cargo.fail(f"{rel_dir} is a symbolic link to a directory")
+                continue
+            if d.lower() == _CARGO_DIR and d != _CARGO_DIR:
+                cargo.fail(f"{rel_dir} is a Cargo configuration directory in another letter case")
+            if d in _SKIPPED_DIRS or (d == "target" and "Cargo.toml" in filenames):
+                repo.unchecked.append(f"{rel_dir}/")
                 continue
             keep.append(d)
         dirnames[:] = keep
-        in_cargo_dir = here.name == ".cargo"
+        in_cargo_dir = here.name.lower() == _CARGO_DIR
         for name in filenames:
             full = here / name
             rel = _inside(root, full) or name
+            lower = name.lower()
+            special = (
+                _SPECIAL_FILES.get(lower) or (in_cargo_dir and _CONFIG_FILES.get(lower)) or _TOOLCHAIN_FILES.get(lower)
+            )
+            if special and (name != special or (in_cargo_dir and here.name != _CARGO_DIR)):
+                cargo.fail(f"{rel} is named like {special} in another letter case")
+                continue
+            if full.is_symlink():
+                # A link into the repository is read where it points; anything else is unknown.
+                if special or lower.endswith(".rs") or _inside(root, full.resolve()) is None:
+                    cargo.fail(f"{rel} is a symbolic link")
+                continue
+            if name == "build.rs":
+                cargo.fail(f"{rel} is a build script; test scope is off wherever a build script runs")
+                continue
             if name == "Cargo.toml":
                 cargo.add_manifest(full, rel)
                 continue
-            if in_cargo_dir and name in ("config", "config.toml"):
+            if in_cargo_dir and name in _CONFIG_FILES:
                 cargo.add_config(full, rel)
                 continue
-            if not name.endswith(".rs"):
+            if name in _TOOLCHAIN_FILES:
+                cargo.add_toolchain(full, rel)
                 continue
-            if name == "build.rs":
-                cargo.add_build_rs(rel)
-            if full.is_symlink():
-                repo.off = repo.off or f"{rel} is a symbolic link"
+            if not lower.endswith(".rs"):
+                cargo.add_text(full, rel)
                 continue
             try:
                 if full.stat().st_size > MAX_FILE_BYTES:
-                    repo.off = repo.off or f"{rel} is larger than {MAX_FILE_BYTES} bytes"
+                    cargo.fail(f"{rel} is larger than {MAX_FILE_BYTES} bytes")
                     continue
                 text = full.read_bytes().decode("utf-8", errors="replace")
             except OSError:
-                repo.off = repo.off or f"{rel} could not be read"
+                cargo.fail(f"{rel} could not be read")
                 continue
-            code = strip_code(text)
-            names |= cfg_test_module_names(code)
-            if shadows_test_attributes(code):
-                repo.shadowed.add(rel)
-            if _EXTERN_CRATE.search(code):
-                repo.shadowed_everywhere = repo.shadowed_everywhere or f"{rel} has an extern crate"
-    repo.off = repo.off or cargo.result()
-    repo.build_scripts = sorted(cargo.build_scripts)
+            names |= cfg_test_module_names(strip_code(text))
+    repo.off = cargo.result()
+    repo.unchecked = sorted(repo.unchecked + cargo.unchecked)
     ordered = sorted(names)
     repo.module_names = ordered[:MAX_MODULE_NAMES]
     repo.names_dropped = max(0, len(ordered) - MAX_MODULE_NAMES)
@@ -345,7 +346,7 @@ def stage(dest: Path, pack: Path, names: list[str]) -> None:
 
 
 def rule_ids(names: list[str]) -> set[str]:
-    ids = {ITEM_RULE, TEST_FN_RULE}
+    ids = {ITEM_RULE}
     if names:
         ids.add(MODULE_RULE)
     return ids
@@ -376,19 +377,19 @@ def split_results(doc: dict) -> list[dict]:
 
 @dataclass
 class ScopeMap:
-    """Line ranges that are test-only, per repository path."""
+    """Byte ranges that are test-only, per repository path."""
 
     ranges: dict[str, list[tuple[int, int, TestScope]]] = field(default_factory=dict)
-    test_fn_dropped: int = 0
     unrecognised: int = 0
 
-    def scope_for(self, path: str, line: int) -> TestScope | None:
-        if never_test_scope(path):
+    def scope_for(self, path: str, start: int | None, end: int | None) -> TestScope | None:
+        """The scope whose byte range holds all of [start, end), the finding's own range; None without one."""
+        if never_test_scope(path) or not isinstance(start, int) or not isinstance(end, int) or not 0 <= start <= end:
             return None
-        inside = [r for r in self.ranges.get(path, []) if r[0] <= line <= r[1]]
+        inside = [r for r in self.ranges.get(path, []) if r[0] <= start and end <= r[1]]
         if not inside:
             return None
-        # The outermost range names the scope: the module rather than a test inside it.
+        # The outermost range names the scope.
         return min(inside, key=lambda r: (r[0], -r[1]))[2]
 
     def counts(self) -> dict:
@@ -438,27 +439,22 @@ def _cfg_test_spelling(attr: str) -> bool:
     return False
 
 
-def spelled_as_recognised(match_text: str, kind: str) -> bool:
+def spelled_as_recognised(match_text: str) -> bool:
     """Is the item's own attribute spelled exactly as Shoalscan recognises it?
 
     A second check on every match, after Opengrep's: any spelling Shoalscan
     does not recognise (`cfg(r#test)`, a macro, a parser surprise) is not
     test scope.
     """
-    attrs = _leading_attributes(strip_code(match_text))
-    if kind == "test_fn":
-        return "[test]" in attrs
-    return any(_cfg_test_spelling(a) for a in attrs)
+    return any(_cfg_test_spelling(a) for a in _leading_attributes(strip_code(match_text)))
 
 
-def build(root: Path, results: list[dict], repo: Repository, unparsed: frozenset[str] = frozenset()) -> ScopeMap:
-    """Turn the scope rules' matches into a scope map.
+def build(root: Path, results: list[dict], unparsed: frozenset[str] = frozenset()) -> ScopeMap:
+    """Turn the scope rules' matches into byte ranges.
 
     Matches in a file Opengrep reported an error for (`unparsed`) are not
     used: a parser that recovered from an error could place an item's end
-    wrongly. Each match's attribute must be spelled as recognised. `test_fn`
-    matches are not used in a file that may shadow `#[test]`, nor anywhere
-    when the repository may (see `Repository`).
+    wrongly. Each match's attribute must be spelled as recognised.
     """
     root = root.resolve()
     scopes = ScopeMap()
@@ -468,20 +464,13 @@ def build(root: Path, results: list[dict], repo: Repository, unparsed: frozenset
         rel = _rel(r.get("path"), root)
         start = r.get("start") if isinstance(r.get("start"), dict) else {}
         end = r.get("end") if isinstance(r.get("end"), dict) else {}
-        first, last = start.get("line"), end.get("line")
-        if rel is None or rel in unparsed or not isinstance(first, int) or not isinstance(last, int):
-            continue
-        if first < 1 or last < first:
+        line, a, b = start.get("line"), start.get("offset"), end.get("offset")
+        if rel is None or rel in unparsed or not isinstance(line, int) or line < 1:
             continue
         if rule == ITEM_RULE:
             kind = "cfg_test_item"
         elif rule == MODULE_RULE:
             kind = "cfg_test_module"
-        elif rule == TEST_FN_RULE:
-            if repo.shadowed_everywhere or rel in repo.shadowed:
-                scopes.test_fn_dropped += 1
-                continue
-            kind = "test_fn"
         else:
             continue
         if rel not in sources:
@@ -489,11 +478,11 @@ def build(root: Path, results: list[dict], repo: Repository, unparsed: frozenset
                 sources[rel] = (root / rel).read_bytes()
             except OSError:
                 sources[rel] = None
-        data, a, b = sources[rel], start.get("offset"), end.get("offset")
+        data = sources[rel]
         if data is None or not isinstance(a, int) or not isinstance(b, int) or not 0 <= a < b <= len(data):
             continue
-        if not spelled_as_recognised(data[a:b].decode("utf-8", errors="replace"), kind):
+        if not spelled_as_recognised(data[a:b].decode("utf-8", errors="replace")):
             scopes.unrecognised += 1
             continue
-        scopes.ranges.setdefault(rel, []).append((first, last, TestScope(kind, rel, first)))
+        scopes.ranges.setdefault(rel, []).append((a, b, TestScope(kind, rel, line)))
     return scopes

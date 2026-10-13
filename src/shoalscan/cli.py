@@ -238,10 +238,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 f"not accepted as test-only.\n{bar}",
                 file=sys.stderr,
             )
-        if scope.get("test_fn_off"):
+        if scope.get("unchecked_files"):
             print(
-                "shoalscan: test scope: no #[test] function is accepted as test-only: "
-                f"{md.one_line(scope['test_fn_off'])}",
+                f"shoalscan: test scope: {scope['unchecked_files']} files were not searched for compiler settings "
+                f"(binary, too large, or under node_modules or a Cargo target directory), for example "
+                f"{md.one_line(', '.join(scope['unchecked_examples'][:5]))}",
                 file=sys.stderr,
             )
     counts = result.meta["counts"]
@@ -259,6 +260,17 @@ def _print_adoption(policy: Policy) -> None:
     print(f"ADOPTION: {policy.ref} has no Shoalscan configuration or baseline, so this change's own")
     print("configuration and baseline are used. Review them with care: they set the policy from now on.")
     print("ERROR findings still block.")
+    scope = policy.config.test_scope
+    keys = [
+        f"{key} = {list(value)}"
+        for key, value in (
+            ("non_blocking", scope.non_blocking),
+            ("allowed_rustc_wrappers", scope.allowed_rustc_wrappers),
+        )
+        if value
+    ]
+    if keys:
+        print(f"ADOPTION: [test_scope] from this change: {md.one_line('; '.join(keys))}")
     print(bar)
 
 
