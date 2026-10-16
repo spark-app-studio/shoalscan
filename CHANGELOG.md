@@ -2,6 +2,12 @@
 
 All notable changes to Shoalscan are recorded here.
 
+## Unreleased
+
+### Fixed
+
+- `[limits] jobs` now also bounds Opengrep's rule loading, not only its matching. Opengrep loads rules with a thread pool sized from the machine's core count (`min(32, cores + 4)` workers, each starting an `opengrep-core` process), whatever `--jobs` says, so a scan briefly used most of the machine's cores. Shoalscan now sets `PYTHON_CPU_COUNT` to `jobs` in Opengrep's environment, which gives that pool `jobs + 4` workers, and records `jobs` and `python_cpu_count` under `scanners.opengrep` in `findings.json` ([Configuration](docs/configuration.md#jobs)).
+
 ## 0.3.0 (2026-10-13)
 
 ### Added

@@ -71,7 +71,7 @@ rules = ["community.rust.lang.security.temp-dir", "shoalscan.rust-plain-http-url
 scan_timeout_seconds = 1800
 rule_timeout_seconds = 30       # per rule and file
 max_target_bytes = 1000000      # larger files are skipped
-jobs = 4
+jobs = 4                        # Opengrep's cores, for matching and for loading rules
 
 # Path prefixes to component names. The longest prefix wins; anything else
 # is "other".
@@ -79,6 +79,10 @@ jobs = 4
 "services/api/" = "api"
 "web/" = "web"
 ```
+
+## Jobs
+
+`[limits] jobs` is the number of cores Opengrep may use. Shoalscan passes it as `--jobs`, which bounds Opengrep's matching. Opengrep loads its rules with a Python thread pool sized from the machine's core count instead (`min(32, cores + 4)` workers, each starting a short-lived `opengrep-core` process), whatever `--jobs` says. So Shoalscan also sets `PYTHON_CPU_COUNT` to `jobs` in Opengrep's environment, and that pool then has `jobs + 4` workers. This brings rule loading close to the limit, but not exactly to it. `findings.json` records both values under `scanners.opengrep` (`jobs` and `python_cpu_count`).
 
 ## Rule selection
 

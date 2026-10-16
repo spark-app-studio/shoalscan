@@ -141,9 +141,23 @@ def build_command(
 _scanner_env = process.scanner_env
 
 
-def execute(cmd: list[str], cwd: Path, timeout: int) -> dict:
+def scanner_env_extra(limits: Limits) -> dict[str, str]:
+    """Variables Shoalscan sets for Opengrep itself, on top of the allowlisted environment.
+
+    `--jobs` bounds only Opengrep's matching. Its command line loads the rules
+    with a Python thread pool sized from the number of cores (min(32, cores + 4)
+    workers, each starting an opengrep-core process), whatever `--jobs` says.
+    PYTHON_CPU_COUNT (Python 3.13) makes that pool follow `limits.jobs` too:
+    it then has jobs + 4 workers instead of cores + 4.
+    """
+    return {"PYTHON_CPU_COUNT": str(limits.jobs)}
+
+
+def execute(cmd: list[str], cwd: Path, timeout: int, extra_env: dict[str, str] | None = None) -> dict:
     """Run Opengrep and return its parsed JSON output, or raise ScanError."""
-    returncode, stdout, stderr = process.run_scanner("opengrep", cmd, cwd, timeout, max_stdout=MAX_STDOUT_BYTES)
+    returncode, stdout, stderr = process.run_scanner(
+        "opengrep", cmd, cwd, timeout, max_stdout=MAX_STDOUT_BYTES, extra_env=extra_env
+    )
     tail = process.error_summary(stderr)
     if returncode not in (0, 1):
         detail = tail

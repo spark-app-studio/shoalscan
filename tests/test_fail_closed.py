@@ -6,6 +6,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import helpers
 
@@ -74,6 +75,19 @@ class ExecuteTests(unittest.TestCase):
     def test_missing_binary_fails(self):
         with self.assertRaises(ScanError):
             opengrep.execute([str(self.dir / "absent")], self.dir, 5)
+
+    def test_rule_loading_follows_jobs(self):
+        # Opengrep's rule loading sizes its thread pool from the core count, not --jobs;
+        # PYTHON_CPU_COUNT ties it to limits.jobs. A value from the caller's environment never passes.
+        self.assertEqual(opengrep.scanner_env_extra(Limits(jobs=3)), {"PYTHON_CPU_COUNT": "3"})
+        # The stand-in reports the value it was given as its version.
+        doc = '{"version": "%s", "results": [], "errors": [], "paths": {"scanned": ["x"]}}'
+        binary = self.scanner.make(f"printf '{doc}' \"$PYTHON_CPU_COUNT\"")
+        with mock.patch.dict(os.environ, {"PYTHON_CPU_COUNT": "64"}):
+            ours = opengrep.execute([str(binary)], self.dir, 30, extra_env=opengrep.scanner_env_extra(Limits(jobs=3)))
+            outer = opengrep.execute([str(binary)], self.dir, 30)
+        self.assertEqual(ours["version"], "3")
+        self.assertEqual(outer["version"], "")
 
     def test_error_level_entry_fails(self):
         doc = self.run_standin(
@@ -156,6 +170,21 @@ class RunScanTests(unittest.TestCase):
         with self.assertRaises(Exception) as ctx:
             run_scan(self.repo, self.config, self.tools(binary, sha="0" * 64), self.out)
         self.assertIn("SHA-256 mismatch", str(ctx.exception))
+
+    def test_run_scan_passes_jobs_to_rule_loading(self):
+        config = Config(
+            opengrep=OpengrepSettings(community_rules=False, shoalscan_rules=True),
+            limits=Limits(scan_timeout_seconds=30, jobs=2),
+        )
+        binary = self.scanner.make(f"echo '{GOOD_JSON}'")
+        with (
+            mock.patch.object(opengrep, "execute", side_effect=ScanError("stop")) as execute,
+            self.assertRaises(ScanError),
+        ):
+            run_scan(self.repo, config, self.tools(binary), self.out)
+        self.assertEqual(execute.call_args.kwargs["extra_env"], {"PYTHON_CPU_COUNT": "2"})
+        self.assertIn("--jobs", execute.call_args.args[0])
+        self.assertEqual(execute.call_args.args[0][execute.call_args.args[0].index("--jobs") + 1], "2")
 
     def test_scanner_environment_is_filtered(self):
         os.environ["SEMGREP_RULES"] = "https://example.com/rules.yaml"

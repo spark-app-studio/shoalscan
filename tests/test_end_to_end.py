@@ -64,6 +64,9 @@ class EndToEndTests(unittest.TestCase):
 
     def test_scan_baseline_check_cycle(self):
         doc = self.scan()
+        # The sample policy's jobs, applied to the matching and to the rule loading alike.
+        self.assertEqual(doc["scanners"]["opengrep"]["jobs"], 2)
+        self.assertEqual(doc["scanners"]["opengrep"]["python_cpu_count"], 2)
         rules = sorted({(f["rule"], f["path"]) for f in doc["findings"]})
         self.assertIn(("shoalscan.python-tls-verification-disabled", "src/client.py"), rules)
         self.assertIn(("shoalscan.node-tls-verification-disabled", "src/server.js"), rules)
