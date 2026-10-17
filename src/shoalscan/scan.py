@@ -205,7 +205,8 @@ def run_scan(
                 namespaces.append(testscope.NAMESPACE)
             sarif_source = stage / "opengrep.sarif"
             cmd = opengrep.build_command(tools.opengrep, namespaces, root, config.limits, excludes, sarif_source)
-            doc = opengrep.execute(cmd, rules_stage, config.limits.scan_timeout_seconds)
+            og_env = opengrep.scanner_env_extra(config.limits)
+            doc = opengrep.execute(cmd, rules_stage, config.limits.scan_timeout_seconds, extra_env=og_env)
             # The scope rules' matches are never findings: taken out before anything reads the results.
             scope_results = testscope.split_results(doc)
             warnings = opengrep.check_errors(doc)
@@ -251,6 +252,8 @@ def run_scan(
             meta["scanners"]["opengrep"] = {
                 "version": tools.opengrep_version,
                 "signature_verified": tools.signature_verified,
+                "jobs": config.limits.jobs,
+                "python_cpu_count": int(og_env["PYTHON_CPU_COUNT"]),
                 "rule_files": stats.files,
                 "rules_staged": len(stats.rule_ids),
                 "rules_ran": rules_ran,
