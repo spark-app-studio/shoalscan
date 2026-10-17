@@ -82,7 +82,7 @@ jobs = 4                        # Opengrep's cores, for matching and for loading
 
 ## Jobs
 
-`[limits] jobs` is the number of cores Opengrep may use. Shoalscan passes it as `--jobs`, which bounds Opengrep's matching. Opengrep loads its rules with a Python thread pool sized from the machine's core count instead (`min(32, cores + 4)` workers, each starting a short-lived `opengrep-core` process), whatever `--jobs` says. So Shoalscan also sets `PYTHON_CPU_COUNT` to `jobs` in Opengrep's environment, and that pool then has `jobs + 4` workers. This brings rule loading close to the limit, but not exactly to it. `findings.json` records both values under `scanners.opengrep` (`jobs` and `python_cpu_count`).
+`[limits] jobs` is the number of cores Opengrep may use. Shoalscan passes it as `--jobs`, which bounds Opengrep's matching. Opengrep loads its rules with a Python thread pool sized from the machine's core count instead (`min(32, cores + 4)` workers, each starting a short-lived `opengrep-core` process), whatever `--jobs` says. So Shoalscan also sets `PYTHON_CPU_COUNT` to `jobs` in Opengrep's environment, and that pool then has `min(32, jobs + 4)` workers. This brings rule loading close to the limit, but not exactly to it. `findings.json` records both values under `scanners.opengrep` (`jobs` and `python_cpu_count`).
 
 ## Rule selection
 

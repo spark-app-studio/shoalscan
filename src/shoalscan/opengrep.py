@@ -148,7 +148,7 @@ def scanner_env_extra(limits: Limits) -> dict[str, str]:
     with a Python thread pool sized from the number of cores (min(32, cores + 4)
     workers, each starting an opengrep-core process), whatever `--jobs` says.
     PYTHON_CPU_COUNT (Python 3.13) makes that pool follow `limits.jobs` too:
-    it then has jobs + 4 workers instead of cores + 4.
+    it then has min(32, jobs + 4) workers instead of min(32, cores + 4).
     """
     return {"PYTHON_CPU_COUNT": str(limits.jobs)}
 
