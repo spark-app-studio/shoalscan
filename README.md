@@ -93,7 +93,7 @@ shoalscan scan && shoalscan check
 
 ## Status
 
-The current release is **0.3.0** (13 October 2026). Shoalscan is used every day to gate pull requests and scan a default branch nightly, but it is still before 1.0: configuration keys and the history database can still change between minor releases. Each release says what changed in [CHANGELOG.md](CHANGELOG.md), and `shoalscan serve` and `shoalscan record` migrate an older history database themselves, after saving a copy of it.
+The current release is **0.3.1** (17 October 2026). Shoalscan is used every day to gate pull requests and scan a default branch nightly, but it is still before 1.0: configuration keys and the history database can still change between minor releases. Each release says what changed in [CHANGELOG.md](CHANGELOG.md), and `shoalscan serve` and `shoalscan record` migrate an older history database themselves, after saving a copy of it.
 
 All four phases of the [design](docs/design.md#phases) are done:
 
