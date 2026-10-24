@@ -179,13 +179,17 @@ def select(
     cap: int,
     now: datetime | None = None,
     without_merge_ref: set[int] | frozenset[int] = frozenset(),
+    key: str | None = None,
+    scanned: dict[str, str] | None = None,
 ) -> Selection:
     """What one poll scans, given every recorded pull-request run of this repository (see the module's notes).
 
     A candidate has a merge ref, a recorded run of its head ref, or a number in `without_merge_ref`.
-    A head commit with a recorded run that has
-    results is skipped, whatever its ref; one whose runs are all scan errors waits RETRY_AFTER and then goes
-    last. A pull request scanned less than PER_PULL_INTERVAL ago waits. The rest go in order of when their pull
+    A head commit with a recorded run that has results is skipped, whatever its ref, as long as its results
+    were recorded under `key` (the scan key: the registered branch's head and the target's policy and baseline
+    files; `scanned` maps heads to the key of their results) and goes again otherwise, after the never-scanned
+    heads; one whose runs are all scan errors waits RETRY_AFTER and then goes last. A pull request scanned less
+    than PER_PULL_INTERVAL ago waits. The rest go in order of when their pull
     request was last scanned (never first), lower numbers first among equals, at most `cap`.
     """
     now = now or datetime.now(timezone.utc)
@@ -205,14 +209,20 @@ def select(
         runs = by_commit.get(pull.head, [])
         if not pull.has_merge_ref and number not in last_scan and number not in without_merge_ref:
             out.not_open += 1
-        elif any(r.outcome != "scan_error" for r in runs):
+        elif any(r.outcome != "scan_error" for r in runs) and (key is None or (scanned or {}).get(pull.head) == key):
             out.already_scanned.append(pull)
-        elif runs and now - max(_time(r.scanned_at) for r in runs) < RETRY_AFTER:
+        elif (
+            runs
+            and all(r.outcome == "scan_error" for r in runs)
+            and now - max(_time(r.scanned_at) for r in runs) < RETRY_AFTER
+        ):
             out.failed.append(pull)
         elif number in last_scan and now - last_scan[number] < PER_PULL_INTERVAL:
             out.throttled.append(pull)
         else:
-            candidates.append((bool(runs), last_scan.get(number, never), number, pull))
+            # Never-scanned heads first, then heads whose results predate the scan key, then scan-error retries.
+            tier = 0 if not runs else (2 if all(r.outcome == "scan_error" for r in runs) else 1)
+            candidates.append((tier, last_scan.get(number, never), number, pull))
     candidates.sort(key=lambda c: c[:3])
     ordered = [c[3] for c in candidates]
     out.to_scan, out.deferred = ordered[:cap], ordered[cap:]
@@ -229,6 +239,8 @@ class PollState:
     mark: int  # the highest pull request number the first poll saw
     heads: dict[int, str]  # every pull request's head, as the previous listing showed it
     tracked: set[int]  # numbers that became eligible without a merge ref
+    # The scan key each head's latest results were recorded under (see `select`), for heads still listed.
+    scanned: dict[str, str] = field(default_factory=dict)
 
 
 def load_state(path: Path) -> PollState | None:
@@ -245,6 +257,12 @@ def load_state(path: Path) -> PollState | None:
         mark = data["mark"]
         heads = {int(n): sha for n, sha in data["heads"].items()}
         tracked = {int(n) for n in data["tracked"]}
+        scanned = data.get("scanned", {})
+        if not isinstance(scanned, dict) or not all(
+            isinstance(k, str) and _SHA.fullmatch(k) and isinstance(v, str) and len(v) <= 128
+            for k, v in scanned.items()
+        ):
+            raise ValueError
         if (
             isinstance(mark, bool)
             or not isinstance(mark, int)
@@ -254,7 +272,7 @@ def load_state(path: Path) -> PollState | None:
             raise ValueError
     except (KeyError, TypeError, ValueError, AttributeError):
         raise DiscoveryError(f"the poll state {path.name} is malformed; remove it to start again") from None
-    return PollState(mark, heads, tracked)
+    return PollState(mark, heads, tracked, scanned)
 
 
 def eligible(listing: Listing, state: PollState | None) -> set[int]:
@@ -271,12 +289,15 @@ def eligible(listing: Listing, state: PollState | None) -> set[int]:
 
 def next_state(listing: Listing, state: PollState | None, tracked: set[int]) -> PollState:
     mark = state.mark if state is not None else max(listing.pulls, default=0)
-    return PollState(mark, {n: p.head for n, p in listing.pulls.items()}, set(tracked))
+    heads = {p.head for p in listing.pulls.values()}
+    scanned = {h: k for h, k in (state.scanned if state is not None else {}).items() if h in heads}
+    return PollState(mark, {n: p.head for n, p in listing.pulls.items()}, set(tracked), scanned)
 
 
 def state_json(state: PollState) -> str:
     return json.dumps(
         {
+            "scanned": dict(sorted(state.scanned.items())),
             "mark": state.mark,
             "heads": {str(n): sha for n, sha in sorted(state.heads.items())},
             "tracked": sorted(state.tracked),

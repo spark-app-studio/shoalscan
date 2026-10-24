@@ -1128,6 +1128,23 @@ class PullRequestTests(WorkerTestCase):
         self.assertFalse(scanjob.poll_ok(results["acme/app"]))
         self.assertEqual(f.calls(), [])
 
+    def test_a_head_is_scanned_again_when_the_policy_or_the_branch_changes(self):
+        f = self.f
+        targets = self.targets(cooldown_seconds=0)
+        self.assertEqual(self.poll(targets)["acme/app#7"], "passed")
+        with mock.patch.object(pullrequests, "PER_PULL_INTERVAL", timedelta(0)):
+            self.assertEqual(self.poll(targets)["acme/app"][:31], "listed: 0 to scan, 1 already sc")
+            scanning.write_policy(targets, targets.targets["acme/app"], "# MANAGED POLICY\n")
+            self.assertEqual(self.poll(targets)["acme/app#7"], "passed")
+            self.assertEqual(self.poll(targets)["acme/app"][:31], "listed: 0 to scan, 1 already sc")
+            (f.origin / "other.py").write_text("y = 1\n", encoding="utf-8")
+            git("add", "other.py", cwd=f.origin)
+            git("commit", "-q", "-m", "main moves", cwd=f.origin)
+            self.assertEqual(self.poll(targets)["acme/app#7"], "passed")
+        # Each scan replaced the run of the same head.
+        self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(1,)])
+        self.assertEqual(len([c for c in f.calls() if c[2] == "scan"]), 3)
+
     def test_run_one_refuses_a_pull_request_for_a_target_that_does_not_scan_them(self):
         pull = pullrequests.PullRequest(7, self.pr7, True)
         with self.assertRaisesRegex(SetupError, "does not scan pull requests"):

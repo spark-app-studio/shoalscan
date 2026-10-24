@@ -53,6 +53,9 @@ class CheckResult:
     test_code_rules: tuple[str, ...] = ()
     # Inline suppressions on lines the change added (`check --changed-since`): each one fails the check.
     new_suppressions: list[dict] = field(default_factory=list)
+    # False for a pull request checked with `--changed-since`: its baseline is managed outside the change, so a
+    # stale entry (the change fixed a baselined finding) is reported but is no new risk and does not fail it.
+    stale_blocks: bool = True
 
     def __post_init__(self) -> None:
         self._labelled = set(self.test_code)
@@ -67,7 +70,7 @@ class CheckResult:
     def passed(self) -> bool:
         return (
             not self.new_blocking
-            and not self.stale
+            and not (self.stale and self.stale_blocks)
             and not self.changed_unscanned
             and not self.baseline_additions
             and not self.new_suppressions
@@ -92,6 +95,7 @@ def compare(
     parse_warn_only: tuple[str, ...] = (),
     test_code_rules: tuple[str, ...] = (),
     new_suppressions: list[dict] | None = None,
+    stale_blocks: bool = True,
 ) -> CheckResult:
     """Compare findings with the baseline.
 
@@ -210,6 +214,7 @@ def compare(
         test_code=labelled,
         test_code_rules=tuple(test_code_rules),
         new_suppressions=list(new_suppressions or []),
+        stale_blocks=stale_blocks,
     )
 
 
@@ -433,7 +438,13 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
     )
     if result.stale:
         out.append("")
-        out.append(f"Stale baseline entries ({len(result.stale)}): these no longer match a finding; remove them.")
+        if result.stale_blocks:
+            out.append(f"Stale baseline entries ({len(result.stale)}): these no longer match a finding; remove them.")
+        else:
+            out.append(
+                f"Stale baseline entries ({len(result.stale)}): these no longer match a finding. They do not fail "
+                "this change, whose baseline is managed outside it; remove them from that baseline once it is merged."
+            )
         for e in result.stale[:max_items]:
             out.append(f"  {t(e.path)}  {t(e.rule)}  fingerprint {t(e.fingerprint)}  issue {t(e.issue)}")
     skipped, errored = result.unscanned.get("skipped", []), result.unscanned.get("errors", [])

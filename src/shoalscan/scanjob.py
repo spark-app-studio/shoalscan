@@ -28,6 +28,7 @@ Either way the worker:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -899,6 +900,17 @@ def discover_pull_requests(targets: scanning.Targets, target: scanning.Target) -
     )
 
 
+def scan_key(targets: scanning.Targets, target: scanning.Target, listing: pullrequests.Listing) -> str:
+    """What a pull request's results depend on besides its head: the registered branch's head (its policy, rule
+    dirs and merge base) and the target's own policy and baseline files. A head is scanned again when it changes."""
+    digest = hashlib.sha256(listing.branch_head.encode("ascii"))
+    for path in (targets.policy_path(target), targets.baseline_path(target)):
+        digest.update(b"\0")
+        if path is not None and path.is_file():
+            digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
+
+
 def _recorded_pull_runs(targets: scanning.Targets, name: str) -> list[pullrequests.Recorded]:
     conn = history.open_for_write(targets.history_db or history.default_db_path())
     try:
@@ -965,7 +977,9 @@ def run_pull_requests(
         try:
             state = pullrequests.load_state(state_path)
             extra = pullrequests.eligible(listing, state)
-            scanning.write_private(state_path, pullrequests.state_json(pullrequests.next_state(listing, state, extra)))
+            new_state = pullrequests.next_state(listing, state, extra)
+            scanning.write_private(state_path, pullrequests.state_json(new_state))
+            key = scan_key(targets, target, listing)
         except (ShoalscanError, OSError) as exc:
             detail = f"pull-request discovery failed: {str(exc)[:250]}"
             results[name] = f"scan_error: {detail}"
@@ -977,7 +991,14 @@ def run_pull_requests(
                 f"pull requests: {name}: first poll; pull requests above #{max(listing.pulls, default=0)} and heads "
                 "that move are scanned even without a merge ref from now on\n"
             )
-        chosen = pullrequests.select(listing, recorded, targets.max_pull_requests, without_merge_ref=extra)
+        chosen = pullrequests.select(
+            listing,
+            recorded,
+            targets.max_pull_requests,
+            without_merge_ref=extra,
+            key=key,
+            scanned=new_state.scanned,
+        )
         mergeable = sum(1 for p in listing.pulls.values() if p.has_merge_ref)
         results[name] = (
             f"listed: {len(chosen.to_scan)} to scan, {len(chosen.already_scanned)} already scanned, "
@@ -1008,6 +1029,9 @@ def run_pull_requests(
             scanning.write_requests(state_dir, requests)
             try:
                 results[label] = run_one(state_dir, targets, name, PR_WHO, log, PR_TRIGGER, pull=pull)
+                if results[label] in ("passed", "blocked"):
+                    new_state.scanned[pull.head] = key
+                    scanning.write_private(state_path, pullrequests.state_json(new_state))
             except SetupError as exc:
                 results[label] = f"skipped: {exc}"
                 log.write(f"pull requests: {label}: {exc}\n")

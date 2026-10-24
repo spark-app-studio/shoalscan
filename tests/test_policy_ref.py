@@ -254,6 +254,21 @@ class PolicyRefTests(unittest.TestCase):
         self.assertEqual(_new_suppressions(meta, {"a.py"}, lambda path: {2}), [])
         self.assertEqual(_new_suppressions(meta, {"b.py"}, lambda path: {1}), [])
 
+    def test_changed_since_reports_stale_entries_without_failing(self):
+        # The change fixes the baselined finding. Its baseline is managed outside it, so it cannot remove the
+        # entry: the stale entry is reported, and is no reason to fail the change.
+        (self.repo / "src" / "load.py").write_text(
+            "import json\n\ndef load(b):\n    return json.loads(b)\n", encoding="utf-8"
+        )
+        self.commit("fix")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 0, out)
+        self.assertGreaterEqual(summary["stale"], 1)
+        self.assertIn("They do not fail this change", out)
+        config, baseline = self.explicit_policy()
+        code, out, err = self.cli("check", *config, *baseline)
+        self.assertEqual(code, 1, out + err)
+
     def test_rules_commit_needs_an_explicit_configuration(self):
         code, _, err = self.cli("scan", "--rules-commit", "refs/heads/main")
         self.assertEqual(code, 2)

@@ -450,6 +450,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         parse_warn_only=config.parse_warn_only,
         test_code_rules=config.test_code.rules,
         new_suppressions=new_suppressions,
+        # A change checked against an outside baseline cannot remove its stale entries: they are reported only.
+        stale_blocks=not getattr(args, "changed_since", None),
     )
     write_atomic(out / CHECK_JSON, json.dumps(details(result, findings_sha256), sort_keys=True) + "\n")
     print(render_report(result))

@@ -149,6 +149,17 @@ class SelectTests(unittest.TestCase):
         self.assertEqual([p.number for p in chosen.throttled], [5])
         self.assertEqual([p.number for p in chosen.to_scan], [8, 7, 6])
 
+    def test_a_head_is_scanned_again_when_its_scan_key_changes(self):
+        recorded = [ran("refs/pull/3/head", B, 5), ran("refs/pull/4/head", C, 5, "blocked")]
+        pulls = [PullRequest(3, B, True), PullRequest(4, C, True), PullRequest(9, D, True)]
+        chosen = pullrequests.select(self.listing(*pulls), recorded, 10, NOW, key="k2", scanned={B: "k2", C: "k1"})
+        self.assertEqual([p.number for p in chosen.already_scanned], [3])
+        # #4's results predate the key: it goes again, after the never-scanned #9.
+        self.assertEqual([p.number for p in chosen.to_scan], [9, 4])
+        # Results recorded without a key (by an older version or a CI job) go again too.
+        chosen = pullrequests.select(self.listing(*pulls[:1]), recorded, 10, NOW, key="k2", scanned={})
+        self.assertEqual([p.number for p in chosen.to_scan], [3])
+
     def test_capped_in_order(self):
         pulls = [PullRequest(n, f"{n:040x}", True) for n in (3, 11, 7, 20)]
         chosen = self.select(pulls, [], 2)
