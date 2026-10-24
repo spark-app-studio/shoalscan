@@ -63,7 +63,7 @@ class PullRequest:
 
     @property
     def fetch_ref(self) -> str:
-        """Where the worker keeps the fetched head in the clone, outside refs/heads and refs/remotes."""
+        """Where the worker keeps the fetched head, in the throwaway repository it fetches the pull request into."""
         return f"refs/shoalscan/pull/{self.number}"
 
 

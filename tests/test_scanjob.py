@@ -835,11 +835,15 @@ class PullRequestTests(WorkerTestCase):
         self.assertTrue(baseline.is_relative_to(f.state), baseline)
         opts = dict(zip(record[3::2], record[4::2], strict=False))
         self.assertEqual((opts["--kind"], opts["--ref"], opts["--commit"]), ("pr", "refs/pull/7/head", self.pr7))
-        # The fetched head does not stay behind in the clone, and no branch was made for it.
+        # The pull request never entered the branch clone: no ref, no branch, not even its objects.
         refs = subprocess.run(
             ["git", "-C", str(f.clone), "for-each-ref", "--format=%(refname)"], capture_output=True, text=True
         ).stdout
         self.assertNotIn("pull", refs)
+        missing = subprocess.run(
+            ["git", "-C", str(f.clone), "cat-file", "-e", f"{self.pr7}^{{commit}}"], capture_output=True
+        )
+        self.assertNotEqual(missing.returncode, 0)
         (trigger,) = f.rows("SELECT who, trigger, outcome, detail FROM scan_triggers")
         self.assertEqual(trigger[:3], ("pull-request poll", "pull-request", "passed"))
         self.assertEqual(trigger[3], f"pull request #7 at {self.pr7[:12]}")
@@ -973,6 +977,28 @@ class PullRequestTests(WorkerTestCase):
             self.assertEqual(seen["git"]["HOME"], scanjob.NO_HOME)
         finally:
             job.cleanup()
+
+    def test_a_pull_request_with_too_many_objects_is_stopped_and_the_clone_is_untouched(self):
+        f = self.f
+        git("checkout", "-q", "-b", "big", "main", cwd=f.origin)
+        (f.origin / "noise.bin").write_bytes(os.urandom(3 * 1024 * 1024))  # does not compress
+        git("add", "noise.bin", cwd=f.origin)
+        git("commit", "-q", "-m", "big", cwd=f.origin)
+        big = rev(f.origin, "HEAD")
+        git("checkout", "-q", "main", cwd=f.origin)
+        git("update-ref", "refs/pull/8/head", big, cwd=f.origin)
+        git("update-ref", "refs/pull/8/merge", big, cwd=f.origin)
+        targets = self.targets()
+        targets = replace(targets, targets={"acme/app": replace(targets.targets["acme/app"], max_clone_mb=1)})
+        results = self.poll(targets)
+        self.assertNotIn(results["acme/app#8"], ("passed", "blocked"))
+        self.assertEqual(results["acme/app#7"], "passed")
+        detail = [r[0] for r in f.rows("SELECT detail FROM scan_triggers") if r[0] and "#8" in r[0]]
+        self.assertIn("needs more than max_clone_mb", detail[0])
+        # The branch clone is still there, still small, and still scans.
+        self.assertTrue((f.clone / ".git").is_dir())
+        self.assertLess(scanjob.tree_size(f.clone), 1024 * 1024)
+        self.assertEqual(scanjob.run_one(f.state, targets, "acme/app", "x", io.StringIO()), "passed")
 
     def test_run_one_refuses_a_pull_request_for_a_target_that_does_not_scan_them(self):
         pull = pullrequests.PullRequest(7, self.pr7, True)

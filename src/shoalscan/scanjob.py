@@ -38,6 +38,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from shoalscan import history, pullrequests
@@ -109,8 +110,22 @@ class ScanTimeout(Exception):  # noqa: N818 - a signal to stop the scan, not an 
     pass
 
 
-class CloneTooLargeError(SetupError):
+class TooLargeError(SetupError):
+    """A directory a git command writes grew past its limit; the command was stopped."""
+
+
+class CloneTooLargeError(TooLargeError):
     pass
+
+
+@dataclass(frozen=True)
+class Watch:
+    """A directory whose size is enforced while a child runs: past `limit` bytes the child is killed."""
+
+    path: Path
+    limit: int
+    error: type[TooLargeError]
+    message: str
 
 
 def _kill_group(pid: int) -> None:
@@ -216,11 +231,11 @@ class Job:
         cwd: Path | None = None,
         stdout_to: Path | None = None,
         env: dict | None = None,
-        watch: Path | None = None,
+        watch: Watch | None = None,
     ) -> int:
         """Run one child in its own process group, with what is left of the deadline.
         With `watch`, the directory's size is checked every second, and the child is
-        killed with its group as soon as it passes the clone size limit."""
+        killed with its group as soon as it passes the watch's limit."""
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise ScanTimeout()
@@ -247,13 +262,10 @@ class Job:
                     except subprocess.TimeoutExpired:
                         if watch is None or time.monotonic() >= deadline:
                             raise
-                        if tree_size(watch, self.clone_limit()) > self.clone_limit():
+                        if tree_size(watch.path, watch.limit) > watch.limit:
                             _kill_group(proc.pid)
                             proc.wait()
-                            raise CloneTooLargeError(
-                                f"the clone grew past max_clone_mb ({self.clone_limit() // (1024 * 1024)} MB); "
-                                "the fetch was stopped and nothing was scanned"
-                            ) from None
+                            raise watch.error(watch.message) from None
             except subprocess.TimeoutExpired:
                 _kill_group(proc.pid)
                 proc.wait()
@@ -272,16 +284,23 @@ class Job:
             return scanning.GIT_ADMIN_FETCH
         return scanning.GIT_HARDENED + scanning.GIT_URL_ONLY
 
-    def git(self, *args: str, cwd: Path | None = None, admin_fetch: bool = False, watch: bool = False) -> int:
+    def git(self, *args: str, cwd: Path | None = None, admin_fetch: bool = False, watch: bool | Watch = False) -> int:
         """Every git command, hardened; only an administrator's clone is fetched with its own configuration.
-        With `watch`, the clone's size is enforced while git runs."""
+        With `watch` True, the clone's size is enforced while git runs (and a clone that grows past it is
+        discarded); with a Watch, that directory's size."""
         pairs = self.git_pairs(admin_fetch)
         # Only an administrator's clone keeps the home directory, where its credentials may live.
         env = scanning.git_env(base_env(), pairs, hardened=False) if admin_fetch else network_git_env(pairs)
-        try:
-            return self.run(
-                ["git", *scanning.git_args(pairs), *args], cwd=cwd, env=env, watch=self.clone if watch else None
+        if watch is True:
+            watch = Watch(
+                self.clone,
+                self.clone_limit(),
+                CloneTooLargeError,
+                f"the clone grew past max_clone_mb ({self.clone_limit() // (1024 * 1024)} MB); "
+                "the fetch was stopped and nothing was scanned",
             )
+        try:
+            return self.run(["git", *scanning.git_args(pairs), *args], cwd=cwd, env=env, watch=watch or None)
         except CloneTooLargeError:
             self.discard_partial_clone()
             raise
@@ -303,11 +322,12 @@ class Job:
                 else:
                     leftover.unlink(missing_ok=True)
 
-    def git_out(self, *args: str) -> str:
-        """A hardened git query in the clone, in its own session, killed with its group at the deadline."""
+    def git_out(self, *args: str, repo: Path | None = None) -> str:
+        """A hardened git query in the clone (or `repo`), in its own session, killed with its group at the
+        deadline."""
         pairs = self.git_pairs()
         proc = subprocess.Popen(
-            ["git", *scanning.git_args(pairs), "-C", str(self.clone), *args],
+            ["git", *scanning.git_args(pairs), "-C", str(repo or self.clone), *args],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -400,31 +420,57 @@ class Job:
             return commit
         return self.branch_head()
 
+    @property
+    def pull_repo(self) -> Path:
+        """The throwaway repository a pull request is fetched into, in the work directory."""
+        return self.work / "pull.git"
+
     def fetch_pull(self) -> str:
-        """Fetch a pull request's head into a ref of Shoalscan's own (never a branch) and return its commit,
-        which must be the commit the listing showed. Only objects are fetched; nothing is checked out here."""
+        """Fetch a pull request's head and return its commit, which must be the commit the listing showed.
+
+        The head is fetched into a throwaway bare repository in the work directory that borrows the branch
+        clone's objects read-only (objects/info/alternates), so the pull request's objects never enter the
+        branch clone or count against its size; they have a limit of their own (max_clone_mb) and go with
+        the work directory. Only objects are fetched; nothing is checked out here."""
         pull = self.pull
         t = self.target
-        if t.kind == "mirror" or not self.git_out("remote", "get-url", "origin"):
+        source = t.source if t.kind == "url" else self.git_out("remote", "get-url", "origin")
+        if t.kind == "mirror" or not source:
             raise SetupError("pull requests are fetched from the target's origin, and this target has none")
+        objects = self.clone / ".git" / "objects" if (self.clone / ".git").is_dir() else self.clone / "objects"
+        if not objects.is_dir():
+            raise SetupError("the clone has no object store")
+        repo = self.pull_repo
+        if self.git("init", "--quiet", "--bare", str(repo)) != 0:
+            raise SetupError("git init of the pull request's repository failed")
+        (repo / "objects" / "info").mkdir(parents=True, exist_ok=True)
+        (repo / "objects" / "info" / "alternates").write_text(f"{objects.resolve()}\n", encoding="utf-8")
         self.say(f"fetching pull request #{pull.number}")
-        if (
-            self.git(
-                "-C",
-                str(self.clone),
-                "fetch",
-                "--quiet",
-                "--no-tags",
-                "origin",
-                f"+{pull.ref}:{pull.fetch_ref}",
-                admin_fetch=t.kind == "clone",
-                watch=True,
-            )
-            != 0
-        ):
+        limit = self.clone_limit()
+        watch = Watch(
+            repo,
+            limit,
+            TooLargeError,
+            f"pull request #{pull.number} needs more than max_clone_mb ({limit // (1024 * 1024)} MB) of objects; "
+            "the fetch was stopped and nothing was scanned",
+        )
+        fetched = self.git(
+            "-C",
+            str(repo),
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--",
+            source,
+            f"+{pull.ref}:{pull.fetch_ref}",
+            admin_fetch=t.kind == "clone",
+            watch=watch,
+        )
+        if fetched != 0:
             raise SetupError(f"git fetch of pull request #{pull.number} failed; nothing was scanned")
-        self.check_clone_size()
-        commit = self.git_out("rev-parse", "--verify", "--quiet", f"{pull.fetch_ref}^{{commit}}")
+        if tree_size(repo, limit) > limit:
+            raise TooLargeError(watch.message)
+        commit = self.git_out("rev-parse", "--verify", "--quiet", f"{pull.fetch_ref}^{{commit}}", repo=repo)
         if commit != pull.head:
             raise SetupError(
                 f"pull request #{pull.number} moved after it was listed; its new head is scanned on the next poll"
@@ -514,9 +560,11 @@ class Job:
             )
         else:
             self.say(f"scanning {t.name} {t.branch} at {commit[:12]}")
-        self.git("-C", str(self.clone), "worktree", "prune")
+        # A pull request is checked out from its throwaway repository, never from the branch clone.
+        repo = self.pull_repo if self.pull is not None else self.clone
+        self.git("-C", str(repo), "worktree", "prune")
         src = self.work / "src"
-        if self.git("-C", str(self.clone), "worktree", "add", "--quiet", "--detach", str(src), commit) != 0:
+        if self.git("-C", str(repo), "worktree", "add", "--quiet", "--detach", str(src), commit) != 0:
             raise SetupError("git worktree add failed")
         out = self.work / "out"
         out.mkdir(mode=0o700)
@@ -583,21 +631,11 @@ class Job:
 
     def cleanup(self) -> None:
         src = self.work / "src"
-        if src.exists():
+        # A pull request's worktree belongs to the throwaway repository, which goes with the work directory.
+        if src.exists() and self.pull is None:
             pairs = self.git_pairs()
             subprocess.run(
                 ["git", *scanning.git_args(pairs), "-C", str(self.clone), "worktree", "remove", "--force", str(src)],
-                capture_output=True,
-                stdin=subprocess.DEVNULL,
-                env=scanning.git_env(base_env(), pairs),
-                timeout=60,
-                check=False,
-                start_new_session=True,
-            )
-        if self.pull is not None and ((self.clone / ".git").exists() or (self.clone / "HEAD").exists()):
-            pairs = self.git_pairs()
-            subprocess.run(
-                ["git", *scanning.git_args(pairs), "-C", str(self.clone), "update-ref", "-d", self.pull.fetch_ref],
                 capture_output=True,
                 stdin=subprocess.DEVNULL,
                 env=scanning.git_env(base_env(), pairs),
