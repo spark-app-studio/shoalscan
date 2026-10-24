@@ -216,7 +216,11 @@ _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
 def added_lines(repo: Path, commit: str, path: str) -> set[int]:
-    """Line numbers (in the current file) that the change added or modified."""
+    """Line numbers (in the current file) that the change added or modified.
+
+    The diff is always textual (`--text`): a file with a NUL byte would otherwise be "binary" and show no
+    lines at all. A file the change touched but whose diff still has no hunk (a mode change, say) counts
+    as added in full, so nothing in it can pass for unchanged."""
     tracked = _git(repo, "ls-files", "--error-unmatch", "--", path, check=False).returncode == 0
     if not tracked:
         full = repo / path
@@ -226,14 +230,32 @@ def added_lines(repo: Path, commit: str, path: str) -> set[int]:
             return set()
         return set(range(1, count + 1))
     out = _git(
-        repo, "diff", "--no-color", "--no-ext-diff", "--no-renames", "-U0", merge_base(repo, commit), "--", path
+        repo,
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--text",
+        "--no-renames",
+        "-U0",
+        merge_base(repo, commit),
+        "--",
+        path,
     ).stdout
     lines: set[int] = set()
+    hunks = 0
     for line in out.decode("utf-8", errors="replace").split("\n"):
         match = _HUNK.match(line)
         if match:
+            hunks += 1
             start, count = int(match.group(1)), int(match.group(2) if match.group(2) is not None else 1)
             lines.update(range(start, start + count))
+    if out.strip() and not hunks:
+        try:
+            count = len((repo / path).read_bytes().split(b"\n"))
+        except OSError:
+            return lines
+        return set(range(1, count + 1))
     return lines
 
 

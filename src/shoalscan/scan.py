@@ -414,6 +414,8 @@ def run_scan(
                     "issue": s.issue,
                     "valid": s.valid,
                     "problem": None if s.valid else s.problem(),
+                    # For a marker inside a packaged chart: the member, whose line the archive's diff cannot show.
+                    **({"member": s.member} if s.member else {}),
                 }
                 for s in sorted(suppressions, key=lambda s: (s.path, s.line))[:MAX_SUPPRESSION_LIST]
             ],

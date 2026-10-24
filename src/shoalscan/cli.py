@@ -359,6 +359,11 @@ def _new_suppressions(meta: dict, changed: set[str], added) -> list[dict]:
         path = entry.get("path") if isinstance(entry, dict) else None
         if not isinstance(path, str) or path not in changed:
             continue
+        if entry.get("member"):
+            # A marker inside a changed chart archive: its line is a member's, which the archive's diff cannot
+            # show, so it counts as new.
+            out.append(entry)
+            continue
         if path not in lines:
             lines[path] = added(path)
         if entry.get("line") in lines[path]:
