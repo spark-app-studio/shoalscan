@@ -395,6 +395,16 @@ class SilencedTests(unittest.TestCase):
 
         return Suppression(path, 1, "x", ("AWS-0001",), "#1" if valid else None, False, kind="trivy")
 
+    def test_where_each_finding_was_silenced(self):
+        self.assertEqual(
+            trivy.silenced_spans(self.LOG, ()),
+            [
+                {"tool": "trivy", "rule": "a", "path": "infra/main.tf", "start": 6, "end": 8},
+                {"tool": "trivy", "rule": "b", "path": "cf.yaml", "start": 15, "end": 15},
+            ],
+        )
+        self.assertEqual([s["path"] for s in trivy.silenced_spans(self.LOG, ("infra",))], ["cf.yaml"])
+
     def test_each_silenced_finding_needs_a_valid_marker_in_its_file(self):
         both = [self.marker("infra/main.tf"), self.marker("cf.yaml")]
         self.assertEqual(trivy.silenced_findings(self.LOG, both, ()), 2)

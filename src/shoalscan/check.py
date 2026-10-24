@@ -338,7 +338,8 @@ def details(result: CheckResult, findings_sha256: str) -> dict:
         "test_code_rules": list(result.test_code_rules),
         "test_code": [{"key": key(f), **f.test_code.as_json()} for f in result.test_code],
         "new_suppressions": [
-            {"path": e.get("path"), "line": e.get("line"), "rules": e.get("rules")} for e in result.new_suppressions
+            {"path": e.get("path"), "line": e.get("line"), "rules": e.get("rules"), "silenced": e.get("silenced")}
+            for e in result.new_suppressions
         ],
         "summary": summary(result),
     }
@@ -459,11 +460,13 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         out.append("")
         out.append(
             f"New inline suppressions on lines the change added ({len(result.new_suppressions)}): this fails. "
-            "A change from outside cannot silence findings itself; fix the finding, or accept it on the base branch."
+            "A change from outside cannot silence findings itself, with a new marker or under one that was already "
+            "there; fix the finding, or accept it on the base branch."
         )
         for e in result.new_suppressions[:max_items]:
-            rules = ", ".join(t(r) for r in e.get("rules") or []) or "no rule"
-            out.append(f"  {t(e.get('path'))}:{e.get('line')}  ({rules})")
+            rules = ", ".join(t(r) for r in e.get("rules") or [] if r) or "no rule"
+            how = f"; a finding {t(e['silenced'])} silenced" if e.get("silenced") else ""
+            out.append(f"  {t(e.get('path'))}:{e.get('line')}  ({rules}{how})")
     if result.changed_unscanned:
         out.append("")
         out.append(

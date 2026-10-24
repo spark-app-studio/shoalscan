@@ -140,6 +140,16 @@ class NormaliseTests(unittest.TestCase):
         findings, _ = opengrep.normalise(doc, self.root, {})
         self.assertEqual(findings, [])
         self.assertEqual(opengrep.ignored_count(doc), 1)
+        multi = result(self.file, 2, 0, 4, ignored=True)
+        multi["end"]["line"] = 6
+        doc["results"].append(multi)
+        self.assertEqual(
+            opengrep.ignored_spans(doc, self.root),
+            [
+                {"tool": "opengrep", "rule": "shoalscan.r", "path": "src/a.py", "start": 2, "end": 2},
+                {"tool": "opengrep", "rule": "shoalscan.r", "path": "src/a.py", "start": 2, "end": 6},
+            ],
+        )
 
     def test_path_outside_target_fails(self):
         doc = {"results": [result("/etc/passwd", 1, 0, 1)], "errors": []}

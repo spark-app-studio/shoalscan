@@ -160,6 +160,7 @@ def run_scan(
     scoped: dict = {}
     sarif_source: Path | None = None
     suppressed_by_scanner = 0
+    silenced_spans: list[dict] = []  # where a scanner silenced a finding because of an inline comment
     stage = Path(tempfile.mkdtemp(prefix="shoalscan-rules-"))
     try:
         if "opengrep" in config.scanners:
@@ -269,6 +270,7 @@ def run_scan(
                 "suppressed_findings": opengrep.ignored_count(doc),
             }
             suppressed_by_scanner += opengrep.ignored_count(doc)
+            silenced_spans += opengrep.ignored_spans(doc, root)
         extra_runs = []
         if "gitleaks" in config.scanners:
             pin = tools.pinned.get("gitleaks")
@@ -353,7 +355,7 @@ def run_scan(
             pin = tools.pinned.get("trivy")
             if pin is None:
                 raise SetupError("trivy is enabled but tools.lock pins no trivy")
-            misconfigs, missed, markers, silenced, misconfig_rules = trivy.run(
+            misconfigs, missed, markers, silenced, misconfig_rules, spans = trivy.run(
                 pin.path,
                 pin.sha256,
                 root,
@@ -374,6 +376,7 @@ def run_scan(
             own_findings = [*own_findings, *marker_findings]
             findings += marker_findings
             suppressed_by_scanner += silenced
+            silenced_spans += spans
             meta.setdefault("rules", {}).update(misconfig_rules)
             meta["scanners"]["trivy"] = {
                 "version": pin.version,
@@ -418,6 +421,12 @@ def run_scan(
                     **({"member": s.member} if s.member else {}),
                 }
                 for s in sorted(suppressions, key=lambda s: (s.path, s.line))[:MAX_SUPPRESSION_LIST]
+            ],
+            # Every finding a scanner silenced because of an inline comment, with its lines: `check
+            # --changed-since` fails a change whose added lines one of them overlaps, even under an old marker.
+            "silenced_total": len(silenced_spans),
+            "silenced_list": sorted(silenced_spans, key=lambda s: (s["path"], s["start"], s["tool"], s["rule"]))[
+                :MAX_SUPPRESSION_LIST
             ],
             "counts": {k: sev.get(k, 0) for k in ("ERROR", "WARNING", "INFO")},
             "duration_seconds": round(time.monotonic() - started, 1),

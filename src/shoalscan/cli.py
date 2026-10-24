@@ -371,6 +371,35 @@ def _new_suppressions(meta: dict, changed: set[str], added) -> list[dict]:
     return out
 
 
+def _new_silenced(meta: dict, changed: set[str], added, markers: list[dict]) -> list[dict]:
+    """The findings a scanner silenced because of an inline comment whose lines overlap lines the change added,
+    whether the comment is new or was already there (a marker silences the line below it, and a match or block that
+    starts there): a change must not hide new code under an old marker. One that a new marker of the same file
+    already explains (the marker on its first line or the line above) is not listed twice."""
+    listed = meta.get("silenced_list")
+    total = meta.get("silenced_total")
+    if not isinstance(listed, list) or not isinstance(total, int) or total > len(listed):
+        raise SetupError(
+            "the scan did not list every finding an inline comment silenced, so the check cannot tell which ones "
+            "the change hides"
+        )
+    lines: dict[str, set[int]] = {}
+    out = []
+    for span in listed:
+        path = span.get("path") if isinstance(span, dict) else None
+        start, end = (span.get("start"), span.get("end")) if isinstance(span, dict) else (None, None)
+        if not isinstance(path, str) or path not in changed or not isinstance(start, int) or not isinstance(end, int):
+            continue
+        if path not in lines:
+            lines[path] = added(path)
+        if not lines[path] & set(range(start, min(end, start + 100_000) + 1)):
+            continue
+        if any(m.get("path") == path and m.get("line") in (start - 1, start) for m in markers):
+            continue
+        out.append({"path": path, "line": start, "rules": [span.get("rule")], "silenced": span.get("tool")})
+    return out
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     out = _out_dir(args)
     policy = _policy(args)
@@ -436,6 +465,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             return gitref.added_lines(repo, since, path)
 
         new_suppressions = _new_suppressions(meta, set(changed), added)
+        new_suppressions += _new_silenced(meta, set(changed), added, new_suppressions)
 
     result = compare(
         findings,

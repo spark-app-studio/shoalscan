@@ -243,6 +243,48 @@ class PolicyRefTests(unittest.TestCase):
         code, out, err = self.cli("check", *config, *baseline)
         self.assertEqual(code, 0, out + err)
 
+    def test_changed_since_fails_new_code_under_a_marker_that_was_already_there(self):
+        # The base branch holds a valid marker above a harmless line; the change puts new code on that line, which
+        # Opengrep then silences, though the change added no marker.
+        marker = "no" + "sem"
+        git(self.repo, "checkout", "-q", "main")
+        (self.repo / "src" / "old.py").write_text(
+            f"import pickle\n\ndef old(b):\n    # {marker}: repo.security-rules.no-pickle-loads #12 trusted\n"
+            "    return b\n",
+            encoding="utf-8",
+        )
+        self.commit("a marker on main")
+        git(self.repo, "checkout", "-q", "-B", "change")
+        (self.repo / "src" / "old.py").write_text(
+            f"import pickle\n\ndef old(b):\n    # {marker}: repo.security-rules.no-pickle-loads #12 trusted\n"
+            "    return pickle.loads(b)\n",
+            encoding="utf-8",
+        )
+        self.commit("new code under the old marker")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 1, out)
+        self.assertEqual((summary["new_suppressions"], summary["new_blocking"]), (1, 0))
+        self.assertIn("src/old.py:5  (repo.security-rules.no-pickle-loads; a finding opengrep silenced)", out)
+        findings = json.loads((self.out / "findings.json").read_text())
+        self.assertEqual(findings["silenced_total"], len(findings["silenced_list"]))
+        self.assertIn(("src/old.py", 5), [(e["path"], e["start"]) for e in findings["silenced_list"]])
+
+    def test_silenced_findings_cannot_be_told_from_a_cut_list(self):
+        from shoalscan.cli import _new_silenced
+
+        span = {"tool": "trivy", "rule": "AVD-1", "path": "a.tf", "start": 4, "end": 9}
+        with self.assertRaisesRegex(SetupError, "did not list every finding an inline comment silenced"):
+            _new_silenced({"silenced_total": 2, "silenced_list": [span]}, {"a.tf"}, lambda p: {5}, [])
+        with self.assertRaisesRegex(SetupError, "did not list every finding"):
+            _new_silenced({}, {"a.tf"}, lambda p: {5}, [])
+        meta = {"silenced_total": 1, "silenced_list": [span]}
+        # Any added line inside the block counts; none, or an unchanged file, does not.
+        self.assertEqual(_new_silenced(meta, {"a.tf"}, lambda p: {9}, [])[0]["line"], 4)
+        self.assertEqual(_new_silenced(meta, {"a.tf"}, lambda p: {10}, []), [])
+        self.assertEqual(_new_silenced(meta, set(), lambda p: {5}, []), [])
+        # A new marker right above it already counts the same thing.
+        self.assertEqual(_new_silenced(meta, {"a.tf"}, lambda p: {5}, [{"path": "a.tf", "line": 3}]), [])
+
     def test_new_suppressions_cannot_be_told_from_a_cut_list(self):
         from shoalscan.cli import _new_suppressions
 
