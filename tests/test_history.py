@@ -215,6 +215,31 @@ class RecordTests(HistoryTestCase):
             [r[0] for r in self.conn.execute("SELECT kind FROM runs ORDER BY id")], ["scheduled", "scheduled"]
         )
 
+    def test_pull_request_runs_never_push_scheduled_runs_or_their_reviews_out(self):
+        keep = finding("r", "kept.py", "k:0")
+        record(self.conn, self.tmp, "acme/app", "1" * 40, 1, [keep])
+        self.conn.execute(
+            "INSERT INTO finding_reviews (repo_name, tool, rule, path, fingerprint, status, description, updated_at, "
+            "updated_by) VALUES ('acme/app', 'opengrep', 'r', 'kept.py', 'k:0', 'accepted_risk', 'accepted', "
+            "'2026-09-01T00:00:00Z', 'a reviewer')"
+        )
+        # A flood of pull-request runs, each with its own finding and the scheduled run's finding too.
+        for n in range(2, 8):
+            record(
+                self.conn, self.tmp, "acme/app", f"{n:040x}", n, [keep, finding("p", f"pr{n}.py", f"{n}:0")], kind="pr"
+            )
+        repo_id = self.conn.execute("SELECT id FROM repos").fetchone()[0]
+        self.conn.execute("BEGIN")
+        history.prune(self.conn, repo_id, max_runs=1, keep_pr_days=90, max_pr_runs=2)
+        self.conn.execute("COMMIT")
+        kinds = [r for r in self.conn.execute("SELECT kind, commit_sha FROM runs ORDER BY scanned_at")]
+        self.assertEqual(kinds, [("scheduled", "1" * 40), ("pr", f"{6:040x}"), ("pr", f"{7:040x}")])
+        paths = {r[0] for r in self.conn.execute("SELECT path FROM finding_keys")}
+        self.assertEqual(paths, {"kept.py", "pr6.py", "pr7.py"})
+        self.assertEqual(self.count("finding_reviews"), 1)
+        with self.assertRaises(SetupError):
+            history.prune(self.conn, repo_id, max_runs=1, keep_pr_days=90, max_pr_runs=0)
+
     def test_too_many_findings_are_refused(self):
         items = [finding("r", "a.py", "1:0"), finding("r", "b.py", "2:0")]
         path = write_findings(self.tmp, items)

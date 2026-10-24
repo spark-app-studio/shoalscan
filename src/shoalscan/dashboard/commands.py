@@ -98,6 +98,7 @@ def cmd_record(args: argparse.Namespace) -> int:
             review_transitions=not args.commit_rescan,
             max_runs=args.max_runs,
             keep_pr_days=args.keep_pr_days,
+            max_pr_runs=args.max_pr_runs,
         )
     finally:
         conn.close()
@@ -529,7 +530,13 @@ def add_commands(sub: argparse._SubParsersAction) -> None:
         "--max-runs",
         type=int,
         default=history.DEFAULT_MAX_RUNS,
-        help=f"runs kept per repository (default: {history.DEFAULT_MAX_RUNS})",
+        help=f"scheduled runs kept per repository (default: {history.DEFAULT_MAX_RUNS})",
+    )
+    p.add_argument(
+        "--max-pr-runs",
+        type=int,
+        default=history.DEFAULT_MAX_PR_RUNS,
+        help=f"pull-request runs kept per repository, counted apart (default: {history.DEFAULT_MAX_PR_RUNS})",
     )
     p.add_argument(
         "--keep-pr-days",

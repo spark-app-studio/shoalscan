@@ -27,7 +27,7 @@ Recording is idempotent per repository, commit and kind. Recording the same run 
 
 Findings are stored by their identity (tool, rule, path and fingerprint), so the dashboard can tell when each finding was first seen and when it was fixed. A finding that disappears and later comes back counts as fixed and then new again. Findings that were already present in the first recorded run count from that run, so their ages and times to fix are lower bounds. To keep the dashboard's memory bounded, these figures come from the newest 400 trend runs (about a year of nightly scans), read two runs at a time.
 
-The history is bounded. A run may hold at most 100,000 findings, messages are cut at 4,000 characters, and each message is stored once however many runs share it. After each record, Shoalscan keeps the newest 2,000 runs of the repository (`--max-runs`) and drops pull-request runs more than 90 days older than the newest run (`--keep-pr-days`).
+The history is bounded. A run may hold at most 100,000 findings, messages are cut at 4,000 characters, and each message is stored once however many runs share it. After each record, Shoalscan keeps the newest 2,000 scheduled runs of the repository (`--max-runs`) and, counted apart, the newest 2,000 pull-request runs (`--max-pr-runs`), and drops pull-request runs more than 90 days older than the newest run (`--keep-pr-days`). Pull-request runs never push a scheduled run out, so a flood of pull requests cannot erase the history, and reviews are kept by finding identity, so pruning never drops one.
 
 The trend charts need a regular scan of the default branch; [Scheduled scans](scheduled-scans.md) sets one up.
 

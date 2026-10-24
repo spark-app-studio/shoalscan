@@ -41,6 +41,7 @@ MAX_MESSAGE_CHARS = 4000
 MAX_FIELD_CHARS = 1024
 DEFAULT_MAX_RUNS = 2000
 DEFAULT_KEEP_PR_DAYS = 90
+DEFAULT_MAX_PR_RUNS = 2000
 MAX_FUTURE = timedelta(hours=24)
 
 _REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@:+-]{0,199}$")
@@ -862,6 +863,7 @@ def record_run(
     review_transitions: bool = True,
     max_runs: int = DEFAULT_MAX_RUNS,
     keep_pr_days: int = DEFAULT_KEEP_PR_DAYS,
+    max_pr_runs: int = DEFAULT_MAX_PR_RUNS,
 ) -> RecordResult:
     """Store one run. Recording the same (repo, commit, kind) again replaces it,
     or does nothing when the content is the same, so a retried job is harmless.
@@ -1008,7 +1010,7 @@ def record_run(
         # Only a scan of the branch's tip moves reviews; a rescan of an earlier commit never does.
         if review_transitions and info.kind == "scheduled" and outcome != "scan_error":
             apply_review_transitions(conn, info, run_id, {k for k in seen}, meta)
-        pruned = prune(conn, repo_id, max_runs, keep_pr_days)
+        pruned = prune(conn, repo_id, max_runs, keep_pr_days, max_pr_runs)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
@@ -1016,12 +1018,21 @@ def record_run(
     return RecordResult(run_id, "replaced" if existing else "recorded", pruned)
 
 
-def prune(conn: sqlite3.Connection, repo_id: int, max_runs: int, keep_pr_days: int) -> int:
+def prune(
+    conn: sqlite3.Connection,
+    repo_id: int,
+    max_runs: int,
+    keep_pr_days: int,
+    max_pr_runs: int = DEFAULT_MAX_PR_RUNS,
+) -> int:
     """Drop old runs of one repository: pull-request runs older than `keep_pr_days`
-    before the newest run, then all but the newest `max_runs` runs. Finding
-    identities and messages that no run uses any more go too."""
-    if max_runs < 1 or keep_pr_days < 0:
-        raise SetupError("--max-runs must be at least 1 and --keep-pr-days at least 0")
+    before the newest run and all but the newest `max_pr_runs` of them, and all
+    but the newest `max_runs` scheduled runs. The two kinds are counted apart,
+    so pull-request runs (anyone can open a pull request on a public repository)
+    can never push a scheduled run out. Finding identities and messages that no
+    run uses any more go too; reviews are kept by identity and never pruned."""
+    if max_runs < 1 or keep_pr_days < 0 or max_pr_runs < 1:
+        raise SetupError("--max-runs and --max-pr-runs must be at least 1 and --keep-pr-days at least 0")
     newest = conn.execute("SELECT MAX(scanned_at) FROM runs WHERE repo_id = ?", (repo_id,)).fetchone()[0]
     if newest is None:
         return 0
@@ -1030,11 +1041,12 @@ def prune(conn: sqlite3.Connection, repo_id: int, max_runs: int, keep_pr_days: i
     )
     before = conn.total_changes
     conn.execute("DELETE FROM runs WHERE repo_id = ? AND kind = 'pr' AND scanned_at < ?", (repo_id, cutoff))
-    conn.execute(
-        "DELETE FROM runs WHERE repo_id = ? AND id NOT IN "
-        "(SELECT id FROM runs WHERE repo_id = ? ORDER BY scanned_at DESC, id DESC LIMIT ?)",
-        (repo_id, repo_id, max_runs),
-    )
+    for kind, keep in (("scheduled", max_runs), ("pr", max_pr_runs)):
+        conn.execute(
+            "DELETE FROM runs WHERE repo_id = ? AND kind = ? AND id NOT IN "
+            "(SELECT id FROM runs WHERE repo_id = ? AND kind = ? ORDER BY scanned_at DESC, id DESC LIMIT ?)",
+            (repo_id, kind, repo_id, kind, keep),
+        )
     pruned = conn.total_changes - before
     if pruned:
         _drop_orphans(conn, repo_id)
