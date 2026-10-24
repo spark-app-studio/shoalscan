@@ -51,6 +51,8 @@ class CheckResult:
     # finding for triage; it never changes whether the finding blocks.
     test_code: list[Finding] = field(default_factory=list)
     test_code_rules: tuple[str, ...] = ()
+    # Inline suppressions on lines the change added (`check --changed-since`): each one fails the check.
+    new_suppressions: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self._labelled = set(self.test_code)
@@ -63,7 +65,13 @@ class CheckResult:
 
     @property
     def passed(self) -> bool:
-        return not self.new_blocking and not self.stale and not self.changed_unscanned and not self.baseline_additions
+        return (
+            not self.new_blocking
+            and not self.stale
+            and not self.changed_unscanned
+            and not self.baseline_additions
+            and not self.new_suppressions
+        )
 
 
 def compare(
@@ -83,6 +91,7 @@ def compare(
     adoption: bool = False,
     parse_warn_only: tuple[str, ...] = (),
     test_code_rules: tuple[str, ...] = (),
+    new_suppressions: list[dict] | None = None,
 ) -> CheckResult:
     """Compare findings with the baseline.
 
@@ -200,6 +209,7 @@ def compare(
         adoption=adoption,
         test_code=labelled,
         test_code_rules=tuple(test_code_rules),
+        new_suppressions=list(new_suppressions or []),
     )
 
 
@@ -264,6 +274,7 @@ def summary(result: CheckResult) -> dict:
         "test_code": len(result.test_code),
         "new_test_code": sum(1 for f in result.new if result.is_test_code(f)),
         "new_blocking_test_code": sum(1 for f in result.new_blocking if result.is_test_code(f)),
+        "new_suppressions": len(result.new_suppressions),
     }
 
 
@@ -321,6 +332,9 @@ def details(result: CheckResult, findings_sha256: str) -> dict:
         # baseline entries they make unnecessary.
         "test_code_rules": list(result.test_code_rules),
         "test_code": [{"key": key(f), **f.test_code.as_json()} for f in result.test_code],
+        "new_suppressions": [
+            {"path": e.get("path"), "line": e.get("line"), "rules": e.get("rules")} for e in result.new_suppressions
+        ],
         "summary": summary(result),
     }
 
@@ -430,6 +444,15 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
             out.append(f"  {t(e['path'])}  ({t(e.get('reason') or e.get('type'))})")
         if len(skipped) + len(errored) > 50:
             out.append(f"  ... and {len(skipped) + len(errored) - 50} more (see findings.json)")
+    if result.new_suppressions:
+        out.append("")
+        out.append(
+            f"New inline suppressions on lines the change added ({len(result.new_suppressions)}): this fails. "
+            "A change from outside cannot silence findings itself; fix the finding, or accept it on the base branch."
+        )
+        for e in result.new_suppressions[:max_items]:
+            rules = ", ".join(t(r) for r in e.get("rules") or []) or "no rule"
+            out.append(f"  {t(e.get('path'))}:{e.get('line')}  ({rules})")
     if result.changed_unscanned:
         out.append("")
         out.append(

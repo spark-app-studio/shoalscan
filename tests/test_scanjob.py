@@ -57,7 +57,8 @@ if args[:3] == ["-m", "shoalscan", "scan"]:
     skipped = [{{"path": "app.py", "reason": "too large"}}] if (here / "skip_app").exists() else []
     meta = {{"policy": {{"ref": None, "commit": None, "config_sha256": digest, "adoption": False}},
             "worktree": worktree_state(repo), "suppressions": {{"total": 0, "invalid": 0, "suppressed_findings": 0}},
-            "unscanned": {{"skipped": skipped, "errors": []}}, "scanners": {{}}, "shoalscan_version": "test"}}
+            "unscanned": {{"skipped": skipped, "errors": []}}, "scanners": {{}}, "shoalscan_version": "test",
+            "suppression_list": []}}
     (out / "findings.json").write_text(findings_to_json([], meta))
     sys.exit(2 if (here / "scanfail").exists() else 0)
 os.execv({python!r}, [{python!r}, *args])

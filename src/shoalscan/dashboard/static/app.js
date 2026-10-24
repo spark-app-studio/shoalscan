@@ -1020,7 +1020,8 @@
         el("td", null, fmtTime(r.scanned_at)),
         el("td", { "class": cls }, internalLink(M.href("runs", { run: r.id }), r.status.label, "Show the detail of run " + r.id),
           p.error ? el("div", { "class": "muted small" }, p.error) : ""),
-        num(r.new_blocking), num(r["new"]), num(r.unscanned.changed_and_unscanned), el("td", { "class": "num" }, String(p.runs))));
+        num(r.new_blocking), num(r["new"]), num(r.unscanned.changed_and_unscanned), num(r.suppressions.total),
+        num(r.suppressions["new"]), el("td", { "class": "num" }, String(p.runs))));
     });
     $("runs-pulls-more").textContent = pulls.total > pulls.items.length
       ? "Showing the " + pulls.items.length + " most recently scanned of " + pulls.total + " pull requests." : "";

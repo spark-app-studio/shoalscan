@@ -310,6 +310,10 @@ MIGRATIONS: tuple[str, ...] = (
     # columns (run_findings.test_scope, runs.test_scoped) and automatic reviews. Worked out in Python:
     # see `_migration_15`.
     "python:_migration_15",
+    # 16: inline suppressions a pull request added on its changed lines (`check --changed-since`), which fail it.
+    """
+    ALTER TABLE runs ADD COLUMN new_suppressions INTEGER NOT NULL DEFAULT 0;
+    """,
 )
 # The automatic reviewer those unreleased builds wrote reviews under.
 UNRELEASED_AUTO_REVIEWER = "shoalscan (test scope)"
@@ -771,6 +775,7 @@ def _row(
         "unscanned_skipped": _int(summary, "unscanned", "skipped"),
         "unscanned_errored": _int(summary, "unscanned", "errored"),
         "changed_unscanned": _int(summary, "unscanned", "changed_and_unscanned"),
+        "new_suppressions": _int(summary, "new_suppressions"),
         "test_code": _int(summary, "test_code") if "test_code" in summary else 0,
         "policy_ref": _text(policy_ref, 256) if isinstance(policy_ref, str) else None,
         "shoalscan_version": _text(version, 64) if isinstance(version, str) else None,

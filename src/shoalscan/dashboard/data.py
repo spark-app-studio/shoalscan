@@ -50,7 +50,7 @@ _RUN_COLUMNS = (
     "baseline_additions, suppressions, suppressions_invalid, suppressed_findings, unscanned_skipped, "
     "unscanned_errored, changed_unscanned, policy_ref, shoalscan_version, duration_seconds, outcome, check_exit, "
     "details_known, files_known, suppressions_known, partial_warnings, partial_warn_only, excluded_changed, "
-    "blocking_class_count, scanners, test_code, "
+    "blocking_class_count, scanners, test_code, new_suppressions, "
     "EXISTS (SELECT 1 FROM scan_triggers st WHERE st.run_id = runs.id AND st.trigger = 'rescan-commit') AS rescanned"
 )
 SORTS = ("priority",)
@@ -212,6 +212,9 @@ def run_status(d: dict) -> dict:
         _count(d["baseline_additions"], "baseline entry added", "baseline entries added")
         if d["baseline_additions"]
         else None,
+        _count(d["new_suppressions"], "new inline suppression", "new inline suppressions")
+        if d.get("new_suppressions")
+        else None,
     ]
     reasons = [r for r in reasons if r]
     notes = []
@@ -277,6 +280,7 @@ def _run_dict(row: sqlite3.Row) -> dict:
             "total": d["suppressions"],
             "invalid": d["suppressions_invalid"],
             "suppressed_findings": d["suppressed_findings"],
+            "new": d["new_suppressions"],
         },
         "unscanned": {
             "skipped": d["unscanned_skipped"],

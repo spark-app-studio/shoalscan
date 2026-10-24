@@ -344,6 +344,28 @@ def _reported_in(meta: dict, findings: list, path: str) -> bool:
     return any(isinstance(s, dict) and s.get("path") == path for s in meta.get("suppression_list") or [])
 
 
+def _new_suppressions(meta: dict, changed: set[str], added) -> list[dict]:
+    """The inline suppressions whose marker is on a line the change added. The scan lists at most
+    MAX_SUPPRESSION_LIST of them; when it left some out, which are new cannot be told, and the check stops."""
+    listed = meta.get("suppression_list")
+    total = (meta.get("suppressions") or {}).get("total", 0)
+    if not isinstance(listed, list) or (isinstance(total, int) and total > len(listed)):
+        raise SetupError(
+            "the scan did not list every inline suppression, so the check cannot tell which ones the change added"
+        )
+    lines: dict[str, set[int]] = {}
+    out = []
+    for entry in listed:
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(path, str) or path not in changed:
+            continue
+        if path not in lines:
+            lines[path] = added(path)
+        if entry.get("line") in lines[path]:
+            out.append(entry)
+    return out
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     out = _out_dir(args)
     policy = _policy(args)
@@ -379,6 +401,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     baseline = load_baseline(baseline_path)
     base_baseline = None
     changed = None
+    new_suppressions = None
     added = None
     moved = None
     if policy.commit is not None:
@@ -407,6 +430,8 @@ def cmd_check(args: argparse.Namespace) -> int:
         def added(path: str) -> set[int]:
             return gitref.added_lines(repo, since, path)
 
+        new_suppressions = _new_suppressions(meta, set(changed), added)
+
     result = compare(
         findings,
         baseline,
@@ -424,6 +449,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         adoption=policy.adoption,
         parse_warn_only=config.parse_warn_only,
         test_code_rules=config.test_code.rules,
+        new_suppressions=new_suppressions,
     )
     write_atomic(out / CHECK_JSON, json.dumps(details(result, findings_sha256), sort_keys=True) + "\n")
     print(render_report(result))

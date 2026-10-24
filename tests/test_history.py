@@ -58,6 +58,22 @@ class PullRequestRunTests(HistoryTestCase):
             {"result": result, "findings": 0},
         ).run_id
 
+    def test_new_suppressions_are_stored_and_block(self):
+        run_id = history.record_run(
+            self.conn,
+            history.RunInfo("acme/app", "refs/pull/3/head", "6" * 40, "pr", "2026-10-01T00:00:00Z"),
+            [],
+            {},
+            {"result": "fail", "findings": 0, "new_suppressions": 2},
+        ).run_id
+        data = Data(history.open_read_only(self.db))
+        try:
+            run = data.run(data.repo_id("acme/app"), run_id)
+        finally:
+            data.conn.close()
+        self.assertEqual(run["suppressions"]["new"], 2)
+        self.assertEqual(run["status"]["label"], "Blocked: 2 new inline suppressions")
+
     def test_the_latest_run_of_each_pull_request(self):
         self.pr("refs/pull/7/head", "1" * 40, "2026-10-01T00:00:00Z")
         latest7 = self.pr("refs/pull/7/head", "2" * 40, "2026-10-03T00:00:00Z", result="fail")
@@ -85,6 +101,7 @@ class PullRequestRunTests(HistoryTestCase):
             [(7, 2, latest7, "2" * 40), (9, 1, latest9, "3" * 40)],
         )
         self.assertEqual(pulls["items"][0]["latest"]["outcome"], "blocked")
+        self.assertEqual(pulls["items"][0]["latest"]["suppressions"]["new"], 0)
 
 
 class RecordTests(HistoryTestCase):

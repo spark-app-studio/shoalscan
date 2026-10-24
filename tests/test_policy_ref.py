@@ -223,6 +223,37 @@ class PolicyRefTests(unittest.TestCase):
         code, out, err = self.cli("check", *config, *baseline)
         self.assertEqual(code, 0, out + err)
 
+    def test_changed_since_fails_a_suppression_the_change_added(self):
+        marker = "no" + "sem"
+        (self.repo / "src" / "more.py").write_text(
+            f"import pickle\n\ndef more(b):\n    return pickle.loads(b)  # {marker}: "
+            "repo.security-rules.no-pickle-loads #12 trusted input\n",
+            encoding="utf-8",
+        )
+        self.commit("silence it")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 1, out)
+        self.assertEqual((summary["new_suppressions"], summary["new_blocking"]), (1, 0))
+        self.assertIn("New inline suppressions on lines the change added (1)", out)
+        self.assertIn("src/more.py:4", out)
+        details = json.loads((self.out / "check.json").read_text())
+        self.assertEqual(details["new_suppressions"][0]["path"], "src/more.py")
+        # Without --changed-since (a trusted branch) a valid suppression is only counted.
+        config, baseline = self.explicit_policy()
+        code, out, err = self.cli("check", *config, *baseline)
+        self.assertEqual(code, 0, out + err)
+
+    def test_new_suppressions_cannot_be_told_from_a_cut_list(self):
+        from shoalscan.cli import _new_suppressions
+
+        meta = {"suppressions": {"total": 3}, "suppression_list": [{"path": "a.py", "line": 1}]}
+        with self.assertRaisesRegex(SetupError, "did not list every inline suppression"):
+            _new_suppressions(meta, {"a.py"}, lambda path: {1})
+        meta["suppressions"]["total"] = 1
+        self.assertEqual(_new_suppressions(meta, {"a.py"}, lambda path: {1}), [{"path": "a.py", "line": 1}])
+        self.assertEqual(_new_suppressions(meta, {"a.py"}, lambda path: {2}), [])
+        self.assertEqual(_new_suppressions(meta, {"b.py"}, lambda path: {1}), [])
+
     def test_rules_commit_needs_an_explicit_configuration(self):
         code, _, err = self.cli("scan", "--rules-commit", "refs/heads/main")
         self.assertEqual(code, 2)
