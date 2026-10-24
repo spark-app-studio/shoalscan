@@ -257,7 +257,8 @@ def cmd_triage_export(args: argparse.Namespace) -> int:
             "rf.run_id "
             " JOIN repos rp ON rp.id = r.repo_id WHERE rp.name = fr.repo_name AND fk.tool = fr.tool AND fk.rule = "
             "fr.rule "
-            " AND fk.path = fr.path AND fk.fingerprint = fr.fingerprint ORDER BY r.scanned_at DESC LIMIT 1) "
+            " AND fk.path = fr.path AND fk.fingerprint = fr.fingerprint AND r.kind = 'scheduled' "
+            "ORDER BY r.scanned_at DESC LIMIT 1) "
             "FROM finding_reviews fr WHERE fr.repo_name = ? AND fr.status IN ('false_positive', 'accepted_risk', "
             "'wont_fix') "
             "ORDER BY fr.path, fr.rule, fr.fingerprint",

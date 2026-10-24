@@ -1325,7 +1325,7 @@ def apply_review_transitions(
                 "SELECT rf.line FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id JOIN runs r ON r.id = "
                 "rf.run_id "
                 "JOIN repos rp ON rp.id = r.repo_id WHERE rp.name = ? AND fk.tool = ? AND fk.rule = ? AND fk.path = ? "
-                "AND fk.fingerprint = ? "
+                "AND fk.fingerprint = ? AND r.kind = 'scheduled' "
                 "ORDER BY r.scanned_at DESC LIMIT 1",
                 (info.repo, *key),
             ).fetchone()

@@ -233,14 +233,16 @@ def unpack(blob: bytes, dims: int) -> list[float]:
 
 
 def _latest_texts(conn: sqlite3.Connection, repo_id: int) -> list[tuple[int, str]]:
-    """Each finding identity of the repository with the text of its most recent occurrence.
+    """Each finding identity of the repository with the text of its most recent occurrence in a scheduled run
+    (a pull-request run's text was chosen by a change nobody has accepted).
 
     SQLite picks each finding's newest occurrence through the run_findings key index, so only one row per
     finding reaches Python, not one per run."""
     rows = conn.execute(
         "SELECT fk.id, fk.tool, fk.rule, fk.path, rf.component, m.text FROM finding_keys fk "
         "JOIN run_findings rf ON rf.key_id = fk.id AND rf.run_id = (SELECT nrf.run_id FROM run_findings nrf "
-        "JOIN runs nr ON nr.id = nrf.run_id WHERE nrf.key_id = fk.id ORDER BY nr.scanned_at DESC, nr.id DESC LIMIT 1) "
+        "JOIN runs nr ON nr.id = nrf.run_id WHERE nrf.key_id = fk.id AND nr.kind = 'scheduled' "
+        "ORDER BY nr.scanned_at DESC, nr.id DESC LIMIT 1) "
         "JOIN messages m ON m.id = rf.message_id WHERE fk.repo_id = ? ORDER BY fk.id",
         (repo_id,),
     )
@@ -508,7 +510,7 @@ def _describe(conn: sqlite3.Connection, key_id: int, score: float) -> dict:
     latest = conn.execute(
         "SELECT rf.severity, rf.line, m.text, r.scanned_at FROM run_findings rf "
         "JOIN runs r ON r.id = rf.run_id JOIN messages m ON m.id = rf.message_id WHERE rf.key_id = ? "
-        "ORDER BY r.scanned_at DESC, r.id DESC LIMIT 1",
+        "AND r.kind = 'scheduled' ORDER BY r.scanned_at DESC, r.id DESC LIMIT 1",
         (key_id,),
     ).fetchone()
     return {
