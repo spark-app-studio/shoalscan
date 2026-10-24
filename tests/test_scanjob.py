@@ -1000,6 +1000,67 @@ class PullRequestTests(WorkerTestCase):
         self.assertLess(scanjob.tree_size(f.clone), 1024 * 1024)
         self.assertEqual(scanjob.run_one(f.state, targets, "acme/app", "x", io.StringIO()), "passed")
 
+    def pull_request_with(self, number: int, files: dict) -> str:
+        f = self.f
+        git("checkout", "-q", "-b", f"files{number}", "main", cwd=f.origin)
+        for name, data in files.items():
+            (f.origin / name).parent.mkdir(parents=True, exist_ok=True)
+            (f.origin / name).write_bytes(data)
+            git("add", name, cwd=f.origin)
+        git("commit", "-q", "-m", f"files {number}", cwd=f.origin)
+        head = rev(f.origin, "HEAD")
+        git("checkout", "-q", "main", cwd=f.origin)
+        git("update-ref", f"refs/pull/{number}/head", head, cwd=f.origin)
+        git("update-ref", f"refs/pull/{number}/merge", head, cwd=f.origin)
+        return head
+
+    def checkout_refusal(self, results: dict, number: int) -> str:
+        self.assertNotIn(results[f"acme/app#{number}"], ("passed", "blocked"))
+        (detail,) = [r[0] for r in self.f.rows("SELECT detail FROM scan_triggers") if r[0] and f"#{number} " in r[0]]
+        return detail
+
+    def test_a_highly_compressible_pull_request_is_refused_before_it_is_checked_out(self):
+        # 3 MB of zeros compress to a few KB: within max_clone_mb, but the checkout would be large.
+        self.pull_request_with(8, {"zeros.bin": bytes(3 * 1024 * 1024)})
+        targets = replace(self.targets(), max_checkout_mb=1)
+        targets = replace(targets, targets={"acme/app": replace(targets.targets["acme/app"], max_clone_mb=1)})
+        started = []
+        real_run = scanjob.Job.run
+
+        def spy(job, argv, **kw):
+            if "worktree" in argv and "add" in argv and "pull.git" in " ".join(argv):
+                started.append(argv)
+            return real_run(job, argv, **kw)
+
+        with mock.patch.object(scanjob.Job, "run", spy):
+            results = self.poll(targets)
+        self.assertIn("would be 3 MB, more than max_checkout_mb (1 MB)", self.checkout_refusal(results, 8))
+        # #8 was never checked out; #7 (small) was.
+        self.assertEqual(len(started), 1)
+        self.assertEqual(results["acme/app#7"], "passed")
+
+    def test_too_many_files_or_too_deep_a_path_is_refused(self):
+        self.pull_request_with(8, {f"many/{n}.txt": b"x" for n in range(5)})
+        self.pull_request_with(9, {"/".join(["d"] * 70) + "/deep.txt": b"x"})
+        results = self.poll(replace(self.targets(), max_checkout_files=4))
+        self.assertIn("more than max_checkout_files (4)", self.checkout_refusal(results, 8))
+        self.assertIn("deeper than 64 directories", self.checkout_refusal(results, 9))
+
+    def test_the_checkout_is_also_measured_while_and_after_git_writes_it(self):
+        self.pull_request_with(8, {"zeros.bin": bytes(3 * 1024 * 1024)})
+        with mock.patch.object(scanjob.Job, "check_checkout", return_value=0):
+            results = self.poll(replace(self.targets(), max_checkout_mb=1))
+        self.assertIn("grew to more than max_checkout_mb", self.checkout_refusal(results, 8))
+
+    def test_the_checkout_needs_room_for_the_gitleaks_copy(self):
+        self.pull_request_with(8, {"zeros.bin": bytes(3 * 1024 * 1024)})
+        free = scanjob.shutil.disk_usage(self.base).free
+        # Enough for min_free_mb and one copy of the checkout, not two.
+        targets = replace(self.targets(), min_free_mb=(free - 4 * 1024 * 1024) // (1024 * 1024))
+        with mock.patch.object(scanjob, "check_free_space"):
+            results = self.poll(targets)
+        self.assertIn("twice (for the Gitleaks staging copy)", self.checkout_refusal(results, 8))
+
     def test_run_one_refuses_a_pull_request_for_a_target_that_does_not_scan_them(self):
         pull = pullrequests.PullRequest(7, self.pr7, True)
         with self.assertRaisesRegex(SetupError, "does not scan pull requests"):

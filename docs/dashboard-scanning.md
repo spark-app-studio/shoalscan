@@ -19,6 +19,8 @@ max_scans_per_hour = 6       # for all repositories together
 min_free_mb = 2048           # refuse to start a scan with less free disk space than this
 max_clone_mb = 2048          # a clone or fetch that grows past this is stopped and cleaned up
 max_pull_requests = 10       # pull requests scanned per `scanjob --pull-requests` poll, at most
+max_checkout_mb = 2048       # refuse a commit whose checkout (as git's tree lists it) would be larger
+max_checkout_files = 200000  # refuse a commit with more files than this
 require_network_sandbox = true  # the default: a scan fails unless the scanners run without network access
 
 [[target]]
@@ -53,6 +55,8 @@ Each target has exactly one source:
 - **`source`**, an https URL of a public repository on an allowed host. The allowed hosts are `github.com`, `gitlab.com` and `bitbucket.org`, unless `allowed_hosts.toml` in the state directory says otherwise (`hosts = ["github.com"]`). The server clones only the registered branch, with its full history so earlier commits can be rescanned, into `clones/` in the state directory, and fetches only that branch, with git limited to https, with no prompts and no credential helpers. Private repositories cannot be scanned this way.
 - **`mirror`**, the name of a local clone registered in `local_sources.toml` in the state directory (`[[mirror]]` tables with a `name` and an absolute `path`). Use a mirror for a private repository: you keep it up to date yourself, for example with `git fetch` in a cron job, and Shoalscan never fetches it or needs its credentials.
 - **`clone`**, an absolute path to a clone, set only by editing the file. Shoalscan fetches it with your own git setup, as `examples/scheduled-scan.sh` does.
+
+Before the worker checks a commit out, it lists the commit's tree with `git ls-tree` and refuses the scan, recording a scan error, when the checkout would be larger than `max_checkout_mb`, have more files than `max_checkout_files`, or have a path deeper than 64 directories (or longer than 4096 bytes), and when the disk does not have room for the checkout twice besides `min_free_mb` (Gitleaks may copy every file where a hard link fails). `max_clone_mb` alone cannot protect the disk: git objects are compressed, so a few kilobytes of fetched objects can expand to gigabytes. The size is also enforced while git writes the checkout, and once more afterwards.
 
 A repository added on the Configuration page gets its policy and baseline in `targets/<name>/` in the state directory: `shoalscan.toml` is the policy text from the page, and `baseline.toml` is its baseline.
 

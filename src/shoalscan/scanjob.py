@@ -37,6 +37,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +83,9 @@ ENV_ALLOW = (
 )
 _RUN_ID = re.compile(r"\brun (\d+)\b")
 MAX_POLICY_BYTES = 1024 * 1024
+MB = 1024 * 1024
+# A path deeper than this in the commit being scanned refuses the scan: no real repository needs it.
+MAX_PATH_DEPTH = 64
 WORK_PREFIX = "shoalscan-scan-"
 OWNER_FILE = ".shoalscan-state-dir"
 
@@ -132,7 +136,7 @@ def _kill_group(pid: int) -> None:
     """Kill a child's whole process group; it may already be gone."""
     try:
         os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
+    except (ProcessLookupError, PermissionError):  # gone, or (macOS) only a zombie is left
         pass
 
 
@@ -477,6 +481,84 @@ class Job:
             )
         return commit
 
+    def checkout_message(self, size: int | None) -> str:
+        what = f"would be {size // MB} MB, more" if size is not None else "grew to more"
+        return (
+            f"the checkout of the commit {what} than max_checkout_mb ({self.targets.max_checkout_mb} MB); "
+            "nothing was scanned"
+        )
+
+    def check_checkout(self, repo: Path, commit: str) -> int:
+        """Before anything is written: the commit's tree, as `git ls-tree` lists it, must stay within
+        max_checkout_mb, max_checkout_files and MAX_PATH_DEPTH, and the disk must hold the checkout twice
+        (Gitleaks may copy every file where a hard link fails) besides min_free_mb. Objects compress, so a
+        small fetch can still expand to a huge checkout. Returns the checkout's size in bytes."""
+        limit = self.targets.max_checkout_mb * MB
+        max_files = self.targets.max_checkout_files
+        pairs = self.git_pairs()
+        proc = subprocess.Popen(
+            ["git", *scanning.git_args(pairs), "-C", str(repo), "ls-tree", "-r", "-l", "-z", "--full-tree", commit],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=scanning.git_env(base_env(), pairs),
+            start_new_session=True,
+        )
+        timer = threading.Timer(max(1.0, self.deadline - time.monotonic()), _kill_group, (proc.pid,))
+        timer.daemon = True
+        timer.start()
+        total = files = 0
+        problem = None
+        rest = b""
+        try:
+            while problem is None:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                records = (rest + chunk).split(b"\0")
+                rest = records.pop()
+                for record in records:
+                    meta, _, path = record.partition(b"\t")
+                    fields = meta.split()
+                    if len(fields) != 4 or not path:
+                        problem = SetupError("git ls-tree printed an entry that could not be read")
+                        break
+                    files += 1
+                    total += int(fields[3]) if fields[3].isdigit() else 0
+                    if files > max_files:
+                        problem = TooLargeError(
+                            f"the commit has more than max_checkout_files ({max_files}) files; nothing was scanned"
+                        )
+                    elif total > limit:
+                        problem = TooLargeError(self.checkout_message(total))
+                    elif path.count(b"/") >= MAX_PATH_DEPTH or len(path) > 4096:
+                        problem = TooLargeError(
+                            f"the commit has a path deeper than {MAX_PATH_DEPTH} directories or longer than 4096 "
+                            "bytes; nothing was scanned"
+                        )
+                    if problem is not None:
+                        break
+        finally:
+            timer.cancel()
+            if problem is not None:
+                _kill_group(proc.pid)
+            proc.stdout.close()
+            proc.wait()
+        if problem is not None:
+            raise problem
+        if time.monotonic() >= self.deadline:
+            raise ScanTimeout()
+        if proc.returncode != 0 or rest:
+            raise SetupError(f"could not list the tree of {commit[:12]}")
+        need = 2 * total + self.targets.min_free_mb * MB
+        free = shutil.disk_usage(self.work).free
+        if free < need:
+            raise SetupError(
+                f"not enough free disk space for the checkout: it needs {total // MB} MB twice (for the Gitleaks "
+                f"staging copy) and min_free_mb ({self.targets.min_free_mb} MB) besides; {free // MB} MB is free"
+            )
+        return total
+
     def branch_head(self) -> str:
         """The commit at the head of the registered branch in the clone."""
         t = self.target
@@ -564,8 +646,15 @@ class Job:
         repo = self.pull_repo if self.pull is not None else self.clone
         self.git("-C", str(repo), "worktree", "prune")
         src = self.work / "src"
-        if self.git("-C", str(repo), "worktree", "add", "--quiet", "--detach", str(src), commit) != 0:
+        size = self.check_checkout(repo, commit)
+        # Enforced while git writes too, and once more after: the tree's sizes are what git will write.
+        limit = self.targets.max_checkout_mb * MB
+        watch = Watch(src, limit + MB, TooLargeError, self.checkout_message(None))
+        if self.git("-C", str(repo), "worktree", "add", "--quiet", "--detach", str(src), commit, watch=watch) != 0:
             raise SetupError("git worktree add failed")
+        if tree_size(src, limit + MB) > limit + MB:
+            raise TooLargeError(self.checkout_message(None))
+        self.say(f"checkout: {size // MB} MB")
         out = self.work / "out"
         out.mkdir(mode=0o700)
         # The policy is always explicit: the managed one, else the branch head's own file.

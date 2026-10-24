@@ -233,6 +233,9 @@ class Targets:
     max_scans_per_hour: int = 6
     min_free_mb: int = 2048
     max_clone_mb: int = 2048
+    # The checkout of the commit being scanned: its total size (as git's tree lists it) and its files.
+    max_checkout_mb: int = 2048
+    max_checkout_files: int = 200_000
     # At most this many pull requests are scanned by one `scanjob --pull-requests` poll.
     max_pull_requests: int = 10
     # Scans fail unless the scanners can run without network access (see shoalscan.process).
@@ -486,6 +489,8 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
         "min_free_mb",
         "max_clone_mb",
         "max_pull_requests",
+        "max_checkout_mb",
+        "max_checkout_files",
         "require_network_sandbox",
     }
     unknown = set(data) - top
@@ -573,6 +578,8 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
         min_free_mb=_int(data.get("min_free_mb", 2048), "min_free_mb", 0, 10_000_000),
         max_clone_mb=_int(data.get("max_clone_mb", 2048), "max_clone_mb", 1, 10_000_000),
         max_pull_requests=_int(data.get("max_pull_requests", 10), "max_pull_requests", 1, 100),
+        max_checkout_mb=_int(data.get("max_checkout_mb", 2048), "max_checkout_mb", 1, 10_000_000),
+        max_checkout_files=_int(data.get("max_checkout_files", 200_000), "max_checkout_files", 1, 100_000_000),
         require_network_sandbox=_bool(data.get("require_network_sandbox", True), "require_network_sandbox"),
         mirrors=mirrors,
         allowed_hosts=hosts,
@@ -605,6 +612,8 @@ def dump_targets(t: Targets, raw_top: dict) -> str:
         "min_free_mb",
         "max_clone_mb",
         "max_pull_requests",
+        "max_checkout_mb",
+        "max_checkout_files",
     ):
         if key in raw_top:
             lines.append(f"{key} = {int(raw_top[key])}")
