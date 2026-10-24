@@ -29,10 +29,16 @@ def validate_ref(ref: str) -> str:
     return ref
 
 
-def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+def _git(repo: Path, *args: str, check: bool = True, magic: bool = False) -> subprocess.CompletedProcess:
+    """Run git in `repo`. Paths are literal (GIT_LITERAL_PATHSPECS): a file name such as `:(exclude)*.py` or
+    `:/x`, which a change can commit, must name that file and never act as pathspec magic, even after `--`.
+    Only a caller that writes its own pathspec magic around a path it controls passes `magic`."""
     cmd = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args]
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_GLOB_PATHSPECS", "GIT_ICASE_PATHSPECS")}
+    env["GIT_LITERAL_PATHSPECS"] = "0" if magic else "1"
+    env["GIT_NOGLOB_PATHSPECS"] = "1"
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=GIT_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL)
+        proc = subprocess.run(cmd, capture_output=True, timeout=GIT_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL, env=env)
     except subprocess.TimeoutExpired:
         raise SetupError(f"git timed out: {' '.join(args[:2])}") from None
     except OSError as exc:
@@ -122,7 +128,8 @@ def changed_files(repo: Path, commit: str) -> list[str]:
     base = merge_base(repo, commit)
     out = _git(repo, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=ACMRT", base).stdout
     untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").stdout
-    names = (out + b"\0" + untracked).decode("utf-8", errors="replace").split("\0")
+    # surrogateescape: a name that is not UTF-8 comes back to git byte for byte, never as a different name.
+    names = (out + b"\0" + untracked).decode("utf-8", errors="surrogateescape").split("\0")
     return sorted({p for p in names if p})
 
 
@@ -171,10 +178,14 @@ def baseline_binding_path(repo: Path, baseline: Path) -> str | None:
 def _changes_digest(
     repo: Path, tree: str | None, options: tuple[str, ...], pathspec: tuple[str, ...]
 ) -> tuple[bool, str]:
-    status = _git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", *options, *pathspec).stdout
+    # The pathspec here is Shoalscan's own (":/" and ":(exclude,literal)<baseline>"), so magic stays on.
+    magic = bool(pathspec)
+    status = _git(
+        repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", *options, *pathspec, magic=magic
+    ).stdout
     digest = hashlib.sha256(status)
     if tree is not None:
-        digest.update(_git(repo, "diff", "--no-ext-diff", "--binary", *options, "HEAD", *pathspec).stdout)
+        digest.update(_git(repo, "diff", "--no-ext-diff", "--binary", *options, "HEAD", *pathspec, magic=magic).stdout)
     for entry in status.split(b"\0"):
         if entry.startswith(b"?? "):
             path = repo / entry[3:].decode("utf-8", errors="surrogateescape")
@@ -212,22 +223,25 @@ def worktree_state(repo: Path, baseline: str | None = None) -> dict | None:
     return state
 
 
+# Lines counted as added for a changed file that cannot be read: enough to cover any marker or parse gap in it.
+UNREADABLE_LINES = 1_000_000
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
 def added_lines(repo: Path, commit: str, path: str) -> set[int]:
     """Line numbers (in the current file) that the change added or modified.
 
-    The diff is always textual (`--text`): a file with a NUL byte would otherwise be "binary" and show no
-    lines at all. A file the change touched but whose diff still has no hunk (a mode change, say) counts
-    as added in full, so nothing in it can pass for unchanged."""
+    Call it only for a file `changed_files` listed. The diff is always textual (`--text`): a file with a NUL
+    byte would otherwise be "binary" and show no lines at all. A file whose diff has no hunk (a mode change,
+    or an empty diff, which for a changed file is itself suspicious) counts as added in full, so nothing in it
+    can pass for unchanged; one that cannot be read counts as one huge file."""
     tracked = _git(repo, "ls-files", "--error-unmatch", "--", path, check=False).returncode == 0
     if not tracked:
         full = repo / path
         try:
             count = len(full.read_bytes().split(b"\n"))
         except OSError:
-            return set()
+            count = UNREADABLE_LINES
         return set(range(1, count + 1))
     out = _git(
         repo,
@@ -250,11 +264,11 @@ def added_lines(repo: Path, commit: str, path: str) -> set[int]:
             hunks += 1
             start, count = int(match.group(1)), int(match.group(2) if match.group(2) is not None else 1)
             lines.update(range(start, start + count))
-    if out.strip() and not hunks:
+    if not hunks:
         try:
             count = len((repo / path).read_bytes().split(b"\n"))
         except OSError:
-            return lines
+            count = UNREADABLE_LINES
         return set(range(1, count + 1))
     return lines
 

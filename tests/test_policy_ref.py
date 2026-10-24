@@ -269,6 +269,26 @@ class PolicyRefTests(unittest.TestCase):
         self.assertEqual(findings["silenced_total"], len(findings["silenced_list"]))
         self.assertIn(("src/old.py", 5), [(e["path"], e["start"]) for e in findings["silenced_list"]])
 
+    def test_a_file_named_like_pathspec_magic_cannot_hide_its_added_lines(self):
+        # Without literal pathspecs, `git diff <base> -- ':(exclude)*.py'` prints nothing for this file, so its
+        # new marker would not count as new.
+        marker = "no" + "sem"
+        name = ":(exclude)*.py"
+        git(self.repo, "checkout", "-q", "main")
+        (self.repo / "src" / name).write_text("import pickle\n\ndef odd(b):\n    return b\n", encoding="utf-8")
+        self.commit("an odd name on main")
+        git(self.repo, "checkout", "-q", "-B", "change")
+        (self.repo / "src" / name).write_text(
+            f"import pickle\n\ndef odd(b):\n    return pickle.loads(b)  # {marker}: "
+            "repo.security-rules.no-pickle-loads #12 trusted\n",
+            encoding="utf-8",
+        )
+        self.commit("silence it under an odd name")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 1, out)
+        self.assertGreaterEqual(summary["new_suppressions"], 1)
+        self.assertIn(f"src/{name}:4", out)
+
     def test_silenced_findings_cannot_be_told_from_a_cut_list(self):
         from shoalscan.cli import _new_silenced
 

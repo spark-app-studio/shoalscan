@@ -96,6 +96,8 @@ GIT_HARDENED_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_ATTR_NOSYSTEM": "1",
     "GIT_ATTR_SOURCE": EMPTY_TREE,
+    # A path is a path: a file a scanned repository names `:(exclude)*` must never act as pathspec magic.
+    "GIT_LITERAL_PATHSPECS": "1",
 }
 
 

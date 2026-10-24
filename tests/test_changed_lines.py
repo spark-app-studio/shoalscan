@@ -82,11 +82,34 @@ class ChangedLinesTests(unittest.TestCase):
         self.assertEqual(len(_new_suppressions(meta, {"chart.tgz"}, lambda path: set())), 1)
         self.assertEqual(_new_suppressions(meta, set(), lambda path: set()), [])
 
-    def test_a_change_with_no_hunk_counts_the_whole_file_and_an_unchanged_file_nothing(self):
+    def test_a_change_with_no_hunk_or_an_empty_diff_counts_the_whole_file(self):
         (self.repo / "same.txt").chmod(0o755)
         self.commit()
         self.assertEqual(gitref.added_lines(self.repo, self.base, "same.txt"), {1, 2, 3})
-        self.assertEqual(gitref.added_lines(self.repo, self.base, "Dockerfile"), set())
+        # An empty diff for a file the caller says changed is suspicious, so it counts in full too.
+        self.assertEqual(gitref.added_lines(self.repo, self.base, "Dockerfile"), {1, 2, 3})
+
+    def test_file_names_are_never_pathspec_magic(self):
+        names = [":(exclude)*.py", ":(glob)**", ":/x", ":start.py", ":(icase)A.PY"]
+        for name in names:
+            (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / name).write_text("one\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "odd names on the base")
+        base = git(self.repo, "rev-parse", "HEAD").strip()
+        for name in names:
+            (self.repo / name).write_text("one\ntwo\nthree\n")
+        (self.repo / ":new(glob)").write_text("a\nb\n")
+        self.commit()
+        changed = gitref.changed_files(self.repo, base)
+        self.assertEqual(sorted(changed), sorted([*names, ":new(glob)"]))
+        for name in names:
+            with self.subTest(name=name):
+                self.assertEqual(gitref.added_lines(self.repo, base, name), {2, 3})
+        self.assertEqual(gitref.added_lines(self.repo, base, ":new(glob)"), {1, 2})
+        # The tree binding still leaves out only the baseline it names.
+        state = gitref.worktree_state(self.repo, ":(exclude)*.py")
+        self.assertFalse(state["without_baseline"]["dirty"])
 
 
 if __name__ == "__main__":
