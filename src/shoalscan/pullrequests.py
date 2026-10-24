@@ -212,15 +212,15 @@ def select(
     for number in sorted(listing.pulls):
         pull = listing.pulls[number]
         runs = by_commit.get(pull.head, [])
+        # Looks open now: a merge ref, or eligible by the poll state (above the mark, or its head moved). Only such a
+        # pull request has a scanned head scanned again or a scan error retried; a closed one never changes again.
+        active = pull.has_merge_ref or number in without_merge_ref
+        results = any(r.outcome != "scan_error" for r in runs)
         if not pull.has_merge_ref and number not in last_scan and number not in without_merge_ref:
             out.not_open += 1
-        elif any(r.outcome != "scan_error" for r in runs) and (key is None or (scanned or {}).get(pull.head) == key):
+        elif results and (key is None or (scanned or {}).get(pull.head) == key or not active):
             out.already_scanned.append(pull)
-        elif (
-            runs
-            and all(r.outcome == "scan_error" for r in runs)
-            and now - max(_time(r.scanned_at) for r in runs) < RETRY_AFTER
-        ):
+        elif runs and not results and (not active or now - max(_time(r.scanned_at) for r in runs) < RETRY_AFTER):
             out.failed.append(pull)
         elif number in last_scan and now - last_scan[number] < PER_PULL_INTERVAL:
             out.throttled.append(pull)
@@ -297,7 +297,12 @@ def eligible(listing: Listing, state: PollState | None) -> set[int]:
     return out
 
 
-def next_state(listing: Listing, state: PollState | None, tracked: set[int]) -> PollState:
+def next_state(
+    listing: Listing, state: PollState | None, tracked: set[int], recorded_heads: set[str] | frozenset = frozenset()
+) -> PollState:
+    """The state to keep after this poll. A tracked number goes once its current head has a recorded run (its new
+    heads are candidates anyway, as an earlier run of its ref is recorded), or once it is no longer listed."""
+    tracked = {n for n in tracked if n in listing.pulls and listing.pulls[n].head not in recorded_heads}
     mark = state.mark if state is not None else max(listing.pulls, default=0)
     heads = {p.head for p in listing.pulls.values()}
     scanned = {h: k for h, k in (state.scanned if state is not None else {}).items() if h in heads}

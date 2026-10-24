@@ -1005,7 +1005,7 @@ def run_pull_requests(
         try:
             state = pullrequests.load_state(state_path)
             extra = pullrequests.eligible(listing, state)
-            new_state = pullrequests.next_state(listing, state, extra)
+            new_state = pullrequests.next_state(listing, state, extra, {r.commit for r in recorded})
             scanning.write_private(state_path, pullrequests.state_json(new_state))
             key = scan_key(targets, target, listing)
         except (ShoalscanError, OSError) as exc:

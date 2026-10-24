@@ -167,6 +167,20 @@ class SelectTests(unittest.TestCase):
         self.assertEqual([p.number for p in chosen.throttled], [5])
         self.assertEqual([p.number for p in chosen.to_scan], [6])
 
+    def test_a_closed_pull_request_is_never_retried_or_rescanned(self):
+        # No merge ref and not eligible: a closed pull request whose head refs GitHub keeps.
+        recorded = [ran("refs/pull/3/head", B, 30, "scan_error"), ran("refs/pull/4/head", C, 30)]
+        pulls = [PullRequest(3, B, False), PullRequest(4, C, False)]
+        chosen = pullrequests.select(self.listing(*pulls), recorded, 10, NOW, key="new", scanned={C: "old"})
+        self.assertEqual(chosen.to_scan, [])
+        self.assertEqual([p.number for p in chosen.failed], [3])
+        self.assertEqual([p.number for p in chosen.already_scanned], [4])
+        # The same pull requests, open again (eligible), are retried and rescanned.
+        chosen = pullrequests.select(
+            self.listing(*pulls), recorded, 10, NOW, without_merge_ref={3, 4}, key="new", scanned={C: "old"}
+        )
+        self.assertEqual([p.number for p in chosen.to_scan], [4, 3])
+
     def test_capped_in_order(self):
         pulls = [PullRequest(n, f"{n:040x}", True) for n in (3, 11, 7, 20)]
         chosen = self.select(pulls, [], 2)
@@ -211,6 +225,12 @@ class PollStateTests(unittest.TestCase):
         chosen = pullrequests.select(later, [], 10, NOW, without_merge_ref=extra)
         self.assertEqual([p.number for p in chosen.to_scan], [4, 6])
         self.assertEqual(chosen.not_open, 2)
+
+    def test_tracked_numbers_go_once_scanned_or_no_longer_listed(self):
+        state = pullrequests.PollState(5, {6: B, 7: C, 9: D}, {6, 7, 9})
+        later = self.listing(n6=B, n7=C)  # #9 is gone
+        kept = pullrequests.next_state(later, state, {6, 7, 9}, recorded_heads={B})
+        self.assertEqual(kept.tracked, {7})
 
     def test_a_state_that_cannot_be_read_fails_closed(self):
         for text in (
