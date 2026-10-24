@@ -334,6 +334,22 @@ class PolicyRefTests(unittest.TestCase):
         code, out, err = self.cli("check", *config, *baseline)
         self.assertEqual(code, 1, out + err)
 
+    def test_a_git_that_ignores_the_attribute_source_is_refused(self):
+        # Older git silently ignores GIT_ATTR_SOURCE, and the change's .gitattributes would apply: fail closed.
+        from unittest import mock
+
+        from shoalscan.dashboard import scanning
+
+        config, baseline = self.explicit_policy()
+        with mock.patch.object(scanning, "git_attr_probe", return_value=False):
+            for args in (("scan",), ("check",)):
+                code, _, err = self.cli(*args, policy=True)
+                self.assertEqual(code, 2, args)
+                self.assertIn("git 2.40 or later is required", err)
+            code, _, err = self.cli("check", *config, *baseline, "--changed-since", "refs/heads/main")
+            self.assertEqual(code, 2)
+            self.assertIn("git 2.40 or later is required", err)
+
     def test_rules_commit_needs_an_explicit_configuration(self):
         code, _, err = self.cli("scan", "--rules-commit", "refs/heads/main")
         self.assertEqual(code, 2)
