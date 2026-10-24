@@ -934,6 +934,31 @@ class PullRequestTests(WorkerTestCase):
         self.assertEqual(self.poll(self.f.targets()), {})
         self.assertEqual(self.f.calls(), [])
 
+    def test_discovery_and_fetches_never_see_the_home_directory(self):
+        f = self.f
+        seen = {}
+
+        def fake_discover(git_argv, env, source, branch, timeout):
+            seen["discover"] = env
+            raise pullrequests.DiscoveryError("stop here")
+
+        f.write('[[target]]\nname = "acme/web"\nsource = "https://github.com/acme/web.git"\nbranch = "main"\n')
+        targets = f.targets()
+        target = replace(targets.targets["acme/web"], pull_requests=True)
+        with mock.patch.object(pullrequests, "discover", side_effect=fake_discover):
+            with self.assertRaises(pullrequests.DiscoveryError):
+                scanjob.discover_pull_requests(targets, target)
+        self.assertEqual(seen["discover"]["HOME"], scanjob.NO_HOME)
+        self.assertNotIn("XDG_CONFIG_HOME", seen["discover"])
+        self.assertEqual(seen["discover"]["GIT_CONFIG_GLOBAL"], "/dev/null")
+        job = scanjob.Job(f.state, targets, target, "x", io.StringIO())
+        try:
+            job.run = lambda argv, **kw: seen.setdefault("git", kw["env"]) and 0
+            job.git("fetch", "origin")
+            self.assertEqual(seen["git"]["HOME"], scanjob.NO_HOME)
+        finally:
+            job.cleanup()
+
     def test_run_one_refuses_a_pull_request_for_a_target_that_does_not_scan_them(self):
         pull = pullrequests.PullRequest(7, self.pr7, True)
         with self.assertRaisesRegex(SetupError, "does not scan pull requests"):

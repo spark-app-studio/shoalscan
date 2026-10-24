@@ -145,6 +145,19 @@ def base_env() -> dict:
     return env
 
 
+# The home directory of every hardened git command that may reach the network: git reads no global
+# configuration under it (GIT_CONFIG_GLOBAL is /dev/null), and curl must not find a ~/.netrc there either.
+NO_HOME = "/nonexistent"
+
+
+def network_git_env(pairs) -> dict:
+    """The environment of a hardened git command that talks to a source a browser or scan_targets.toml named."""
+    env = scanning.git_env(base_env(), pairs)
+    env["HOME"] = NO_HOME
+    env.pop("XDG_CONFIG_HOME", None)
+    return env
+
+
 def child_env() -> dict:
     """For scan, check and record: every git command they run is hardened too."""
     return scanning.git_env(base_env(), scanning.GIT_HARDENED + scanning.GIT_URL_ONLY)
@@ -261,7 +274,8 @@ class Job:
         """Every git command, hardened; only an administrator's clone is fetched with its own configuration.
         With `watch`, the clone's size is enforced while git runs."""
         pairs = self.git_pairs(admin_fetch)
-        env = scanning.git_env(base_env(), pairs, hardened=not admin_fetch)
+        # Only an administrator's clone keeps the home directory, where its credentials may live.
+        env = scanning.git_env(base_env(), pairs, hardened=False) if admin_fetch else network_git_env(pairs)
         try:
             return self.run(
                 ["git", *scanning.git_args(pairs), *args], cwd=cwd, env=env, watch=self.clone if watch else None
@@ -725,7 +739,7 @@ def discover_pull_requests(targets: scanning.Targets, target: scanning.Target) -
     pairs = scanning.GIT_HARDENED + scanning.GIT_URL_ONLY
     return pullrequests.discover(
         ["git", *scanning.git_args(pairs)],
-        scanning.git_env(base_env(), pairs),
+        network_git_env(pairs),
         target.source,
         target.branch,
         min(DISCOVERY_TIMEOUT_SECONDS, targets.timeout_seconds),
