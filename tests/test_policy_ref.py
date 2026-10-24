@@ -304,6 +304,12 @@ class PolicyRefTests(unittest.TestCase):
         # However long the silenced block, an added line at its far end counts.
         far = {"silenced_total": 1, "silenced_list": [{**span, "end": 5_000_000}]}
         self.assertEqual(len(_new_silenced(far, {"a.tf"}, lambda p: {4_999_999}, [])), 1)
+        # The edges of a span count, the lines just outside it do not, with many spans and many added lines.
+        spans = [{**span, "start": n * 10, "end": n * 10 + 2} for n in range(1, 20_001)]
+        many = {"silenced_total": len(spans), "silenced_list": spans}
+        added_lines = set(range(3, 200_000, 10)) | {50_000, 60_002}
+        found = sorted(e["line"] for e in _new_silenced(many, {"a.tf"}, lambda p: added_lines, []))
+        self.assertEqual(found, [50_000, 60_000])
         self.assertEqual(_new_silenced(meta, set(), lambda p: {5}, []), [])
         # A new marker right above it already counts the same thing.
         self.assertEqual(_new_silenced(meta, {"a.tf"}, lambda p: {5}, [{"path": "a.tf", "line": 3}]), [])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import hashlib
 import json
 import sys
@@ -393,7 +394,7 @@ def _new_silenced(meta: dict, changed: set[str], added, markers: list[dict]) -> 
             "the scan did not list every finding an inline comment silenced, so the check cannot tell which ones "
             "the change hides"
         )
-    lines: dict[str, set[int]] = {}
+    lines: dict[str, list[int]] = {}  # each changed file's added lines, sorted, for a binary search per span
     out = []
     for span in listed:
         path = span.get("path") if isinstance(span, dict) else None
@@ -401,8 +402,9 @@ def _new_silenced(meta: dict, changed: set[str], added, markers: list[dict]) -> 
         if not isinstance(path, str) or path not in changed or not isinstance(start, int) or not isinstance(end, int):
             continue
         if path not in lines:
-            lines[path] = added(path)
-        if not any(start <= line <= end for line in lines[path]):
+            lines[path] = sorted(added(path))
+        first = bisect.bisect_left(lines[path], start)
+        if first == len(lines[path]) or lines[path][first] > end:
             continue
         if any(m.get("path") == path and m.get("line") in (start - 1, start) for m in markers):
             continue
