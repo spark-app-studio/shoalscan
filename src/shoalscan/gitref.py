@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from shoalscan.errors import SetupError
 
 GIT_TIMEOUT_SECONDS = 120
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 MAX_GIT_OUTPUT = 256 * 1024 * 1024
 _REF_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./@{}^~\-]{0,250}$")
 
@@ -32,9 +33,37 @@ def validate_ref(ref: str) -> str:
 def _git(repo: Path, *args: str, check: bool = True, magic: bool = False) -> subprocess.CompletedProcess:
     """Run git in `repo`. Paths are literal (GIT_LITERAL_PATHSPECS): a file name such as `:(exclude)*.py` or
     `:/x`, which a change can commit, must name that file and never act as pathspec magic, even after `--`.
-    Only a caller that writes its own pathspec magic around a path it controls passes `magic`."""
-    cmd = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args]
+    Only a caller that writes its own pathspec magic around a path it controls passes `magic`.
+
+    Neither the repository's own `.gitattributes` nor the machine's system or global git configuration take
+    part: attributes are read from the empty tree (GIT_ATTR_SOURCE, which git 2.40 and later honour) and no
+    system or global configuration is read, so no clean filter, textconv or external diff (git-lfs, say) can
+    change what the diffs below show. The repository is trusted as a safe directory for this one command, since
+    the operator pointed Shoalscan at it."""
+    cmd = [
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.attributesFile=/dev/null",
+        "-c",
+        f"safe.directory={os.path.abspath(repo)}",
+        "-C",
+        str(repo),
+        *args,
+    ]
     env = {k: v for k, v in os.environ.items() if k not in ("GIT_GLOB_PATHSPECS", "GIT_ICASE_PATHSPECS")}
+    env.update(
+        {
+            "GIT_ATTR_SOURCE": EMPTY_TREE,
+            "GIT_ATTR_NOSYSTEM": "1",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
     env["GIT_LITERAL_PATHSPECS"] = "0" if magic else "1"
     env["GIT_NOGLOB_PATHSPECS"] = "1"
     try:
@@ -126,7 +155,9 @@ def changed_files(repo: Path, commit: str) -> list[str]:
     with the merge base of `commit` and HEAD. The working tree counts,
     untracked files included, so a local run sees uncommitted edits."""
     base = merge_base(repo, commit)
-    out = _git(repo, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=ACMRT", base).stdout
+    out = _git(
+        repo, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", "--no-renames", "--diff-filter=ACMRT", base
+    ).stdout
     untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").stdout
     # surrogateescape: a name that is not UTF-8 comes back to git byte for byte, never as a different name.
     names = (out + b"\0" + untracked).decode("utf-8", errors="surrogateescape").split("\0")
@@ -137,7 +168,7 @@ def diff_against(repo: Path, commit: str, paths: list[str], max_lines: int = 400
     """The working tree's diff against `commit` for `paths`, cut to `max_lines` lines."""
     if not paths:
         return ""
-    out = _git(repo, "diff", "--no-color", "--no-ext-diff", commit, "--", *paths).stdout
+    out = _git(repo, "diff", "--no-color", "--no-ext-diff", "--no-textconv", commit, "--", *paths).stdout
     lines = out.decode("utf-8", errors="replace").splitlines()
     if len(lines) > max_lines:
         lines = lines[:max_lines] + [f"... ({len(lines) - max_lines} more lines)"]
@@ -185,7 +216,11 @@ def _changes_digest(
     ).stdout
     digest = hashlib.sha256(status)
     if tree is not None:
-        digest.update(_git(repo, "diff", "--no-ext-diff", "--binary", *options, "HEAD", *pathspec, magic=magic).stdout)
+        digest.update(
+            _git(
+                repo, "diff", "--no-ext-diff", "--no-textconv", "--binary", *options, "HEAD", *pathspec, magic=magic
+            ).stdout
+        )
     for entry in status.split(b"\0"):
         if entry.startswith(b"?? "):
             path = repo / entry[3:].decode("utf-8", errors="surrogateescape")
@@ -275,9 +310,9 @@ def added_lines(repo: Path, commit: str, path: str) -> set[int]:
 
 def renames(repo: Path, commit: str) -> list[tuple[str, str]]:
     """(old, new) pairs that git reports as renames with at least 90% similarity."""
-    out = _git(repo, "diff", "-M90%", "--name-status", "-z", merge_base(repo, commit)).stdout.decode(
-        "utf-8", errors="replace"
-    )
+    out = _git(
+        repo, "diff", "--no-ext-diff", "--no-textconv", "-M90%", "--name-status", "-z", merge_base(repo, commit)
+    ).stdout.decode("utf-8", errors="replace")
     parts = out.split("\0")
     pairs = []
     i = 0

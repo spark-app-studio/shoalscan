@@ -1,6 +1,7 @@
 """Which lines a change added, and which inline suppressions it added, when the file is not plain text."""
 
 import io
+import os
 import subprocess
 import tarfile
 import tempfile
@@ -88,6 +89,28 @@ class ChangedLinesTests(unittest.TestCase):
         self.assertEqual(gitref.added_lines(self.repo, self.base, "same.txt"), {1, 2, 3})
         # An empty diff for a file the caller says changed is suspicious, so it counts in full too.
         self.assertEqual(gitref.added_lines(self.repo, self.base, "Dockerfile"), {1, 2, 3})
+
+    def test_no_clean_filter_or_global_configuration_shapes_the_diff(self):
+        # A clean filter in the machine's global configuration, named by the change's own .gitattributes, would
+        # drop every line but the first from what git diffs, hiding the added lines.
+        config = self.repo.parent / "global.gitconfig"
+        config.write_text('[filter "shrink"]\n\tclean = head -n 1\n\tsmudge = cat\n[diff]\n\tnoprefix = true\n')
+        (self.repo / ".gitattributes").write_text("*.cfg filter=shrink\n")
+        (self.repo / "app.cfg").write_text("one\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "attributes")
+        base = git(self.repo, "rev-parse", "HEAD").strip()
+        (self.repo / "app.cfg").write_text("one\ntwo\nthree\n")
+        saved = os.environ.get("GIT_CONFIG_GLOBAL")
+        os.environ["GIT_CONFIG_GLOBAL"] = str(config)
+        try:
+            self.assertEqual(gitref.added_lines(self.repo, base, "app.cfg"), {2, 3})
+            self.assertIn("app.cfg", gitref.changed_files(self.repo, base))
+        finally:
+            if saved is None:
+                os.environ.pop("GIT_CONFIG_GLOBAL", None)
+            else:
+                os.environ["GIT_CONFIG_GLOBAL"] = saved
 
     def test_file_names_are_never_pathspec_magic(self):
         names = [":(exclude)*.py", ":(glob)**", ":/x", ":start.py", ":(icase)A.PY"]

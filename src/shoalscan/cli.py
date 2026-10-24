@@ -457,6 +457,12 @@ def cmd_check(args: argparse.Namespace) -> int:
     elif getattr(args, "changed_since", None):
         # An explicit configuration and baseline, with the changed files listed against the merge base with
         # another commit (the base branch's head, when the scan worker scans a pull request).
+        from shoalscan.dashboard.scanning import GIT_TOO_OLD, git_attr_probe
+
+        # The diffs must not pass through a filter the change's .gitattributes names: refuse a git that ignores
+        # GIT_ATTR_SOURCE, as the scan worker does.
+        if not git_attr_probe():
+            raise SetupError(GIT_TOO_OLD)
         since = gitref.resolve_commit(repo, args.changed_since)
         changed = gitref.changed_files(repo, since)
         print(f"Changed files: compared with the merge base of HEAD and {since[:12]}.")
