@@ -1203,6 +1203,20 @@ class PullRequestTests(WorkerTestCase):
             raise RuntimeError("stop")
         self.assertEqual(len(scanning.read_requests(f.state)["pr_recent"]), 1)
 
+    def test_a_failure_of_this_machine_is_not_held_against_the_pull_request(self):
+        f = self.f
+        targets = self.targets(cooldown_seconds=0)
+        full = SetupError("not enough free disk space: 1 MB free where the scan works")
+        with mock.patch.object(scanjob, "check_free_space", side_effect=full):
+            results = self.poll(targets)
+        self.assertEqual(results["acme/app#7"], "failed")
+        self.assertFalse(scanjob.poll_ok(results["acme/app#7"]))
+        # Nothing recorded against the head, the reservation given back, and tried again once the hour is over.
+        self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(0,)])
+        self.assertEqual(scanning.read_requests(f.state)["pr_recent"], [])
+        with mock.patch.object(pullrequests, "PER_PULL_INTERVAL", timedelta(0)):
+            self.assertEqual(self.poll(targets)["acme/app#7"], "passed")
+
     def test_run_one_refuses_a_pull_request_for_a_target_that_does_not_scan_them(self):
         pull = pullrequests.PullRequest(7, self.pr7, True)
         with self.assertRaisesRegex(SetupError, "does not scan pull requests"):

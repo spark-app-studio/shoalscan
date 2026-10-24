@@ -116,6 +116,10 @@ class ScanTimeout(Exception):  # noqa: N818 - a signal to stop the scan, not an 
     pass
 
 
+class PullError(SetupError):
+    """The pull request itself could not be fetched or checked out: recorded against its head."""
+
+
 class TooLargeError(SetupError):
     """A directory a git command writes grew past its limit; the command was stopped."""
 
@@ -198,6 +202,7 @@ class Job:
         self.pinned = pinned  # (commit, ref) of a run to scan again, from the history database
         self.pull = pull  # a pull request to scan, from the listing of the target's source
         self.scan_started = False  # whether `shoalscan scan` was started: the attempt used a scan
+        self.pull_stage = False  # whether the pull request's own fetch had started
         self.state_dir = state_dir
         self.targets = targets
         self.target = target
@@ -453,6 +458,7 @@ class Job:
         (repo / "objects" / "info").mkdir(parents=True, exist_ok=True)
         (repo / "objects" / "info" / "alternates").write_text(f"{objects.resolve()}\n", encoding="utf-8")
         self.say(f"fetching pull request #{pull.number}")
+        self.pull_stage = True  # from here, a failure or the deadline is the pull request's
         limit = self.clone_limit()
         watch = Watch(
             repo,
@@ -473,12 +479,12 @@ class Job:
             watch=watch,
         )
         if fetched != 0:
-            raise SetupError(f"git fetch of pull request #{pull.number} failed; nothing was scanned")
+            raise PullError(f"git fetch of pull request #{pull.number} failed; nothing was scanned")
         if tree_size(repo, limit) > limit:
             raise TooLargeError(watch.message)
         commit = self.git_out("rev-parse", "--verify", "--quiet", f"{pull.fetch_ref}^{{commit}}", repo=repo)
         if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
-            raise SetupError(f"the fetched head of pull request #{pull.number} is not a commit")
+            raise PullError(f"the fetched head of pull request #{pull.number} is not a commit")
         if commit != pull.head:
             # Pushed to after the listing: what was fetched is its real head now, so that is what is scanned and
             # recorded, rather than a stale head nobody can fetch.
@@ -656,7 +662,7 @@ class Job:
         limit = self.targets.max_checkout_mb * MB
         watch = Watch(src, limit + MB, TooLargeError, self.checkout_message(None))
         if self.git("-C", str(repo), "worktree", "add", "--quiet", "--detach", str(src), commit, watch=watch) != 0:
-            raise SetupError("git worktree add failed")
+            raise (PullError if self.pull is not None else SetupError)("git worktree add failed")
         if tree_size(src, limit + MB) > limit + MB:
             raise TooLargeError(self.checkout_message(None))
         self.say(f"checkout: {size // MB} MB")
@@ -824,12 +830,18 @@ def run_one(
         outcome, run_id = job.execute()
     except ScanTimeout:
         outcome, detail = "timeout", f"stopped after {targets.timeout_seconds // 60} minutes; nothing was recorded"
-        record_failure = job is not None
+        # The pull request's fault only once its own fetch had started (not while the branch clone was fetched).
+        record_failure = job is not None and job.pull_stage
     except Stop:
         outcome, detail = "failed", "stopped by a signal; nothing was recorded"
     except (ShoalscanError, OSError, subprocess.SubprocessError) as exc:
         outcome, detail = "failed", str(exc)[:300]
-        record_failure = job is not None
+        # Only what the pull request caused is recorded against its head (and keeps it waiting a day): its fetch,
+        # its size, its checkout. A failure of this machine (the branch clone's fetch, free space, git too old,
+        # the policy, the record) is a failed attempt of the poll, tried again on the next one.
+        record_failure = isinstance(exc, PullError) or (
+            isinstance(exc, TooLargeError) and not isinstance(exc, CloneTooLargeError)
+        )
     finally:
         if job is not None and job.pull is not None:
             pull = job.pull  # the head fetched, if it moved after the listing
