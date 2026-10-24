@@ -86,6 +86,10 @@ ENV_ALLOW = (
 _RUN_ID = re.compile(r"\brun (\d+)\b")
 MAX_POLICY_BYTES = 1024 * 1024
 MB = 1024 * 1024
+# What one checked-out file costs on disk beyond its bytes: sizes round up to whole blocks, plus an estimate for its
+# inode and directory entry.
+BLOCK = 4096
+FILE_OVERHEAD = 4096
 # A path deeper than this in the commit being scanned refuses the scan: no real repository needs it.
 MAX_PATH_DEPTH = 64
 WORK_PREFIX = "shoalscan-scan-"
@@ -518,7 +522,7 @@ class Job:
         timer = threading.Timer(max(1.0, self.deadline - time.monotonic()), _kill_group, (proc.pid,))
         timer.daemon = True
         timer.start()
-        total = files = 0
+        total = files = on_disk = 0
         problem = None
         rest = b""
         try:
@@ -535,7 +539,10 @@ class Job:
                         problem = SetupError("git ls-tree printed an entry that could not be read")
                         break
                     files += 1
-                    total += int(fields[3]) if fields[3].isdigit() else 0
+                    size = int(fields[3]) if fields[3].isdigit() else 0
+                    total += size
+                    # On disk: whole blocks, and an inode and directory entry besides, however small the file.
+                    on_disk += -(-size // BLOCK) * BLOCK + FILE_OVERHEAD
                     if files > max_files:
                         problem = TooLargeError(
                             f"the commit has more than max_checkout_files ({max_files}) files; nothing was scanned"
@@ -561,12 +568,13 @@ class Job:
             raise ScanTimeout()
         if proc.returncode != 0 or rest:
             raise SetupError(f"could not list the tree of {commit[:12]}")
-        need = 2 * total + self.targets.min_free_mb * MB
+        need = 2 * on_disk + self.targets.min_free_mb * MB
         free = shutil.disk_usage(self.work).free
         if free < need:
             raise SetupError(
-                f"not enough free disk space for the checkout: it needs {total // MB} MB twice (for the Gitleaks "
-                f"staging copy) and min_free_mb ({self.targets.min_free_mb} MB) besides; {free // MB} MB is free"
+                f"not enough free disk space for the checkout: it needs {-(-on_disk // MB)} MB on disk twice (for "
+                f"the Gitleaks staging copy) and min_free_mb ({self.targets.min_free_mb} MB) besides; "
+                f"{free // MB} MB is free"
             )
         return total
 

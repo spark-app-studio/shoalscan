@@ -1089,6 +1089,17 @@ class PullRequestTests(WorkerTestCase):
             results = self.poll(replace(self.targets(), max_checkout_mb=1))
         self.assertIn("grew to more than max_checkout_mb", self.checkout_refusal(results, 8))
 
+    def test_the_room_for_the_checkout_counts_whole_blocks_and_each_file(self):
+        # 2,000 one-byte files: 2 KB of content, but about 16 MB on disk, twice.
+        self.pull_request_with(8, {f"tiny/{n}.txt": b"x" for n in range(2000)})
+        usage = mock.Mock(free=(100 + 10) * 1024 * 1024)
+        with (
+            mock.patch.object(scanjob, "check_free_space"),
+            mock.patch.object(scanjob.shutil, "disk_usage", return_value=usage),
+        ):
+            results = self.poll(replace(self.targets(), min_free_mb=100))
+        self.assertIn("16 MB on disk twice", self.checkout_refusal(results, 8))
+
     def test_the_checkout_needs_room_for_the_gitleaks_copy(self):
         self.pull_request_with(8, {"zeros.bin": bytes(3 * 1024 * 1024)})
         # Room for min_free_mb and one copy of the 3 MB checkout, not two.
