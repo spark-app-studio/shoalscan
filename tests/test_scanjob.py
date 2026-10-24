@@ -926,6 +926,16 @@ class PullRequestTests(WorkerTestCase):
         self.assertEqual(row[:5], ("acme/app", "pull-request poll", "pull-request", "scan_error", None))
         self.assertIn("unable to access", row[5])
 
+    def test_an_error_text_from_the_remote_cannot_drive_the_terminal(self):
+        def hostile(targets, target):
+            raise pullrequests.DiscoveryError("fatal: \x1b]0;owned\x07remote said \x1b[2Jno\u202e")
+
+        log = io.StringIO()
+        scanjob.run_pull_requests(self.f.state, self.targets(), log, wait_seconds=1, discover=hostile)
+        self.assertIn("remote said [2Jno", log.getvalue())
+        self.assertNotIn("\x1b", log.getvalue())
+        self.assertNotIn("\u202e", log.getvalue())
+
     def test_a_listing_that_does_not_show_the_branch_is_a_scan_error(self):
         def elsewhere(targets, target):
             return pullrequests.discover(["git"], dict(os.environ), str(self.f.origin), "no-such-branch", 30)

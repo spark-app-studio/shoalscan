@@ -985,7 +985,7 @@ def run_pull_requests(
         name = target.name
         if not target.enabled:
             results[name] = "skipped: disabled"
-            log.write(f"pull requests: skipping {name} (disabled)\n")
+            _note(log, f"pull requests: skipping {name} (disabled)")
             continue
         key = name + scanning.PULL_REQUESTS_KEY
         with scanning.locked_requests(state_dir) as requests:
@@ -994,7 +994,7 @@ def run_pull_requests(
                 requests["targets"][key] = time.time()
         if cooldown:
             results[name] = f"skipped: cooldown, polled less than cooldown_minutes ago (next poll in {cooldown} s)"
-            log.write(f"pull requests: {name}: {results[name][9:]}\n")
+            _note(log, f"pull requests: {name}: {results[name][9:]}")
             continue
         try:
             listing = discover(targets, target)
@@ -1002,11 +1002,11 @@ def run_pull_requests(
         except (ShoalscanError, OSError, sqlite3.Error) as exc:
             detail = f"pull-request discovery failed: {str(exc)[:250]}"
             results[name] = f"scan_error: {detail}"
-            log.write(f"pull requests: {name}: {detail}\n")
+            _note(log, f"pull requests: {name}: {detail}")
             try:
                 _audit_discovery_failure(targets, name, detail)
             except (ShoalscanError, OSError, sqlite3.Error) as audit_exc:
-                log.write(f"pull requests: {name}: the failure could not be audited either: {audit_exc}\n")
+                _note(log, f"pull requests: {name}: the failure could not be audited either: {audit_exc}")
             log.flush()
             continue
         state_path = state_dir / "pull_requests" / f"{scanning.slug(name)}.json"
@@ -1019,7 +1019,7 @@ def run_pull_requests(
         except (ShoalscanError, OSError) as exc:
             detail = f"pull-request discovery failed: {str(exc)[:250]}"
             results[name] = f"scan_error: {detail}"
-            log.write(f"pull requests: {name}: {detail}\n")
+            _note(log, f"pull requests: {name}: {detail}")
             _audit_discovery_failure(targets, name, detail)
             continue
         if state is None:
@@ -1065,7 +1065,7 @@ def run_pull_requests(
                     requests["pr_recent"].append(stamp)
             if over:
                 results[label] = "deferred: the hourly limit (max_pr_scans_per_hour) is reached, next poll"
-                log.write(f"pull requests: {label}: {results[label][10:]}\n")
+                _note(log, f"pull requests: {label}: {results[label][10:]}")
                 continue
             try:
                 report: dict = {}
@@ -1081,9 +1081,15 @@ def run_pull_requests(
                 # The scan never started (another scan holds the lock, say): its reservation goes back.
                 _refund(state_dir, stamp)
                 results[label] = f"skipped: {exc}"
-                log.write(f"pull requests: {label}: {exc}\n")
+                _note(log, f"pull requests: {label}: {exc}")
             log.flush()
     return results
+
+
+def _note(log, text: str) -> None:
+    """One line of the poll's log. The text can carry what a remote or the history said (an error from git
+    ls-remote, a fetched ref), so control and escape sequences are dropped."""
+    log.write(scanning.plain_text(text)[:1000] + "\n")
 
 
 def _refund(state_dir: Path, stamp: float) -> None:
@@ -1160,7 +1166,7 @@ def run(args: argparse.Namespace) -> int:
             if not results:
                 print("shoalscan scanjob: no enabled target has pull_requests = true; nothing was polled")
             for name, outcome in results.items():
-                print(f"shoalscan scanjob: {name}: {outcome}")
+                print(scanning.plain_text(f"shoalscan scanjob: {name}: {outcome}"))
             return 0 if all(poll_ok(o) for o in results.values()) else 1
         if not scanning.valid_name(args.target):
             raise SetupError("invalid target name")
