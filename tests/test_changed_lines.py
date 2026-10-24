@@ -7,11 +7,13 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import helpers  # noqa: F401 - puts src/ on the import path
 
 from shoalscan import gitref
 from shoalscan.cli import _new_suppressions
+from shoalscan.errors import SetupError
 from shoalscan.suppressions import find_trivy_suppressions
 
 # Spelled in pieces, like Shoalscan's own sources, so this file carries no marker.
@@ -111,6 +113,18 @@ class ChangedLinesTests(unittest.TestCase):
                 os.environ.pop("GIT_CONFIG_GLOBAL", None)
             else:
                 os.environ["GIT_CONFIG_GLOBAL"] = saved
+
+    def test_git_output_is_capped_while_it_is_read(self):
+        big = self.repo / "big.bin"
+        big.write_bytes(b"\x00" + b"x\n" * 300_000)  # about 600 KB of --text diff
+        git(self.repo, "add", "big.bin")
+        git(self.repo, "commit", "-q", "-m", "big")
+        with mock.patch.object(gitref, "MAX_GIT_OUTPUT", 100_000):
+            with self.assertRaisesRegex(SetupError, "larger than allowed"):
+                gitref.added_lines(self.repo, self.base, "big.bin")
+        with mock.patch.object(gitref, "GIT_TIMEOUT_SECONDS", 0.001):
+            with self.assertRaisesRegex(SetupError, "timed out"):
+                gitref.added_lines(self.repo, self.base, "big.bin")
 
     def test_file_names_are_never_pathspec_magic(self):
         names = [":(exclude)*.py", ":(glob)**", ":/x", ":start.py", ":(icase)A.PY"]

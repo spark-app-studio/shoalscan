@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import tarfile
+import threading
 from pathlib import Path, PurePosixPath
 
 from shoalscan.errors import SetupError
@@ -28,6 +29,54 @@ def validate_ref(ref: str) -> str:
     if not _REF_RE.match(ref) or ".." in ref:
         raise SetupError(f"invalid --policy-ref: {ref!r}")
     return ref
+
+
+def _run_bounded(cmd: list[str], env: dict, what: str) -> subprocess.CompletedProcess:
+    """Run git, reading its output as it is written: past MAX_GIT_OUTPUT bytes, or past GIT_TIMEOUT_SECONDS, git is
+    killed and the command fails, so a huge diff (`--text` of a large binary file, say) never fills memory first."""
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    except OSError as exc:
+        raise SetupError(f"git could not run: {exc}") from None
+    timed_out = threading.Event()
+
+    def stop() -> None:
+        timed_out.set()
+        proc.kill()
+
+    timer = threading.Timer(GIT_TIMEOUT_SECONDS, stop)
+    timer.daemon = True
+    timer.start()
+    err_tail = bytearray()
+
+    def drain_stderr() -> None:
+        # Read all of it (a full pipe would stall git), keep the last 64 KiB.
+        while chunk := proc.stderr.read(65536):
+            err_tail.extend(chunk)
+            del err_tail[:-65536]
+
+    reader = threading.Thread(target=drain_stderr, daemon=True)
+    reader.start()
+    out = bytearray()
+    too_large = False
+    try:
+        while chunk := proc.stdout.read(1024 * 1024):
+            out += chunk
+            if len(out) > MAX_GIT_OUTPUT:
+                too_large = True
+                proc.kill()
+                break
+    finally:
+        proc.stdout.close()
+        returncode = proc.wait()
+        timer.cancel()
+        reader.join(timeout=5)
+        proc.stderr.close()
+    if too_large:
+        raise SetupError("git output is larger than allowed")
+    if timed_out.is_set():
+        raise SetupError(f"git timed out: {what}")
+    return subprocess.CompletedProcess(cmd, returncode, bytes(out), bytes(err_tail))
 
 
 def _git(repo: Path, *args: str, check: bool = True, magic: bool = False) -> subprocess.CompletedProcess:
@@ -66,14 +115,7 @@ def _git(repo: Path, *args: str, check: bool = True, magic: bool = False) -> sub
     )
     env["GIT_LITERAL_PATHSPECS"] = "0" if magic else "1"
     env["GIT_NOGLOB_PATHSPECS"] = "1"
-    try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=GIT_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL, env=env)
-    except subprocess.TimeoutExpired:
-        raise SetupError(f"git timed out: {' '.join(args[:2])}") from None
-    except OSError as exc:
-        raise SetupError(f"git could not run: {exc}") from None
-    if len(proc.stdout) > MAX_GIT_OUTPUT:
-        raise SetupError("git output is larger than allowed")
+    proc = _run_bounded(cmd, env, " ".join(args[:2]))
     if check and proc.returncode != 0:
         detail = proc.stderr.decode("utf-8", errors="replace").strip()[-500:]
         raise SetupError(f"git {' '.join(args[:2])} failed: {detail}")
