@@ -18,6 +18,7 @@ timeout_minutes = 30         # a scan that runs longer is stopped and records no
 max_scans_per_hour = 6       # for all repositories together
 min_free_mb = 2048           # refuse to start a scan with less free disk space than this
 max_clone_mb = 2048          # a clone or fetch that grows past this is stopped and cleaned up
+max_pull_requests = 10       # pull requests scanned per `scanjob --pull-requests` poll, at most
 require_network_sandbox = true  # the default: a scan fails unless the scanners run without network access
 
 [[target]]
@@ -26,6 +27,7 @@ source = "https://github.com/owner/project.git"      # a public repository, clon
 branch = "main"
 enabled = true
 nightly = true
+pull_requests = true                                 # optional, by hand only: also scan its open pull requests
 
 [[target]]
 name = "owner/private"
@@ -108,5 +110,9 @@ Review a baseline change like any other change to your security policy.
 ## Nightly scans of registered repositories
 
 `shoalscan scanjob --nightly --state-dir <state dir>` scans every enabled repository with `nightly = true`. [Scheduled scans](scheduled-scans.md#one-nightly-job-for-every-registered-repository) describes it and its example units.
+
+## Pull requests of public repositories
+
+`shoalscan scanjob --pull-requests --state-dir <state dir>` lists the open pull requests of every enabled repository with `pull_requests = true`, anonymously with `git ls-remote`, and scans each new head as a pull-request run, with the repository's policy and baseline, never the pull request's. `pull_requests` can be set only by hand, only on a target with an https `source`, and the Configuration page keeps it when it saves the file (it refuses to change such a target's source to a mirror). [Scheduled scans](scheduled-scans.md#scanning-the-open-pull-requests-of-a-public-repository) describes how open pull requests are found, its limits and its example units.
 
 **See also:** [Security model](security-model.md).

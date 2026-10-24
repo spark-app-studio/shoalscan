@@ -46,6 +46,47 @@ class HistoryTestCase(unittest.TestCase):
         return self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
 
+class PullRequestRunTests(HistoryTestCase):
+    """Pull-request runs of refs/pull/N/head: the worker's dedupe query and the dashboard's per-pull-request list."""
+
+    def pr(self, ref: str, commit: str, at: str, kind: str = "pr", result: str = "pass") -> int:
+        return history.record_run(
+            self.conn,
+            history.RunInfo("acme/app", ref, commit, kind, at),
+            [],
+            {},
+            {"result": result, "findings": 0},
+        ).run_id
+
+    def test_the_latest_run_of_each_pull_request(self):
+        self.pr("refs/pull/7/head", "1" * 40, "2026-10-01T00:00:00Z")
+        latest7 = self.pr("refs/pull/7/head", "2" * 40, "2026-10-03T00:00:00Z", result="fail")
+        latest9 = self.pr("refs/pull/9/head", "3" * 40, "2026-10-02T00:00:00Z")
+        self.pr("refs/pull/4/merge", "4" * 40, "2026-10-04T00:00:00Z")  # recorded by a CI job: not listed
+        self.pr("main", "5" * 40, "2026-10-05T00:00:00Z", kind="scheduled")
+        self.assertEqual(
+            sorted(history.pull_request_runs(self.conn, "acme/app")),
+            [
+                ("refs/pull/4/merge", "4" * 40),
+                ("refs/pull/7/head", "1" * 40),
+                ("refs/pull/7/head", "2" * 40),
+                ("refs/pull/9/head", "3" * 40),
+            ],
+        )
+        self.assertEqual(history.pull_request_runs(self.conn, "acme/other"), [])
+        data = Data(history.open_read_only(self.db))
+        try:
+            pulls = data.pull_requests(data.repo_id("acme/app"))
+        finally:
+            data.conn.close()
+        self.assertEqual(pulls["total"], 2)
+        self.assertEqual(
+            [(p["number"], p["runs"], p["latest"]["id"], p["latest"]["commit"]) for p in pulls["items"]],
+            [(7, 2, latest7, "2" * 40), (9, 1, latest9, "3" * 40)],
+        )
+        self.assertEqual(pulls["items"][0]["latest"]["outcome"], "blocked")
+
+
 class RecordTests(HistoryTestCase):
     def test_new_database_is_private_versioned_and_in_wal_mode(self):
         self.assertEqual(stat.S_IMODE(os.stat(self.db).st_mode) & 0o077, 0)

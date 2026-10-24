@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from collections import Counter
 from datetime import date, datetime, timedelta
@@ -38,6 +39,9 @@ MAX_TREND_RUNS = 400
 # Heat score weights for the component heatmap.
 HEAT_WEIGHTS = {"ERROR": 10, "WARNING": 3, "INFO": 1}
 HEAT_LEVELS = 5
+# Pull requests listed on the Runs page, newest first; and the ref their runs carry.
+MAX_PULL_REQUESTS = 50
+_PULL_HEAD_REF = re.compile(r"refs/pull/([1-9][0-9]{0,9})/head")
 FILE_KINDS = ("skipped", "error", "changed_unscanned", "partial_warning", "partial_warn_only", "excluded_changed")
 
 _RUN_COLUMNS = (
@@ -1164,6 +1168,29 @@ class Data:
             (repo_id, limit, offset),
         ).fetchall()
         return {"total": total, "limit": limit, "offset": offset, "runs": [_run_dict(r) for r in rows]}
+
+    def pull_requests(self, repo_id: int, limit: int = MAX_PULL_REQUESTS) -> dict:
+        """Each pull request's latest run (pull-request runs of `refs/pull/N/head`, as `scanjob --pull-requests`
+        records them), newest first, with how many runs of it there are."""
+        total = self.conn.execute(
+            "SELECT COUNT(DISTINCT ref) FROM runs WHERE repo_id = ? AND kind = 'pr' AND ref GLOB 'refs/pull/*/head'",
+            (repo_id,),
+        ).fetchone()[0]
+        rows = self.conn.execute(
+            f"SELECT {_RUN_COLUMNS}, (SELECT COUNT(*) FROM runs r2 WHERE r2.repo_id = runs.repo_id AND r2.kind = 'pr' "
+            "AND r2.ref = runs.ref) AS ref_runs FROM runs WHERE repo_id = ? AND kind = 'pr' AND ref GLOB "
+            "'refs/pull/*/head' AND id = (SELECT r3.id FROM runs r3 WHERE r3.repo_id = runs.repo_id AND r3.kind = 'pr' "
+            "AND r3.ref = runs.ref ORDER BY r3.scanned_at DESC, r3.id DESC LIMIT 1) ORDER BY scanned_at DESC, id DESC "
+            "LIMIT ?",
+            (repo_id, max(1, min(limit, MAX_PAGE))),
+        ).fetchall()
+        items = []
+        for row in rows:
+            match = _PULL_HEAD_REF.fullmatch(row["ref"])
+            if match is None:
+                continue
+            items.append({"number": int(match.group(1)), "runs": row["ref_runs"], "latest": _run_dict(row)})
+        return {"total": total, "items": items}
 
     def deletions(self, repo_name: str, limit: int = 20) -> dict:
         """Runs of this repository deleted with `shoalscan history delete-run`, newest first."""

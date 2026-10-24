@@ -2,7 +2,10 @@
 
 The dashboard starts this as a separate, detached process to run one scan of
 a registered target; a nightly job starts it with `--nightly` to scan every
-enabled nightly target, one after another. Either way the worker:
+enabled nightly target, one after another; a frequent job starts it with
+`--pull-requests` to scan the new heads of the open pull requests of every
+enabled target with `pull_requests = true` (see `shoalscan.pullrequests`).
+Either way the worker:
 
 - reads `scan_targets.toml` itself and takes nothing from its caller but a
   target name, which must be registered;
@@ -11,8 +14,10 @@ enabled nightly target, one after another. Either way the worker:
   worktree, so the clone's own checkout is never touched;
 - always passes the policy explicitly: the managed policy when there is
   one, else the `.shoalscan.toml` at the head of the registered branch,
-  read from git, so the commit being scanned (an older one, on a rescan)
-  never chooses its own scanners;
+  read from git, so the commit being scanned (an older one, on a rescan, or
+  a pull request's head) never chooses its own scanners; a pull request's
+  repository rule dirs come from the head of the registered branch too, and
+  its changed files are listed against the merge base with that head;
 - runs `scan`, `check` and `record` as child processes with fixed argument
   lists, no shell, an allowlisted environment and a deadline; at the
   deadline the whole process group is killed and nothing is recorded;
@@ -28,13 +33,14 @@ import os
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-from shoalscan import history
+from shoalscan import history, pullrequests
 from shoalscan.config import CONFIG_NAME
 from shoalscan.dashboard import scanning
 from shoalscan.errors import SetupError, ShoalscanError
@@ -53,6 +59,9 @@ TRIGGER = {
     "cli": "command line",
     "nightly": "nightly",
 }
+# Scans of pull requests, by `scanjob --pull-requests`; not a --trigger a caller can choose.
+PR_WHO = "pull-request poll"
+PR_TRIGGER = "pull-request"
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 STEP_OUTPUT_LINES = 20
 ENV_ALLOW = (
@@ -150,8 +159,10 @@ class Job:
         who: str,
         log,
         pinned: tuple[str, str] | None = None,
+        pull: pullrequests.PullRequest | None = None,
     ):
         self.pinned = pinned  # (commit, ref) of a run to scan again, from the history database
+        self.pull = pull  # a pull request to scan, from the listing of the target's source
         self.state_dir = state_dir
         self.targets = targets
         self.target = target
@@ -345,6 +356,8 @@ class Job:
             ):
                 raise SetupError("git fetch failed")
         self.check_clone_size()
+        if self.pull is not None:
+            return self.fetch_pull()
         if self.pinned is not None:
             commit = self.pinned[0]
             missing = self.git("-C", str(self.clone), "cat-file", "-e", f"{commit}^{{commit}}") != 0
@@ -370,6 +383,37 @@ class Job:
                 )
             return commit
         return self.branch_head()
+
+    def fetch_pull(self) -> str:
+        """Fetch a pull request's head into a ref of Shoalscan's own (never a branch) and return its commit,
+        which must be the commit the listing showed. Only objects are fetched; nothing is checked out here."""
+        pull = self.pull
+        t = self.target
+        if t.kind == "mirror" or not self.git_out("remote", "get-url", "origin"):
+            raise SetupError("pull requests are fetched from the target's origin, and this target has none")
+        self.say(f"fetching pull request #{pull.number}")
+        if (
+            self.git(
+                "-C",
+                str(self.clone),
+                "fetch",
+                "--quiet",
+                "--no-tags",
+                "origin",
+                f"+{pull.ref}:{pull.fetch_ref}",
+                admin_fetch=t.kind == "clone",
+                watch=True,
+            )
+            != 0
+        ):
+            raise SetupError(f"git fetch of pull request #{pull.number} failed; nothing was scanned")
+        self.check_clone_size()
+        commit = self.git_out("rev-parse", "--verify", "--quiet", f"{pull.fetch_ref}^{{commit}}")
+        if commit != pull.head:
+            raise SetupError(
+                f"pull request #{pull.number} moved after it was listed; its new head is scanned on the next poll"
+            )
+        return commit
 
     def branch_head(self) -> str:
         """The commit at the head of the registered branch in the clone."""
@@ -445,7 +489,15 @@ class Job:
             raise SetupError(scanning.GIT_TOO_OLD)
         check_free_space(self.state_dir, self.targets)
         commit = self.prepare_clone()
-        self.say(f"scanning {t.name} {t.branch} at {commit[:12]}")
+        # For a pull request: the head of the registered branch, which gives the policy (unless one is
+        # registered), the repository rule dirs and the merge base the changed files are listed against.
+        base = self.branch_head() if self.pull is not None else None
+        if base is not None:
+            self.say(
+                f"scanning {t.name} pull request #{self.pull.number} at {commit[:12]}, base {t.branch} {base[:12]}"
+            )
+        else:
+            self.say(f"scanning {t.name} {t.branch} at {commit[:12]}")
         self.git("-C", str(self.clone), "worktree", "prune")
         src = self.work / "src"
         if self.git("-C", str(self.clone), "worktree", "add", "--quiet", "--detach", str(src), commit) != 0:
@@ -459,24 +511,31 @@ class Job:
         else:
             policy = self.branch_policy()
         config = ["--config", str(policy)]
-        baseline = ["--baseline", str(self.targets.baseline_path(t))] if t.baseline or t.kind != "clone" else []
+        # The baseline is always a file outside the clone for a pull request, never the one in the change.
+        explicit = t.baseline or t.kind != "clone" or self.pull is not None
+        baseline = ["--baseline", str(self.targets.baseline_path(t))] if explicit else []
         tools = ["--tools-dir", str(self.targets.tools_dir)] if self.targets.tools_dir else []
         # A rescan of an earlier commit keeps that run's time, so it replaces the run where it
         # was and never becomes the newest point of the trend.
         started = self.pinned[2] if self.pinned else history.parse_timestamp(None)
         sandbox = ["--require-network-sandbox"] if self.targets.require_network_sandbox else []
-        code = self.run(self.shoalscan("scan", "--repo", str(src), "--out", str(out), *tools, *config, *sandbox))
+        rules = ["--rules-commit", base] if base is not None else []
+        changed = ["--changed-since", base] if base is not None else []
+        code = self.run(
+            self.shoalscan("scan", "--repo", str(src), "--out", str(out), *tools, *config, *rules, *sandbox)
+        )
         check_txt = self.work / "check.txt"
         if code == 0:
             code = self.run(
-                self.shoalscan("check", "--repo", str(src), "--out", str(out), *config, *baseline), stdout_to=check_txt
+                self.shoalscan("check", "--repo", str(src), "--out", str(out), *config, *baseline, *changed),
+                stdout_to=check_txt,
             )
         else:
             self.say(f"the scan failed (exit {code})")
             code = 2
         if code not in (0, 1):
             code = 2
-        ref = self.pinned[1] if self.pinned else t.branch
+        ref = self.pull.ref if self.pull else self.pinned[1] if self.pinned else t.branch
         record = [
             "record",
             "--repo-name",
@@ -486,7 +545,7 @@ class Job:
             "--commit",
             commit,
             "--kind",
-            "scheduled",
+            "pr" if self.pull else "scheduled",
             "--scanned-at",
             started,
             "--check-exit",
@@ -512,6 +571,17 @@ class Job:
             pairs = self.git_pairs()
             subprocess.run(
                 ["git", *scanning.git_args(pairs), "-C", str(self.clone), "worktree", "remove", "--force", str(src)],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                env=scanning.git_env(base_env(), pairs),
+                timeout=60,
+                check=False,
+                start_new_session=True,
+            )
+        if self.pull is not None and ((self.clone / ".git").exists() or (self.clone / "HEAD").exists()):
+            pairs = self.git_pairs()
+            subprocess.run(
+                ["git", *scanning.git_args(pairs), "-C", str(self.clone), "update-ref", "-d", self.pull.fetch_ref],
                 capture_output=True,
                 stdin=subprocess.DEVNULL,
                 env=scanning.git_env(base_env(), pairs),
@@ -546,15 +616,19 @@ def run_one(
     log,
     trigger: str = "scan",
     run_id: int | None = None,
+    pull: pullrequests.PullRequest | None = None,
 ) -> str:
     """Scan one registered target under the lock. Returns the outcome.
 
     With `run_id`, scan again the exact commit that run of this repository
     scanned, looked up in the history database; the new record replaces it.
+    With `pull`, scan that pull request's head and record it as a pull-request run.
     """
     target = targets.targets.get(name)
     if target is None:
         raise SetupError(f"{name!r} is not a registered scan target")
+    if pull is not None and (run_id is not None or not target.pull_requests):
+        raise SetupError(f"{name} does not scan pull requests (pull_requests = true in {scanning.TARGETS_FILE})")
     pinned = None
     if run_id is not None:
         db = targets.history_db or history.default_db_path()
@@ -580,13 +654,13 @@ def run_one(
     started = history.parse_timestamp(None)
     try:
         sweep_stale_work(state_dir)
-        job = Job(state_dir, targets, target, who, log, pinned)
+        job = Job(state_dir, targets, target, who, log, pinned, pull)
         conn = history.open_for_write(job.db)
         trigger_id = history.start_trigger(conn, name, who, started, trigger)
         _write_status(
             state_dir, target=name, started=started, finished=None, outcome="running", run_id=None, pid=os.getpid()
         )
-        job.say(f"scan of {name} started by {who}")
+        job.say(f"scan of {name}" + (f" pull request #{pull.number}" if pull else "") + f" started by {who}")
         outcome, run_id = job.execute()
     except ScanTimeout:
         outcome, detail = "timeout", f"stopped after {targets.timeout_seconds // 60} minutes; nothing was recorded"
@@ -595,6 +669,9 @@ def run_one(
     except (ShoalscanError, OSError, subprocess.SubprocessError) as exc:
         outcome, detail = "failed", str(exc)[:300]
     finally:
+        if pull is not None:
+            # Which pull request, in the audit row too: scan_triggers has no ref of its own.
+            detail = f"pull request #{pull.number} at {pull.head[:12]}" + (f": {detail}" if detail else "")
         if job is not None:
             job.say(f"finished: {outcome}" + (f" ({detail})" if detail else "") + (f", run {run_id}" if run_id else ""))
             job.cleanup()
@@ -638,6 +715,125 @@ def run_nightly(state_dir: Path, targets: scanning.Targets, log, wait_seconds: i
     return results
 
 
+DISCOVERY_TIMEOUT_SECONDS = 300
+
+
+def discover_pull_requests(targets: scanning.Targets, target: scanning.Target) -> pullrequests.Listing:
+    """List the target's open pull requests with one anonymous `git ls-remote` of its https source."""
+    if target.kind != "url" or not target.source:
+        raise pullrequests.DiscoveryError("pull requests are listed only for an https source")
+    pairs = scanning.GIT_HARDENED + scanning.GIT_URL_ONLY
+    return pullrequests.discover(
+        ["git", *scanning.git_args(pairs)],
+        scanning.git_env(base_env(), pairs),
+        target.source,
+        target.branch,
+        min(DISCOVERY_TIMEOUT_SECONDS, targets.timeout_seconds),
+    )
+
+
+def _recorded_pull_runs(targets: scanning.Targets, name: str) -> list[tuple[str, str]]:
+    conn = history.open_for_write(targets.history_db or history.default_db_path())
+    try:
+        return history.pull_request_runs(conn, name)
+    finally:
+        conn.close()
+
+
+def _audit_discovery_failure(targets: scanning.Targets, name: str, detail: str) -> None:
+    """A failed listing is a scan error in the audit, never "nothing to scan"."""
+    conn = history.open_for_write(targets.history_db or history.default_db_path())
+    try:
+        now = history.parse_timestamp(None)
+        trigger_id = history.start_trigger(conn, name, PR_WHO, now, PR_TRIGGER)
+        history.finish_trigger(conn, trigger_id, "scan_error", None, scanning.sanitise_log([detail], None)[0], now)
+    finally:
+        conn.close()
+
+
+def run_pull_requests(
+    state_dir: Path, targets: scanning.Targets, log, wait_seconds: int | None = None, discover=None
+) -> dict[str, str]:
+    """Poll every enabled target with pull_requests = true, in file order: list its open pull requests and scan
+    each new head as a pull-request run, one after another (see `shoalscan.pullrequests`).
+
+    A target's poll waits out cooldown_minutes since its last poll; every scan counts against, and stops at,
+    max_scans_per_hour, like a scan started from the dashboard; one poll scans at most max_pull_requests.
+    Results are keyed by target name (the poll) and by `name#N` (one pull request).
+    """
+    discover = discover or discover_pull_requests
+    results: dict[str, str] = {}
+    wait = targets.timeout_seconds if wait_seconds is None else wait_seconds
+    for target in targets.targets.values():
+        if not target.pull_requests:
+            continue
+        name = target.name
+        if not target.enabled:
+            results[name] = "skipped: disabled"
+            log.write(f"pull requests: skipping {name} (disabled)\n")
+            continue
+        key = name + scanning.PULL_REQUESTS_KEY
+        requests = scanning.read_requests(state_dir)
+        cooldown = scanning.cooldown_wait(targets, key, requests)
+        if cooldown:
+            results[name] = f"skipped: cooldown, polled less than cooldown_minutes ago (next poll in {cooldown} s)"
+            log.write(f"pull requests: {name}: {results[name][9:]}\n")
+            continue
+        requests["targets"][key] = time.time()
+        scanning.write_requests(state_dir, requests)
+        try:
+            listing = discover(targets, target)
+            recorded = _recorded_pull_runs(targets, name)
+        except (ShoalscanError, OSError, sqlite3.Error) as exc:
+            detail = f"pull-request discovery failed: {str(exc)[:250]}"
+            results[name] = f"scan_error: {detail}"
+            log.write(f"pull requests: {name}: {detail}\n")
+            try:
+                _audit_discovery_failure(targets, name, detail)
+            except (ShoalscanError, OSError, sqlite3.Error) as audit_exc:
+                log.write(f"pull requests: {name}: the failure could not be audited either: {audit_exc}\n")
+            log.flush()
+            continue
+        chosen = pullrequests.select(listing, recorded, targets.max_pull_requests)
+        mergeable = sum(1 for p in listing.pulls.values() if p.has_merge_ref)
+        results[name] = (
+            f"listed: {len(chosen.to_scan)} to scan, {len(chosen.already_scanned)} already scanned, "
+            f"{len(chosen.deferred)} over max_pull_requests"
+        )
+        log.write(
+            f"pull requests: {name}: {len(listing.pulls)} pull request refs, {mergeable} with a merge ref; "
+            f"{results[name][8:]}, {chosen.not_open} closed or never scanned without a merge ref\n"
+        )
+        for pull in chosen.deferred:
+            results[f"{name}#{pull.number}"] = "deferred: over max_pull_requests, next poll"
+        for pull in chosen.to_scan:
+            label = f"{name}#{pull.number}"
+            if scanning.hourly_wait(targets, scanning.read_requests(state_dir)):
+                results[label] = "deferred: the hourly limit (max_scans_per_hour) is reached, next poll"
+                log.write(f"pull requests: {label}: {results[label][10:]}\n")
+                continue
+            deadline = time.monotonic() + wait
+            while scanning.lock_holder(state_dir) is not None and time.monotonic() < deadline:
+                time.sleep(2)
+            requests = scanning.read_requests(state_dir)
+            requests["recent"].append(time.time())
+            scanning.write_requests(state_dir, requests)
+            try:
+                results[label] = run_one(state_dir, targets, name, PR_WHO, log, PR_TRIGGER, pull=pull)
+            except SetupError as exc:
+                results[label] = f"skipped: {exc}"
+                log.write(f"pull requests: {label}: {exc}\n")
+            log.flush()
+    return results
+
+
+def poll_ok(outcome: str) -> bool:
+    """A poll result that is not a failure: a recorded pass or block, a listing, or a skip by design."""
+    return outcome in ("passed", "blocked") or outcome.startswith(
+        ("listed: ", "deferred: ", "skipped: disabled", "skipped: cooldown")
+    )
+
+
 def _on_signal(signum, frame):
     raise Stop()
 
@@ -655,6 +851,11 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     group.add_argument("--target", help="the registered target to scan, by name")
     group.add_argument(
         "--nightly", action="store_true", help="scan every enabled target with nightly = true, one after another"
+    )
+    group.add_argument(
+        "--pull-requests",
+        action="store_true",
+        help="scan the new heads of the open pull requests of every enabled target with pull_requests = true",
     )
     p.add_argument("--state-dir", required=True, help="the dashboard's state directory, which holds scan_targets.toml")
     p.add_argument("--trigger", choices=tuple(WHO), default="cli", help=argparse.SUPPRESS)
@@ -688,6 +889,13 @@ def run(args: argparse.Namespace) -> int:
                 )
                 else 1
             )
+        if args.pull_requests:
+            results = run_pull_requests(state_dir, targets, sys.stdout)
+            if not results:
+                print("shoalscan scanjob: no enabled target has pull_requests = true; nothing was polled")
+            for name, outcome in results.items():
+                print(f"shoalscan scanjob: {name}: {outcome}")
+            return 0 if all(poll_ok(o) for o in results.values()) else 1
         if not scanning.valid_name(args.target):
             raise SetupError("invalid target name")
         if args.run_id is not None and not 0 < args.run_id < 2**62:

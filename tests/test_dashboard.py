@@ -485,6 +485,7 @@ class DashboardServerTests(unittest.TestCase):
 
         runs = self.get_json("/api/runs?repo=acme/app&limit=2", cookie)
         self.assertEqual(runs["deletions"], {"count": 0, "items": []})
+        self.assertEqual(runs["pull_requests"], {"total": 0, "items": []})
         self.assertEqual((runs["total"], len(runs["runs"])), (5, 2))
         self.assertEqual(set(runs["runs"][0]), run_keys)
 

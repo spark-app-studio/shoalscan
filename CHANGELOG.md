@@ -2,6 +2,14 @@
 
 All notable changes to Shoalscan are recorded here.
 
+## Unreleased
+
+### Added
+
+- `shoalscan scanjob --pull-requests` scans the open pull requests of a public repository itself, with no credentials, so a public repository's pull requests never need to run on your own CI runners. Set `pull_requests = true` by hand on a target with an https `source` in `scan_targets.toml`. Each poll lists the pull requests with one anonymous, hardened `git ls-remote` (never the GitHub API), takes those with a `refs/pull/N/merge` ref (GitHub keeps one for open pull requests it can merge) or with an earlier run of their `refs/pull/N/head`, skips heads that already have a pull-request run, and scans the rest newest first, at most `max_pull_requests` per poll (default 10). Each head is fetched into a ref of Shoalscan's own, checked against the listing, scanned in a temporary worktree like a scheduled scan (same lock, deadline, free-space check, clone size limit, sandbox and git hardening) and recorded as a pull-request run of `refs/pull/N/head`. The policy and baseline are the target's, as for a scheduled scan (its files, or the `.shoalscan.toml` at the head of the registered branch), the repository rule directories come from the head of the registered branch, and changed files are listed against the merge base with it; nothing comes from the pull request, and nothing is posted to it. Polls respect `cooldown_minutes` and count against `max_scans_per_hour`. A listing that fails, times out, is malformed or does not show the registered branch is recorded as a scan error, never as nothing to scan. Example launchd and systemd units run it every 15 minutes. See [Scheduled scans](docs/scheduled-scans.md#scanning-the-open-pull-requests-of-a-public-repository), with the limits of finding open pull requests this way.
+- The Runs page shows a **Pull requests** table with each pull request's latest run: its number, head commit, status, new blocking and new findings, changed files that were not fully scanned, and its number of runs. `/api/runs` returns it as `pull_requests`.
+- `shoalscan scan --rules-commit <commit>` reads the repository rule directories from that commit instead of the scanned tree (with `--config`), and records it in `findings.json` under `policy.rules_commit`. `shoalscan check --changed-since <commit>` lists the changed files against the merge base with that commit, with an explicit configuration and baseline, so a changed file that was not fully scanned fails, as under `--policy-ref`.
+
 ## 0.3.1 (2026-10-17)
 
 ### Fixed

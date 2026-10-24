@@ -193,10 +193,15 @@ class ConfigEditor:
                     )
                 policy = scanning.validate_policy(scanning.compose_policy(body, scanners))
                 kept = (
-                    {k: getattr(current, k) for k in ("config", "baseline", "python", "max_clone_mb")}
+                    {k: getattr(current, k) for k in ("config", "baseline", "python", "max_clone_mb", "pull_requests")}
                     if current
                     else {}
                 )
+                if kept.get("pull_requests") and source["kind"] != "url":
+                    raise SetupError(
+                        "this target scans pull requests (pull_requests = true in scan_targets.toml), which needs an "
+                        "https source; remove that line there first"
+                    )
                 target = scanning.Target(
                     name=name,
                     branch=branch,
@@ -304,7 +309,8 @@ class ConfigEditor:
                     "policy_scanners": _policy_scanners(full),
                     "policy": body if t.config is None else None,
                     "policy_editable": t.config is None,
-                    "set_by_hand": [k for k in ("clone", "config", "baseline", "python") if getattr(t, k) is not None],
+                    "set_by_hand": [k for k in ("clone", "config", "baseline", "python") if getattr(t, k) is not None]
+                    + (["pull_requests"] if t.pull_requests else []),
                     "last_run": latest_run(t.name),
                     "baseline": {"size": baseline["size"], "found": baseline["found"]},
                 }

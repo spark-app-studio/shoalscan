@@ -173,6 +173,15 @@
       </details>
     </section>
     <section id="run-detail" class="run-detail" hidden aria-label="Run detail"></section>
+    <section id="runs-pulls" hidden aria-labelledby="runs-pulls-title">
+      <h2 id="runs-pulls-title">Pull requests</h2>
+      <p class="muted small">The latest run of each pull request's head, newest first, as <code>shoalscan scanjob --pull-requests</code> records them. The results stay on this dashboard; nothing is posted to the pull request.</p>
+      <div class="table-wrap"><table id="runs-pulls-table" class="data">
+        <thead><tr><th>Pull request</th><th>Head</th><th>Scanned</th><th>Status</th><th class="num">New blocking</th><th class="num">New</th><th class="num">Not fully scanned</th><th class="num">Runs</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <p id="runs-pulls-more" class="muted small"></p>
+    </section>
     <p id="runs-deleted" class="muted small"></p>
     <div class="table-wrap"><table id="runs-table" class="data">
       <thead><tr><th>Run</th><th>Scanned</th><th>Kind</th><th>Ref</th><th>Commit</th><th>Status</th><th class="num">ERROR</th><th class="num">WARNING</th><th class="num">INFO</th><th class="num">New</th><th class="num">New blocking</th><th class="num">Stale</th><th class="num">Baseline</th><th class="num">Suppressions</th><th class="num">Not fully scanned</th></tr></thead>
