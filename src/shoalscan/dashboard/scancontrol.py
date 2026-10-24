@@ -142,27 +142,27 @@ class ScanControl:
         with self._lock:
             if self.running():
                 return 409, {"error": "a scan is already running", "status": self.status(read_triggers)}
-            requests = self._requests()
-            wait = self.cooldown_remaining(targets, name, requests)
-            if wait:
-                return 429, {
-                    "error": f"this target was scanned recently; try again in {wait} seconds",
-                    "retry_after": wait,
-                }
-            wait = self.global_remaining(targets, requests)
-            if wait:
-                return 429, {
-                    "error": (
-                        f"the hourly limit of {targets.max_scans_per_hour} scans is reached; try again in {wait} "
-                        "seconds"
-                    ),
-                    "retry_after": wait,
-                }
-            self._spawn(target.name, trigger, run_id, who)
-            now = time.time()
-            requests["targets"][target.name] = now
-            requests["recent"].append(now)
-            scanning.write_requests(self.state_dir, requests)
+            # The worker's pull-request polls change the same file: both take its lock.
+            with scanning.locked_requests(self.state_dir) as requests:
+                wait = self.cooldown_remaining(targets, name, requests)
+                if wait:
+                    return 429, {
+                        "error": f"this target was scanned recently; try again in {wait} seconds",
+                        "retry_after": wait,
+                    }
+                wait = self.global_remaining(targets, requests)
+                if wait:
+                    return 429, {
+                        "error": (
+                            f"the hourly limit of {targets.max_scans_per_hour} scans is reached; try again in {wait} "
+                            "seconds"
+                        ),
+                        "retry_after": wait,
+                    }
+                self._spawn(target.name, trigger, run_id, who)
+                now = time.time()
+                requests["targets"][target.name] = now
+                requests["recent"].append(now)
         return 202, {"started": target.name, "status": self.status(read_triggers)}
 
     def _spawn(self, name: str, trigger: str = "dashboard", run_id: int | None = None, who: str | None = None) -> None:

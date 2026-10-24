@@ -1063,11 +1063,13 @@ class PullRequestTests(WorkerTestCase):
 
     def test_the_checkout_needs_room_for_the_gitleaks_copy(self):
         self.pull_request_with(8, {"zeros.bin": bytes(3 * 1024 * 1024)})
-        free = scanjob.shutil.disk_usage(self.base).free
-        # Enough for min_free_mb and one copy of the checkout, not two.
-        targets = replace(self.targets(), min_free_mb=(free - 4 * 1024 * 1024) // (1024 * 1024))
-        with mock.patch.object(scanjob, "check_free_space"):
-            results = self.poll(targets)
+        # Room for min_free_mb and one copy of the 3 MB checkout, not two.
+        usage = mock.Mock(free=(100 + 4) * 1024 * 1024)
+        with (
+            mock.patch.object(scanjob, "check_free_space"),
+            mock.patch.object(scanjob.shutil, "disk_usage", return_value=usage),
+        ):
+            results = self.poll(replace(self.targets(), min_free_mb=100))
         self.assertIn("twice (for the Gitleaks staging copy)", self.checkout_refusal(results, 8))
 
     def test_a_failed_or_timed_out_scan_is_recorded_as_a_scan_error_and_not_retried(self):
@@ -1144,6 +1146,34 @@ class PullRequestTests(WorkerTestCase):
         # Each scan replaced the run of the same head.
         self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(1,)])
         self.assertEqual(len([c for c in f.calls() if c[2] == "scan"]), 3)
+
+    def test_a_scan_that_never_started_gives_its_reservation_back(self):
+        f = self.f
+        self.assertTrue(scanning.acquire_lock(f.state, "acme/other"))
+        try:
+            results = self.poll()
+        finally:
+            scanning.release_lock(f.state)
+        self.assertEqual(results["acme/app#7"], "skipped: another scan is running")
+        self.assertEqual(scanning.read_requests(f.state)["pr_recent"], [])
+        self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(0,)])
+
+    def test_scan_requests_are_changed_under_a_lock_both_sides_take(self):
+        f = self.f
+        probe = (
+            "import fcntl, os, sys; fd = os.open(sys.argv[1], os.O_RDWR)\n"
+            "try:\n    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\nexcept BlockingIOError:\n    sys.exit(3)\n"
+        )
+        with scanning.locked_requests(f.state) as requests:
+            requests["pr_recent"].append(time.time())
+            busy = subprocess.run([sys.executable, "-c", probe, str(f.state / scanning.REQUESTS_LOCK)], timeout=30)
+        self.assertEqual(busy.returncode, 3)
+        self.assertEqual(len(scanning.read_requests(f.state)["pr_recent"]), 1)
+        # A body that fails writes nothing.
+        with self.assertRaises(RuntimeError), scanning.locked_requests(f.state) as requests:
+            requests["pr_recent"].clear()
+            raise RuntimeError("stop")
+        self.assertEqual(len(scanning.read_requests(f.state)["pr_recent"]), 1)
 
     def test_run_one_refuses_a_pull_request_for_a_target_that_does_not_scan_them(self):
         pull = pullrequests.PullRequest(7, self.pr7, True)

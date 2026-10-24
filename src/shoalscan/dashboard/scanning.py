@@ -27,6 +27,7 @@ import stat
 import subprocess
 import time
 import tomllib
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -746,6 +747,24 @@ def read_requests(state_dir: Path) -> dict:
 
 def write_requests(state_dir: Path, requests: dict) -> None:
     write_private(state_dir / REQUESTS_FILE, json.dumps(requests))
+
+
+REQUESTS_LOCK = "scan_requests.lock"
+
+
+@contextmanager
+def locked_requests(state_dir: Path):
+    """Read, change and write scan_requests.json under an exclusive flock that the dashboard and the worker
+    both take, so neither loses the other's update. Nothing is written when the body raises."""
+    fd = os.open(state_dir / REQUESTS_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        requests = read_requests(state_dir)
+        yield requests
+        write_requests(state_dir, requests)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def cooldown_wait(targets: Targets, key: str, requests: dict) -> int:

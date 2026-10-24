@@ -952,14 +952,14 @@ def run_pull_requests(
             log.write(f"pull requests: skipping {name} (disabled)\n")
             continue
         key = name + scanning.PULL_REQUESTS_KEY
-        requests = scanning.read_requests(state_dir)
-        cooldown = scanning.cooldown_wait(targets, key, requests)
+        with scanning.locked_requests(state_dir) as requests:
+            cooldown = scanning.cooldown_wait(targets, key, requests)
+            if not cooldown:
+                requests["targets"][key] = time.time()
         if cooldown:
             results[name] = f"skipped: cooldown, polled less than cooldown_minutes ago (next poll in {cooldown} s)"
             log.write(f"pull requests: {name}: {results[name][9:]}\n")
             continue
-        requests["targets"][key] = time.time()
-        scanning.write_requests(state_dir, requests)
         try:
             listing = discover(targets, target)
             recorded = _recorded_pull_runs(targets, name)
@@ -1017,22 +1017,29 @@ def run_pull_requests(
             results[f"{name}#{pull.number}"] = "deferred: its last scan was a scan error, tried again after a day"
         for pull in chosen.to_scan:
             label = f"{name}#{pull.number}"
-            if scanning.hourly_wait(targets, scanning.read_requests(state_dir), pull_requests=True):
-                results[label] = "deferred: the hourly limit (max_pr_scans_per_hour) is reached, next poll"
-                log.write(f"pull requests: {label}: {results[label][10:]}\n")
-                continue
             deadline = time.monotonic() + wait
             while scanning.lock_holder(state_dir) is not None and time.monotonic() < deadline:
                 time.sleep(2)
-            requests = scanning.read_requests(state_dir)
-            requests["pr_recent"].append(time.time())
-            scanning.write_requests(state_dir, requests)
+            # Checked and reserved together, under the lock the dashboard takes too, just before the scan.
+            stamp = time.time()
+            with scanning.locked_requests(state_dir) as requests:
+                over = scanning.hourly_wait(targets, requests, pull_requests=True)
+                if not over:
+                    requests["pr_recent"].append(stamp)
+            if over:
+                results[label] = "deferred: the hourly limit (max_pr_scans_per_hour) is reached, next poll"
+                log.write(f"pull requests: {label}: {results[label][10:]}\n")
+                continue
             try:
                 results[label] = run_one(state_dir, targets, name, PR_WHO, log, PR_TRIGGER, pull=pull)
                 if results[label] in ("passed", "blocked"):
                     new_state.scanned[pull.head] = key
                     scanning.write_private(state_path, pullrequests.state_json(new_state))
             except SetupError as exc:
+                # The scan never started (another scan holds the lock, say): its reservation goes back.
+                with scanning.locked_requests(state_dir) as requests:
+                    if stamp in requests["pr_recent"]:
+                        requests["pr_recent"].remove(stamp)
                 results[label] = f"skipped: {exc}"
                 log.write(f"pull requests: {label}: {exc}\n")
             log.flush()
