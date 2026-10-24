@@ -83,6 +83,7 @@ Limits, as GitHub behaves today:
 - Some closed pull requests, and pull requests GitHub has deleted, keep their merge refs. Each one is scanned at most once, because its head never changes again.
 - A pull request is checked against the target's registered branch, whatever branch it targets.
 - Inline markers of other scanners (Trivy's) on changed lines are not counted as new suppressions.
+- A repository with more than 10,000 inline suppressions or more than 10,000 silenced findings cannot have its pull requests checked: `check --changed-since` stops (a scan error) rather than guess which ones a pull request added.
 - Forges other than GitHub name their pull request refs differently (GitLab uses `refs/merge-requests/N/head`); only GitHub's `refs/pull/` refs are listed.
 
 ### Running the poll regularly
