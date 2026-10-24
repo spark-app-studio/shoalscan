@@ -1,5 +1,6 @@
 """Which lines a change added, and which inline suppressions it added, when the file is not plain text."""
 
+import contextlib
 import io
 import os
 import subprocess
@@ -12,7 +13,7 @@ from unittest import mock
 import helpers  # noqa: F401 - puts src/ on the import path
 
 from shoalscan import gitref
-from shoalscan.cli import _new_suppressions
+from shoalscan.cli import _new_suppressions, main
 from shoalscan.errors import SetupError
 from shoalscan.suppressions import find_trivy_suppressions
 
@@ -125,6 +126,27 @@ class ChangedLinesTests(unittest.TestCase):
         with mock.patch.object(gitref, "GIT_TIMEOUT_SECONDS", 0.001):
             with self.assertRaisesRegex(SetupError, "timed out"):
                 gitref.added_lines(self.repo, self.base, "big.bin")
+
+    def test_a_path_the_scanners_cannot_report_faithfully_is_refused(self):
+        self.assertEqual(gitref.path_name(b"src/ok.py"), "src/ok.py")
+        self.assertEqual(gitref.path_names(b"a.py\0caf\xc3\xa9.py\0"), ["a.py", "caf\u00e9.py"])
+        for raw in (b"bad\xff.py", b"bad\x01.py", b"bad\x1b[2J.py", b"bad\xc2\x9b.py", b"bad\x7f.py"):
+            with self.subTest(raw=raw), self.assertRaisesRegex(SetupError, "not valid UTF-8 or holds a control"):
+                gitref.path_names(b"ok.py\0" + raw + b"\0")
+
+    def test_check_refuses_a_work_tree_with_such_a_path(self):
+        # macOS refuses names that are not UTF-8, so the work tree here has a control character instead; the
+        # check refuses both the same way (see the unit test above and the worker's test).
+        (self.repo / "bad\x01.py").write_text("eval(x)\n")
+        git(self.repo, "add", "-A")
+        self.commit()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            code = main(["check", "--repo", str(self.repo), "--out", str(self.repo.parent / "out")])
+        self.assertEqual(code, 2)
+        self.assertIn("not valid UTF-8 or holds a control character", err.getvalue())
+        with self.assertRaises(SetupError):
+            gitref.changed_files(self.repo, self.base)
 
     def test_file_names_are_never_pathspec_magic(self):
         names = [":(exclude)*.py", ":(glob)**", ":/x", ":start.py", ":(icase)A.PY"]

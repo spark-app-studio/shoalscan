@@ -44,7 +44,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from shoalscan import history, pullrequests
+from shoalscan import gitref, history, pullrequests
 from shoalscan.config import CONFIG_NAME
 from shoalscan.dashboard import scanning
 from shoalscan.errors import SetupError, ShoalscanError
@@ -177,6 +177,15 @@ def base_env() -> dict:
 # The home directory of every hardened git command that may reach the network: git reads no global
 # configuration under it (GIT_CONFIG_GLOBAL is /dev/null), and curl must not find a ~/.netrc there either.
 NO_HOME = "/nonexistent"
+
+
+def _plain_path(raw: bytes) -> bool:
+    """A path the scanners report as it is: valid UTF-8 with no control character (see gitref.path_name)."""
+    try:
+        gitref.path_name(raw)
+    except SetupError:
+        return False
+    return True
 
 
 def network_git_env(pairs) -> dict:
@@ -549,6 +558,11 @@ class Job:
                         )
                     elif total > limit:
                         problem = TooLargeError(self.checkout_message(total))
+                    elif not _plain_path(path):
+                        problem = PullError(
+                            "the commit has a path that is not valid UTF-8 or holds a control character; the "
+                            "scanners cannot report such a file faithfully, so nothing was scanned"
+                        )
                     elif path.count(b"/") >= MAX_PATH_DEPTH or len(path) > 4096:
                         problem = TooLargeError(
                             f"the commit has a path deeper than {MAX_PATH_DEPTH} directories or longer than 4096 "

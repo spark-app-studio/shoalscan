@@ -192,6 +192,33 @@ def merge_base(repo: Path, commit: str) -> str:
     return out
 
 
+def path_name(raw: bytes) -> str:
+    """A path as git printed it (with -z), decoded strictly. A name that is not valid UTF-8, or that holds a control
+    character, is refused: the scanners report such a name differently (Opengrep with U+FFFD) or not at all, so it
+    could never be matched with their results, and its code would pass unscanned."""
+    try:
+        name = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        name = None
+    if name is None or any(c < " " or "\x7f" <= c <= "\x9f" for c in name):
+        shown = raw.decode("utf-8", errors="backslashreplace")[:200].encode("unicode_escape").decode("ascii")
+        raise SetupError(
+            f"the repository has a path that is not valid UTF-8 or holds a control character ({shown}); such a file "
+            "cannot be matched with what the scanners report, so nothing is checked. Rename it."
+        )
+    return name
+
+
+def path_names(raw: bytes) -> list[str]:
+    """NUL-separated paths from git, each checked with `path_name`."""
+    return [path_name(p) for p in raw.split(b"\0") if p]
+
+
+def check_path_names(repo: Path) -> None:
+    """Refuse a work tree with a tracked or untracked (not ignored) path that `path_name` refuses."""
+    path_names(_git(repo, "ls-files", "--cached", "--others", "--exclude-standard", "-z").stdout)
+
+
 def changed_files(repo: Path, commit: str) -> list[str]:
     """Files the change adds, copies, modifies, renames or retypes, compared
     with the merge base of `commit` and HEAD. The working tree counts,
@@ -201,9 +228,7 @@ def changed_files(repo: Path, commit: str) -> list[str]:
         repo, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", "--no-renames", "--diff-filter=ACMRT", base
     ).stdout
     untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").stdout
-    # surrogateescape: a name that is not UTF-8 comes back to git byte for byte, never as a different name.
-    names = (out + b"\0" + untracked).decode("utf-8", errors="surrogateescape").split("\0")
-    return sorted({p for p in names if p})
+    return sorted(set(path_names(out + b"\0" + untracked)))
 
 
 def diff_against(repo: Path, commit: str, paths: list[str], max_lines: int = 400) -> str:
@@ -354,8 +379,9 @@ def renames(repo: Path, commit: str) -> list[tuple[str, str]]:
     """(old, new) pairs that git reports as renames with at least 90% similarity."""
     out = _git(
         repo, "diff", "--no-ext-diff", "--no-textconv", "-M90%", "--name-status", "-z", merge_base(repo, commit)
-    ).stdout.decode("utf-8", errors="replace")
-    parts = out.split("\0")
+    ).stdout
+    # Decoded as strictly as changed_files: a status letter passes, a bad name is refused.
+    parts = [path_name(p) if p else "" for p in out.split(b"\0")]
     pairs = []
     i = 0
     while i < len(parts) and parts[i]:

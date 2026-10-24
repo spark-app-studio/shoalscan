@@ -419,6 +419,9 @@ def cmd_check(args: argparse.Namespace) -> int:
     repo = Path(args.repo)
     # A check that stops early must not leave an older details file behind.
     (out / CHECK_JSON).unlink(missing_ok=True)
+    if gitref.worktree_state(repo.resolve()) is not None:
+        # A path the scanners cannot report faithfully (not UTF-8, a control character) would pass unscanned.
+        gitref.check_path_names(repo)
     findings_sha256 = (
         hashlib.sha256((out / FINDINGS_JSON).read_bytes()).hexdigest() if (out / FINDINGS_JSON).is_file() else ""
     )

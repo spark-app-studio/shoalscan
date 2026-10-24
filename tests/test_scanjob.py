@@ -1238,6 +1238,50 @@ class PullRequestTests(WorkerTestCase):
         with mock.patch.object(pullrequests, "PER_PULL_INTERVAL", timedelta(0)):
             self.assertEqual(self.poll(targets)["acme/app#7"], "passed")
 
+    def test_a_path_that_is_not_utf8_refuses_the_pull_request(self):
+        # Built with git plumbing: macOS cannot hold such a name in a work tree, Linux can. Opengrep would list it
+        # as U+FFFD and never match it, so its code would pass unscanned.
+        f = self.f
+        blob = subprocess.run(
+            ["git", "-C", str(f.origin), "hash-object", "-w", "--stdin"], input=b"eval(x)\n", capture_output=True
+        ).stdout.strip()
+        tree = subprocess.run(
+            ["git", "-C", str(f.origin), "ls-tree", "-z", "main"], capture_output=True, check=True
+        ).stdout
+        tree += b"100644 blob " + blob + b"\tbad\xff.py\0"
+        tree_sha = (
+            subprocess.run(["git", "-C", str(f.origin), "mktree", "-z"], input=tree, capture_output=True, check=True)
+            .stdout.decode()
+            .strip()
+        )
+        commit = subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "-C",
+                str(f.origin),
+                "commit-tree",
+                tree_sha,
+                "-p",
+                "main",
+                "-m",
+                "bad name",
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
+        git("update-ref", "refs/pull/8/head", commit, cwd=f.origin)
+        git("update-ref", "refs/pull/8/merge", commit, cwd=f.origin)
+        results = self.poll()
+        self.assertEqual(results["acme/app#7"], "passed")
+        self.assertEqual(results["acme/app#8"], "failed")
+        self.assertIn("not valid UTF-8 or holds a control character", self.checkout_refusal(results, 8))
+        self.assertEqual(f.rows("SELECT outcome FROM runs WHERE ref = 'refs/pull/8/head'"), [("scan_error",)])
+
     def test_run_one_refuses_a_pull_request_for_a_target_that_does_not_scan_them(self):
         pull = pullrequests.PullRequest(7, self.pr7, True)
         with self.assertRaisesRegex(SetupError, "does not scan pull requests"):
