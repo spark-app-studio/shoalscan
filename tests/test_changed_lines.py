@@ -148,6 +148,23 @@ class ChangedLinesTests(unittest.TestCase):
         with self.assertRaises(SetupError):
             gitref.changed_files(self.repo, self.base)
 
+    def test_inherited_git_variables_cannot_steer_the_diffs(self):
+        (self.repo / "Dockerfile").write_bytes(b"FROM alpine\nRUN true\nUSER root\n")
+        self.commit()
+        other = self.repo.parent / "other"
+        git(self.repo.parent, "init", "-q", str(other))
+        hostile = {
+            "GIT_DIR": str(other / ".git"),
+            "GIT_WORK_TREE": str(other),
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "diff.context",
+            "GIT_CONFIG_VALUE_0": "50",
+            "GIT_ICASE_PATHSPECS": "1",
+        }
+        with mock.patch.dict(os.environ, hostile):
+            self.assertEqual(gitref.added_lines(self.repo, self.base, "Dockerfile"), {3})
+            self.assertIn("Dockerfile", gitref.changed_files(self.repo, self.base))
+
     def test_file_names_are_never_pathspec_magic(self):
         names = [":(exclude)*.py", ":(glob)**", ":/x", ":start.py", ":(icase)A.PY"]
         for name in names:

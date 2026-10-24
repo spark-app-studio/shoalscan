@@ -103,7 +103,9 @@ def _git(repo: Path, *args: str, check: bool = True, magic: bool = False) -> sub
         str(repo),
         *args,
     ]
-    env = {k: v for k, v in os.environ.items() if k not in ("GIT_GLOB_PATHSPECS", "GIT_ICASE_PATHSPECS")}
+    # No inherited GIT_* variable (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_CONFIG_COUNT and the like) may steer
+    # these commands: only the ones set here, as the scan worker's git_env does.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.update(
         {
             "GIT_ATTR_SOURCE": EMPTY_TREE,
