@@ -181,6 +181,7 @@ def select(
     without_merge_ref: set[int] | frozenset[int] = frozenset(),
     key: str | None = None,
     scanned: dict[str, str] | None = None,
+    attempts: dict[int, str] | None = None,
 ) -> Selection:
     """What one poll scans, given every recorded pull-request run of this repository (see the module's notes).
 
@@ -201,6 +202,10 @@ def select(
         if number is not None:
             when = _time(run.scanned_at)
             last_scan[number] = max(when, last_scan.get(number, when))
+    # An attempt that recorded nothing (the head moved, say) still counts: PER_PULL_INTERVAL is per attempt.
+    for number, stamp in (attempts or {}).items():
+        when = _time(stamp)
+        last_scan[number] = max(when, last_scan.get(number, when))
     never = datetime.min.replace(tzinfo=timezone.utc)
     out = Selection()
     candidates = []
@@ -241,6 +246,8 @@ class PollState:
     tracked: set[int]  # numbers that became eligible without a merge ref
     # The scan key each head's latest results were recorded under (see `select`), for heads still listed.
     scanned: dict[str, str] = field(default_factory=dict)
+    # When each listed pull request was last attempted (scanned or not), so PER_PULL_INTERVAL counts attempts.
+    attempts: dict[int, str] = field(default_factory=dict)
 
 
 def load_state(path: Path) -> PollState | None:
@@ -257,6 +264,9 @@ def load_state(path: Path) -> PollState | None:
         mark = data["mark"]
         heads = {int(n): sha for n, sha in data["heads"].items()}
         tracked = {int(n) for n in data["tracked"]}
+        attempts = {int(n): when for n, when in data.get("attempts", {}).items()}
+        for when in attempts.values():
+            _time(when)
         scanned = data.get("scanned", {})
         if not isinstance(scanned, dict) or not all(
             isinstance(k, str) and _SHA.fullmatch(k) and isinstance(v, str) and len(v) <= 128
@@ -272,7 +282,7 @@ def load_state(path: Path) -> PollState | None:
             raise ValueError
     except (KeyError, TypeError, ValueError, AttributeError):
         raise DiscoveryError(f"the poll state {path.name} is malformed; remove it to start again") from None
-    return PollState(mark, heads, tracked, scanned)
+    return PollState(mark, heads, tracked, scanned, attempts)
 
 
 def eligible(listing: Listing, state: PollState | None) -> set[int]:
@@ -291,13 +301,15 @@ def next_state(listing: Listing, state: PollState | None, tracked: set[int]) -> 
     mark = state.mark if state is not None else max(listing.pulls, default=0)
     heads = {p.head for p in listing.pulls.values()}
     scanned = {h: k for h, k in (state.scanned if state is not None else {}).items() if h in heads}
-    return PollState(mark, {n: p.head for n, p in listing.pulls.items()}, set(tracked), scanned)
+    attempts = {n: w for n, w in (state.attempts if state is not None else {}).items() if n in listing.pulls}
+    return PollState(mark, {n: p.head for n, p in listing.pulls.items()}, set(tracked), scanned, attempts)
 
 
 def state_json(state: PollState) -> str:
     return json.dumps(
         {
             "scanned": dict(sorted(state.scanned.items())),
+            "attempts": {str(n): when for n, when in sorted(state.attempts.items())},
             "mark": state.mark,
             "heads": {str(n): sha for n, sha in sorted(state.heads.items())},
             "tracked": sorted(state.tracked),

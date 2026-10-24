@@ -947,14 +947,21 @@ class PullRequestTests(WorkerTestCase):
         self.assertEqual(f.rows("SELECT target, outcome FROM scan_triggers"), [("acme/web", "scan_error")])
         self.assertFalse((f.state / "clones").exists())
 
-    def test_a_pull_request_that_moved_after_the_listing_records_nothing(self):
+    def test_a_pull_request_that_moved_after_the_listing_is_scanned_at_its_fetched_head(self):
         f = self.f
+        # The listing shows an older head; by the fetch the pull request has moved to pr7.
         stale = pullrequests.Listing(self.base_head, {7: pullrequests.PullRequest(7, self.base_head, True)})
-        results = self.poll(discover=lambda targets, target: stale)
-        self.assertEqual(results["acme/app#7"], "failed")
-        self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(0,)])
+        targets = self.targets(cooldown_seconds=0)
+        results = self.poll(targets, discover=lambda targets, target: stale)
+        self.assertEqual(results["acme/app#7"], "passed")
+        self.assertEqual(f.rows("SELECT ref, commit_sha FROM runs"), [("refs/pull/7/head", self.pr7)])
         (detail,) = f.rows("SELECT detail FROM scan_triggers")[0]
-        self.assertIn("moved after it was listed", detail)
+        self.assertEqual(detail, f"pull request #7 at {self.pr7[:12]}")
+        # The attempt counts against the pull request's hourly limit, whatever the listing says next.
+        state = json.loads((f.state / "pull_requests" / f"{scanning.slug('acme/app')}.json").read_text())
+        self.assertIn("7", state["attempts"])
+        again = self.poll(targets, discover=lambda targets, target: stale)
+        self.assertTrue(again["acme/app#7"].startswith("deferred: this pull request was scanned"), again)
 
     def test_the_hourly_limit_and_the_per_poll_cap(self):
         f = self.f
@@ -1066,6 +1073,8 @@ class PullRequestTests(WorkerTestCase):
         # #8 was never checked out; #7 (small) was.
         self.assertEqual(len(started), 1)
         self.assertEqual(results["acme/app#7"], "passed")
+        # The refused attempt ran no scan, so it gave its place in max_pr_scans_per_hour back.
+        self.assertEqual(len(scanning.read_requests(self.f.state)["pr_recent"]), 1)
 
     def test_too_many_files_or_too_deep_a_path_is_refused(self):
         self.pull_request_with(8, {f"many/{n}.txt": b"x" for n in range(5)})

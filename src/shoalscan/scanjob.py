@@ -28,6 +28,7 @@ Either way the worker:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -115,10 +116,6 @@ class ScanTimeout(Exception):  # noqa: N818 - a signal to stop the scan, not an 
     pass
 
 
-class PullMovedError(SetupError):
-    """The pull request's head changed after it was listed: nothing to record, the new head comes next poll."""
-
-
 class TooLargeError(SetupError):
     """A directory a git command writes grew past its limit; the command was stopped."""
 
@@ -200,6 +197,7 @@ class Job:
     ):
         self.pinned = pinned  # (commit, ref) of a run to scan again, from the history database
         self.pull = pull  # a pull request to scan, from the listing of the target's source
+        self.scan_started = False  # whether `shoalscan scan` was started: the attempt used a scan
         self.state_dir = state_dir
         self.targets = targets
         self.target = target
@@ -479,10 +477,13 @@ class Job:
         if tree_size(repo, limit) > limit:
             raise TooLargeError(watch.message)
         commit = self.git_out("rev-parse", "--verify", "--quiet", f"{pull.fetch_ref}^{{commit}}", repo=repo)
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
+            raise SetupError(f"the fetched head of pull request #{pull.number} is not a commit")
         if commit != pull.head:
-            raise PullMovedError(
-                f"pull request #{pull.number} moved after it was listed; its new head is scanned on the next poll"
-            )
+            # Pushed to after the listing: what was fetched is its real head now, so that is what is scanned and
+            # recorded, rather than a stale head nobody can fetch.
+            self.say(f"pull request #{pull.number} moved after it was listed; scanning its head {commit[:12]}")
+            self.pull = dataclasses.replace(pull, head=commit)
         return commit
 
     def checkout_message(self, size: int | None) -> str:
@@ -678,6 +679,7 @@ class Job:
         sandbox = ["--require-network-sandbox"] if self.targets.require_network_sandbox else []
         rules = ["--rules-commit", base] if base is not None else []
         changed = ["--changed-since", base] if base is not None else []
+        self.scan_started = True
         code = self.run(
             self.shoalscan("scan", "--repo", str(src), "--out", str(out), *tools, *config, *rules, *sandbox)
         )
@@ -764,12 +766,15 @@ def run_one(
     trigger: str = "scan",
     run_id: int | None = None,
     pull: pullrequests.PullRequest | None = None,
+    report: dict | None = None,
 ) -> str:
     """Scan one registered target under the lock. Returns the outcome.
 
     With `run_id`, scan again the exact commit that run of this repository
     scanned, looked up in the history database; the new record replaces it.
-    With `pull`, scan that pull request's head and record it as a pull-request run.
+    With `pull`, scan that pull request's head and record it as a pull-request run. `report`, when given, is
+    filled with whether a scan was started ("scanned") and, for a pull request, the head scanned ("head"),
+    which is the head fetched when the pull request moved after it was listed.
     """
     target = targets.targets.get(name)
     if target is None:
@@ -824,8 +829,13 @@ def run_one(
         outcome, detail = "failed", "stopped by a signal; nothing was recorded"
     except (ShoalscanError, OSError, subprocess.SubprocessError) as exc:
         outcome, detail = "failed", str(exc)[:300]
-        record_failure = job is not None and not isinstance(exc, PullMovedError)
+        record_failure = job is not None
     finally:
+        if job is not None and job.pull is not None:
+            pull = job.pull  # the head fetched, if it moved after the listing
+        if report is not None:
+            report["scanned"] = bool(job is not None and job.scan_started)
+            report["head"] = pull.head if pull is not None else None
         if pull is not None and record_failure and conn is not None:
             # Visible on the dashboard, and not tried again until the head changes (or RETRY_AFTER).
             run_id = _record_pull_failure(conn, name, pull, started, job)
@@ -1004,6 +1014,7 @@ def run_pull_requests(
             without_merge_ref=extra,
             key=key,
             scanned=new_state.scanned,
+            attempts=new_state.attempts,
         )
         mergeable = sum(1 for p in listing.pulls.values() if p.has_merge_ref)
         results[name] = (
@@ -1037,19 +1048,29 @@ def run_pull_requests(
                 log.write(f"pull requests: {label}: {results[label][10:]}\n")
                 continue
             try:
-                results[label] = run_one(state_dir, targets, name, PR_WHO, log, PR_TRIGGER, pull=pull)
-                if results[label] in ("passed", "blocked"):
-                    new_state.scanned[pull.head] = key
-                    scanning.write_private(state_path, pullrequests.state_json(new_state))
+                report: dict = {}
+                results[label] = run_one(state_dir, targets, name, PR_WHO, log, PR_TRIGGER, pull=pull, report=report)
+                # Every attempt counts against PER_PULL_INTERVAL, whether or not it recorded anything.
+                new_state.attempts[pull.number] = history.parse_timestamp(None)
+                if results[label] in ("passed", "blocked") and report.get("head"):
+                    new_state.scanned[report["head"]] = key
+                scanning.write_private(state_path, pullrequests.state_json(new_state))
+                if not report.get("scanned"):
+                    _refund(state_dir, stamp)
             except SetupError as exc:
                 # The scan never started (another scan holds the lock, say): its reservation goes back.
-                with scanning.locked_requests(state_dir) as requests:
-                    if stamp in requests["pr_recent"]:
-                        requests["pr_recent"].remove(stamp)
+                _refund(state_dir, stamp)
                 results[label] = f"skipped: {exc}"
                 log.write(f"pull requests: {label}: {exc}\n")
             log.flush()
     return results
+
+
+def _refund(state_dir: Path, stamp: float) -> None:
+    """Give back a reservation in max_pr_scans_per_hour whose attempt ran no scan."""
+    with scanning.locked_requests(state_dir) as requests:
+        if stamp in requests["pr_recent"]:
+            requests["pr_recent"].remove(stamp)
 
 
 def poll_ok(outcome: str) -> bool:

@@ -160,6 +160,13 @@ class SelectTests(unittest.TestCase):
         chosen = pullrequests.select(self.listing(*pulls[:1]), recorded, 10, NOW, key="k2", scanned={})
         self.assertEqual([p.number for p in chosen.to_scan], [3])
 
+    def test_an_attempt_that_recorded_nothing_still_counts_against_the_hourly_limit(self):
+        pulls = [PullRequest(5, B, True), PullRequest(6, C, True)]
+        attempts = {5: (NOW - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        chosen = pullrequests.select(self.listing(*pulls), [], 10, NOW, attempts=attempts)
+        self.assertEqual([p.number for p in chosen.throttled], [5])
+        self.assertEqual([p.number for p in chosen.to_scan], [6])
+
     def test_capped_in_order(self):
         pulls = [PullRequest(n, f"{n:040x}", True) for n in (3, 11, 7, 20)]
         chosen = self.select(pulls, [], 2)
