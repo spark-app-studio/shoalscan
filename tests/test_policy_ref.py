@@ -177,6 +177,61 @@ class PolicyRefTests(unittest.TestCase):
         self.assertIn("  generated/huge.py", out)
         self.assertEqual(summary["unscanned"]["changed_but_excluded"], 1)
 
+    def explicit_policy(self) -> tuple[list[str], list[str]]:
+        """The base branch's configuration and baseline as files outside the repository, as the scan worker passes
+        them for a pull request."""
+        outside = Path(self.tmp.name) / "registered"
+        outside.mkdir(exist_ok=True)
+        (outside / "policy.toml").write_text(git(self.repo, "show", "main:.shoalscan.toml"), encoding="utf-8")
+        (outside / "baseline.toml").write_text(git(self.repo, "show", "main:baseline.toml"), encoding="utf-8")
+        return ["--config", str(outside / "policy.toml")], ["--baseline", str(outside / "baseline.toml")]
+
+    def run_explicit(self):
+        config, baseline = self.explicit_policy()
+        code, _, err = self.cli("scan", *config, "--rules-commit", "refs/heads/main")
+        self.assertEqual(code, 0, err)
+        code, out, err = self.cli("check", *config, *baseline, "--changed-since", "refs/heads/main")
+        line = [x for x in out.splitlines() if x.startswith("SHOALSCAN_SUMMARY ")]
+        return code, (json.loads(line[0].split(" ", 1)[1]) if line else {}), out + err
+
+    def test_rules_commit_keeps_the_base_rules_when_the_change_deletes_them(self):
+        # The change deletes the repository rule, relaxes its own policy and adds a new finding.
+        (self.repo / ".shoalscan.toml").write_text(
+            'baseline = "baseline.toml"\nexcludes = ["src"]\n[opengrep]\ncommunity_rules = false\n', encoding="utf-8"
+        )
+        (self.repo / "security-rules" / "pickle.yaml").unlink()
+        (self.repo / "src" / "more.py").write_text(
+            "import pickle\n\ndef more(b):\n    return pickle.loads(b)\n", encoding="utf-8"
+        )
+        self.commit("relax")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 1, out)
+        self.assertIn("repo.security-rules.no-pickle-loads", out)
+        self.assertEqual(summary["new_blocking"], 1)
+        self.assertIn("compared with the merge base of HEAD and", out)
+        findings = json.loads((self.out / "findings.json").read_text())
+        self.assertEqual(findings["policy"]["rules_commit"], git(self.repo, "rev-parse", "main").strip())
+
+    def test_changed_since_fails_a_changed_file_that_was_not_scanned(self):
+        (self.repo / "src" / "huge.py").write_text("y = 2\n" * 600, encoding="utf-8")
+        self.commit("big file")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(summary["unscanned"]["changed_and_unscanned"], 1)
+        # Without --changed-since the same check only reports it.
+        config, baseline = self.explicit_policy()
+        code, out, err = self.cli("check", *config, *baseline)
+        self.assertEqual(code, 0, out + err)
+
+    def test_rules_commit_needs_an_explicit_configuration(self):
+        code, _, err = self.cli("scan", "--rules-commit", "refs/heads/main")
+        self.assertEqual(code, 2)
+        self.assertIn("--rules-commit needs --config", err)
+        config, _ = self.explicit_policy()
+        code, _, err = self.cli("scan", *config, "--rules-commit", "main")
+        self.assertEqual(code, 2)
+        self.assertIn("ambiguous", err)
+
     def test_a_tag_cannot_shadow_the_policy_ref(self):
         base = git(self.repo, "rev-parse", "refs/heads/main").strip()
         git(self.repo, "update-ref", "refs/remotes/origin/main", base)

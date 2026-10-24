@@ -184,15 +184,35 @@ def _do_scan(args: argparse.Namespace):
             _print_adoption(policy)
         # Without a policy ref, `check` may accept an edit to the baseline it reads.
         baseline = _baseline_path(args, policy.config) if policy.ref is None else None
-        result = run_scan(
-            Path(args.repo),
-            policy.config,
-            tools,
-            out,
-            policy=policy.record(),
-            baseline=baseline,
-            require_network_sandbox=getattr(args, "require_network_sandbox", False),
-        )
+        rules_commit = getattr(args, "rules_commit", None)
+        if rules_commit is None:
+            result = run_scan(
+                Path(args.repo),
+                policy.config,
+                tools,
+                out,
+                policy=policy.record(),
+                baseline=baseline,
+                require_network_sandbox=getattr(args, "require_network_sandbox", False),
+            )
+            return result, policy.config
+        # An explicit configuration whose repository rule dirs come from another commit (the base branch's head,
+        # when the scan worker scans a pull request), never from the tree being scanned.
+        if policy.ref is not None or not args.config:
+            raise SetupError("--rules-commit needs --config and cannot be used with --policy-ref")
+        commit = gitref.resolve_commit(Path(args.repo), rules_commit)
+        with tempfile.TemporaryDirectory(prefix="shoalscan-policy-rules-") as tmp:
+            gitref.archive_dirs(Path(args.repo), commit, list(policy.config.opengrep.rule_dirs), Path(tmp))
+            result = run_scan(
+                Path(args.repo),
+                policy.config,
+                tools,
+                out,
+                rule_root=Path(tmp),
+                policy={**policy.record(), "rules_commit": commit},
+                baseline=baseline,
+                require_network_sandbox=getattr(args, "require_network_sandbox", False),
+            )
         return result, policy.config
     # The repository's own rules also come from the policy ref.
     with tempfile.TemporaryDirectory(prefix="shoalscan-policy-rules-") as tmp:
@@ -377,6 +397,16 @@ def cmd_check(args: argparse.Namespace) -> int:
         def added(path: str) -> set[int]:
             return gitref.added_lines(repo, commit, path)
 
+    elif getattr(args, "changed_since", None):
+        # An explicit configuration and baseline, with the changed files listed against the merge base with
+        # another commit (the base branch's head, when the scan worker scans a pull request).
+        since = gitref.resolve_commit(repo, args.changed_since)
+        changed = gitref.changed_files(repo, since)
+        print(f"Changed files: compared with the merge base of HEAD and {since[:12]}.")
+
+        def added(path: str) -> set[int]:
+            return gitref.added_lines(repo, since, path)
+
     result = compare(
         findings,
         baseline,
@@ -503,7 +533,7 @@ def cmd_baseline_accept(args: argparse.Namespace) -> int:
     return 0
 
 
-def _policy_option(p: argparse.ArgumentParser) -> None:
+def _policy_option(p: argparse._ActionsContainer) -> None:
     p.add_argument(
         "--policy-ref",
         help=(
@@ -543,7 +573,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="fail unless the scanners can run in an operating-system network sandbox (sandbox-exec or unshare --net)",
     )
-    _policy_option(p)
+    group = p.add_mutually_exclusive_group()
+    _policy_option(group)
+    group.add_argument(
+        "--rules-commit",
+        metavar="COMMIT",
+        help=(
+            "with --config: read the repository rule dirs from this commit instead of the tree being scanned (a full "
+            "SHA or a refs/heads/ or refs/remotes/ ref)"
+        ),
+    )
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("check", help="compare findings with the baseline")
@@ -556,7 +595,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow a repository directory that is not a git work tree (the findings are then not tied to a commit)",
     )
-    _policy_option(p)
+    group = p.add_mutually_exclusive_group()
+    _policy_option(group)
+    group.add_argument(
+        "--changed-since",
+        metavar="COMMIT",
+        help=(
+            "with an explicit configuration and baseline: also fail on changed files that were not fully scanned, "
+            "comparing HEAD with its merge base with this commit (a full SHA or a refs/heads/ or refs/remotes/ ref)"
+        ),
+    )
     p.set_defaults(func=cmd_check)
 
     p = sub.add_parser("baseline", help="manage the baseline")
