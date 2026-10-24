@@ -25,7 +25,7 @@ The script makes its virtual environment with `python3`. Set `SHOALSCAN_PYTHON` 
 
 ## Pull-request runs
 
-Pull-request runs can be recorded too, with `--kind pr`, on a machine that holds the history database. They show on the Runs page. Once a repository has scheduled runs, pull-request runs no longer feed its trend charts.
+Pull-request runs can be recorded too, with `--kind pr`, on a machine that holds the history database. They show on the Runs page. Pull-request runs never feed the trend charts or the headline run.
 
 ## Scanning the open pull requests of a public repository
 

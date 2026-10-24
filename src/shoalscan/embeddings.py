@@ -355,11 +355,11 @@ _DECISIONS = (
 
 
 def latest_trend_run(conn: sqlite3.Connection, repo_id: int) -> int | None:
-    """The run the dashboard's trends end with: the newest scheduled run whose check ran, or, for a
-    repository without scheduled runs, the newest run of any kind whose check ran."""
+    """The run the dashboard's trends end with: the newest scheduled run whose check ran. Pull-request runs
+    never do: they scanned a change nobody has accepted yet."""
     row = conn.execute(
-        "SELECT id FROM runs WHERE repo_id = ? AND outcome != 'scan_error' "
-        "ORDER BY kind = 'scheduled' DESC, scanned_at DESC, id DESC LIMIT 1",
+        "SELECT id FROM runs WHERE repo_id = ? AND outcome != 'scan_error' AND kind = 'scheduled' "
+        "ORDER BY scanned_at DESC, id DESC LIMIT 1",
         (repo_id,),
     ).fetchone()
     return row[0] if row else None

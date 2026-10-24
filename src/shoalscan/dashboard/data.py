@@ -363,7 +363,7 @@ class Data:
         out = []
         for row in self.conn.execute("SELECT id, name FROM repos ORDER BY name"):
             latest = self.conn.execute(
-                f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? ORDER BY scanned_at DESC, id DESC LIMIT 1",
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? AND kind = 'scheduled' ORDER BY scanned_at DESC, id DESC LIMIT 1",  # noqa: E501 - one literal, so Opengrep's raw-query rule still sees it
                 (row["id"],),
             ).fetchone()
             count = self.conn.execute("SELECT COUNT(*) FROM runs WHERE repo_id = ?", (row["id"],)).fetchone()[0]
@@ -381,10 +381,9 @@ class Data:
         )
 
     def _trend_kinds(self, repo_id: int) -> tuple[str, ...]:
-        has = self.conn.execute(
-            f"SELECT 1 FROM runs WHERE repo_id = ? AND kind = 'scheduled' AND {_TREND} LIMIT 1", (repo_id,)
-        ).fetchone()
-        return ("scheduled",) if has else ("scheduled", "pr")
+        """Only scheduled runs feed the trends, the headline run and the reviews: a pull-request run scanned a
+        change nobody has accepted yet, which on a public repository anyone can open."""
+        return ("scheduled",)
 
     def _trend_runs(self, repo_id: int) -> list[sqlite3.Row]:
         kinds = self._trend_kinds(repo_id)
@@ -405,10 +404,11 @@ class Data:
     def overview(self, repo_id: int) -> dict:
         runs = self._trend_runs(repo_id)
         latest_any = self.conn.execute(
-            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? ORDER BY scanned_at DESC, id DESC LIMIT 1", (repo_id,)
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? AND kind = 'scheduled' ORDER BY scanned_at DESC, id DESC LIMIT 1",  # noqa: E501 - one literal, so Opengrep's raw-query rule still sees it
+            (repo_id,),
         ).fetchone()
         result: dict = {
-            "trend_kind": "scheduled" if self._trend_kinds(repo_id) == ("scheduled",) else "all",
+            "trend_kind": "scheduled",
             "latest_run": _run_dict(latest_any) if latest_any else None,
             "latest_trend_run": _run_dict(runs[-1]) if runs else None,
             "series": [
@@ -1221,7 +1221,7 @@ class Data:
 
     def latest_run_of(self, name: str) -> dict | None:
         row = self.conn.execute(
-            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = (SELECT id FROM repos WHERE name = ?) ORDER BY scanned_at DESC, id DESC LIMIT 1",  # noqa: E501 - one literal, so Opengrep's raw-query rule still sees it
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = (SELECT id FROM repos WHERE name = ?) AND kind = 'scheduled' ORDER BY scanned_at DESC, id DESC LIMIT 1",  # noqa: E501 - one literal, so Opengrep's raw-query rule still sees it
             (name,),
         ).fetchone()
         return _run_dict(row) if row else None
@@ -1237,7 +1237,7 @@ class Data:
 
     def latest_scanners(self) -> dict:
         row = self.conn.execute(
-            f"SELECT scanners FROM runs WHERE {_TREND} ORDER BY scanned_at DESC, id DESC LIMIT 1"
+            f"SELECT scanners FROM runs WHERE kind = 'scheduled' AND {_TREND} ORDER BY scanned_at DESC, id DESC LIMIT 1"
         ).fetchone()
         if not row:
             return {}

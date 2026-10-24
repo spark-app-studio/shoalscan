@@ -154,6 +154,6 @@ Every number that has a list behind it is a link. Each tile, each point on the s
 
 The heatmap ranks components by a heat score, ERROR × 10 + WARNING × 3 + INFO, with components that have new blocking findings first. Each cell shows its count, and its shade grows with the count; a bar beside each row shows the score. The top 15 components are shown, and a button shows the rest.
 
-One database can hold several repositories, and the dashboard has a repository selector. The trend charts use the scheduled scans of the default branch. A repository with no scheduled runs uses all of its runs instead.
+One database can hold several repositories, and the dashboard has a repository selector. The trend charts, the headline "Latest run", the repository list and the Configuration page's last run use only the scheduled scans of the default branch. Pull-request runs never feed them, because they scanned a change nobody has accepted yet (on a public repository, anyone can open one); they show on the Runs page and in its Pull requests table.
 
 **Next:** [Reviewing findings](reviewing-findings.md), [Scheduled scans](scheduled-scans.md) and [Scanning from the dashboard](dashboard-scanning.md).

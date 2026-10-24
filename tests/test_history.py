@@ -280,8 +280,10 @@ class DerivedMetricsTests(HistoryTestCase):
         self.assertEqual([p["baseline_size"] for p in o["series"]], [3, 3, 2, 2])
         self.assertEqual(o["series"][-1]["open"], {"ERROR": 1, "WARNING": 1, "INFO": 1})
         self.assertEqual((o["series"][-1]["unscanned_skipped"], o["series"][-1]["unscanned_errored"]), (2, 1))
-        # The latest run of any kind is the pull-request run.
-        self.assertEqual(o["latest_run"]["kind"], "pr")
+        # The headline run is the newest scheduled run, never the newer pull-request run.
+        self.assertEqual((o["latest_run"]["kind"], o["latest_run"]["scanned_at"][:10]), ("scheduled", "2026-09-22"))
+        self.assertEqual(self.data.latest_run_of("acme/app")["kind"], "scheduled")
+        self.assertEqual([r["latest"]["kind"] for r in self.data.repos() if r["name"] == "acme/app"], ["scheduled"])
 
     def test_new_fixed_time_to_fix_and_ages(self):
         o = self.data.overview(self.repo)
@@ -316,10 +318,14 @@ class DerivedMetricsTests(HistoryTestCase):
         )
         self.assertEqual(o["time_to_fix"]["fixed"], 0)
 
-    def test_a_repository_without_scheduled_runs_uses_all_runs(self):
+    def test_pull_request_runs_never_feed_the_trends_or_the_headline(self):
+        # On a public repository anyone can open a pull request; its runs are no part of the posture.
         record(self.conn, self.tmp, "acme/prs", "7" * 40, 3, [finding("r", "a.py", "1:0")], kind="pr")
-        o = self.data.overview(self.data.repo_id("acme/prs"))
-        self.assertEqual((o["trend_kind"], len(o["series"])), ("all", 1))
+        repo = self.data.repo_id("acme/prs")
+        o = self.data.overview(repo)
+        self.assertEqual((o["trend_kind"], len(o["series"]), o["latest_run"]), ("scheduled", 0, None))
+        self.assertIsNone(self.data.resolve_run(repo, None))
+        self.assertIsNone(self.data.latest_run_of("acme/prs"))
 
     def test_findings_filters_and_first_seen(self):
         run = self.data.resolve_run(self.repo, None)
