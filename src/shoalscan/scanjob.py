@@ -197,7 +197,9 @@ class Job:
         self.log_full = False
 
     def say(self, text: str) -> None:
-        """One log line, while the log stays under MAX_LOG_BYTES."""
+        """One log line, while the log stays under MAX_LOG_BYTES. Control and escape sequences are dropped:
+        scanner output names files of the scanned repository, which chose them."""
+        text = scanning.plain_text(text)
         line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {text}\n"
         if self.logged + len(line) > scanning.MAX_LOG_BYTES:
             if not self.log_full:

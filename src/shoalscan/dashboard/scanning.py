@@ -833,12 +833,25 @@ def release_lock(state_dir: Path) -> None:
 _ABS_PATH = re.compile(r"(?<![\w.>])/(?:[^\s:'\"]+)")
 
 
+# Bidirectional overrides and isolates, which can make a line read differently from what it says.
+_BIDI = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+def plain_text(line: str) -> str:
+    """A line with no terminal control or escape sequences: C0 and C1 control characters, DEL and
+    bidirectional controls are dropped (tabs become spaces), so text a scanned repository chose, such
+    as a file name in a scanner's output, cannot drive a terminal or reorder what the log shows."""
+    return "".join(
+        " " if c == "\t" else c for c in line if c == "\t" or not (c < " " or "\x7f" <= c <= "\x9f" or c in _BIDI)
+    )
+
+
 def sanitise_log(lines: list[str], clone: Path | None) -> list[str]:
     """Log lines for the browser: control characters dropped, the clone shown by
     its name, every other absolute path replaced with <path>."""
     out = []
     for line in lines:
-        line = "".join(c for c in line if c >= " " and c != "\x7f")[:300]
+        line = plain_text(line)[:300]
         if clone is not None:
             line = line.replace(str(clone), f"<clone {clone.name}>")
         out.append(_ABS_PATH.sub("<path>", line))

@@ -539,6 +539,21 @@ class IsolationTests(WorkerTestCase):
         self.assertEqual(f.rows("SELECT outcome FROM scan_triggers"), [("passed",)])
 
 
+class LogTests(WorkerTestCase):
+    def test_control_and_escape_sequences_never_reach_the_log(self):
+        f = Fixture(self.base)
+        log = io.StringIO()
+        targets = f.targets()
+        job = scanjob.Job(f.state, targets, targets.targets["acme/app"], "x", log)
+        try:
+            job.say("file \x1b[2J\x1b]0;owned\x07evil\r\nname\x9b31m \u202etxt.exe\tend")
+        finally:
+            job.cleanup()
+        line = log.getvalue().split(" ", 1)[1]
+        self.assertEqual(line, "file [2J]0;ownedevilname31m txt.exe end\n")
+        self.assertEqual(scanning.sanitise_log(["a\x1b[31mb\u2066c"], None), ["a[31mbc"])
+
+
 class GitProbeTests(WorkerTestCase):
     def test_the_real_git_honours_the_attribute_source(self):
         self.assertTrue(scanning.git_attr_probe(), "this git must honour GIT_ATTR_SOURCE")
