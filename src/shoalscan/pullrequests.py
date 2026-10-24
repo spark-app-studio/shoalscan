@@ -13,10 +13,18 @@ How "open" is decided, and its limits (checked against github.com):
   open pull requests it can merge. A pull request with conflicts may have no
   merge ref, or an old one. Some closed pull requests, and pull requests
   GitHub has deleted, keep theirs.
-- So a pull request is a candidate when it has a merge ref, or when an earlier
+- So a pull request is a candidate when it has a merge ref, when an earlier
   pull-request run of the same `refs/pull/N/head` is recorded (an open pull
   request with conflicts that was scanned before still gets its new heads
-  scanned). A head that already has a recorded pull-request run with results
+  scanned), or when the poll state says it is worth a look without a merge
+  ref (a pull request that conflicts from its first push has none): its
+  number is above the high-water mark (the highest number the first poll of
+  the target saw, so every pull request opened since polling began), or its
+  head changed since the previous poll's listing (a closed pull request's
+  head never changes). Once eligible, a number stays eligible. This bounds
+  the churn of the hundreds of closed pull requests whose head refs GitHub
+  keeps: the first poll never scans them, and later polls only when one moves.
+  A head that already has a recorded pull-request run with results
   is skipped. A head whose run was a scan error is tried again only after
   RETRY_AFTER, after every other candidate. A closed pull request that kept
   its merge ref is scanned at most once, because its head never changes again.
@@ -37,6 +45,7 @@ scan error instead of reporting nothing to scan.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -45,6 +54,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from shoalscan.errors import SetupError
 
@@ -163,10 +173,17 @@ def _time(stamp: str) -> datetime:
     return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
 
-def select(listing: Listing, recorded: list[Recorded], cap: int, now: datetime | None = None) -> Selection:
+def select(
+    listing: Listing,
+    recorded: list[Recorded],
+    cap: int,
+    now: datetime | None = None,
+    without_merge_ref: set[int] | frozenset[int] = frozenset(),
+) -> Selection:
     """What one poll scans, given every recorded pull-request run of this repository (see the module's notes).
 
-    A candidate has a merge ref, or a recorded run of its head ref. A head commit with a recorded run that has
+    A candidate has a merge ref, a recorded run of its head ref, or a number in `without_merge_ref`.
+    A head commit with a recorded run that has
     results is skipped, whatever its ref; one whose runs are all scan errors waits RETRY_AFTER and then goes
     last. A pull request scanned less than PER_PULL_INTERVAL ago waits. The rest go in order of when their pull
     request was last scanned (never first), lower numbers first among equals, at most `cap`.
@@ -186,7 +203,7 @@ def select(listing: Listing, recorded: list[Recorded], cap: int, now: datetime |
     for number in sorted(listing.pulls):
         pull = listing.pulls[number]
         runs = by_commit.get(pull.head, [])
-        if not pull.has_merge_ref and number not in last_scan:
+        if not pull.has_merge_ref and number not in last_scan and number not in without_merge_ref:
             out.not_open += 1
         elif any(r.outcome != "scan_error" for r in runs):
             out.already_scanned.append(pull)
@@ -200,6 +217,71 @@ def select(listing: Listing, recorded: list[Recorded], cap: int, now: datetime |
     ordered = [c[3] for c in candidates]
     out.to_scan, out.deferred = ordered[:cap], ordered[cap:]
     return out
+
+
+MAX_STATE_BYTES = 16 * 1024 * 1024
+
+
+@dataclass
+class PollState:
+    """What a target's previous poll saw, kept in the state directory between polls."""
+
+    mark: int  # the highest pull request number the first poll saw
+    heads: dict[int, str]  # every pull request's head, as the previous listing showed it
+    tracked: set[int]  # numbers that became eligible without a merge ref
+
+
+def load_state(path: Path) -> PollState | None:
+    """The previous poll's state; None before the first poll. A state that cannot be read fails closed."""
+    try:
+        if path.stat().st_size > MAX_STATE_BYTES:
+            raise DiscoveryError(f"the poll state {path.name} is larger than {MAX_STATE_BYTES} bytes")
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, RecursionError) as exc:
+        raise DiscoveryError(f"the poll state {path.name} cannot be read ({exc}); remove it to start again") from None
+    try:
+        mark = data["mark"]
+        heads = {int(n): sha for n, sha in data["heads"].items()}
+        tracked = {int(n) for n in data["tracked"]}
+        if (
+            isinstance(mark, bool)
+            or not isinstance(mark, int)
+            or not 0 <= mark <= MAX_PULL_NUMBER
+            or not all(isinstance(sha, str) and _SHA.fullmatch(sha) for sha in heads.values())
+        ):
+            raise ValueError
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise DiscoveryError(f"the poll state {path.name} is malformed; remove it to start again") from None
+    return PollState(mark, heads, tracked)
+
+
+def eligible(listing: Listing, state: PollState | None) -> set[int]:
+    """Pull request numbers that are candidates even without a merge ref (see the module's notes)."""
+    if state is None:
+        return set()
+    out = {n for n in state.tracked if n in listing.pulls}
+    for number, pull in listing.pulls.items():
+        before = state.heads.get(number)
+        if number > state.mark or (before is not None and before != pull.head):
+            out.add(number)
+    return out
+
+
+def next_state(listing: Listing, state: PollState | None, tracked: set[int]) -> PollState:
+    mark = state.mark if state is not None else max(listing.pulls, default=0)
+    return PollState(mark, {n: p.head for n, p in listing.pulls.items()}, set(tracked))
+
+
+def state_json(state: PollState) -> str:
+    return json.dumps(
+        {
+            "mark": state.mark,
+            "heads": {str(n): sha for n, sha in sorted(state.heads.items())},
+            "tracked": sorted(state.tracked),
+        }
+    )
 
 
 def list_remote(argv: list[str], env: dict, timeout: float) -> str:

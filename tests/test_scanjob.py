@@ -1099,6 +1099,34 @@ class PullRequestTests(WorkerTestCase):
         self.poll(replace(targets, max_checkout_mb=1, timeout_seconds=60))
         self.assertEqual(f.rows("SELECT outcome FROM runs WHERE ref = 'refs/pull/8/head'"), [("scan_error",)])
 
+    def test_a_pull_request_that_conflicts_from_its_first_push_is_scanned(self):
+        f = self.f
+        old = self.open_pull_request(3, "x = 3\n", merge_ref=False)  # closed long ago: a head ref only
+        targets = self.targets(cooldown_seconds=0)
+        first = self.poll(targets)
+        self.assertEqual(first["acme/app#7"], "passed")
+        self.assertNotIn("acme/app#3", first)
+        state = json.loads((f.state / "pull_requests" / f"{scanning.slug('acme/app')}.json").read_text())
+        self.assertEqual((state["mark"], state["heads"]["3"]), (7, old))
+        # #8 is opened with conflicts: GitHub gives it no merge ref. It is above the mark, so it is scanned.
+        pr8 = self.open_pull_request(8, "x = 8\n", merge_ref=False)
+        self.assertEqual(self.poll(targets)["acme/app#8"], "passed")
+        self.assertIn(("refs/pull/8/head", pr8), f.rows("SELECT ref, commit_sha FROM runs"))
+        # The old head-only #3 is left alone until its head moves.
+        self.assertNotIn("acme/app#3", self.poll(targets))
+        self.open_pull_request(3, "x = 33\n", merge_ref=False)
+        self.assertEqual(self.poll(targets)["acme/app#3"], "passed")
+
+    def test_an_unreadable_poll_state_is_a_scan_error(self):
+        f = self.f
+        path = f.state / "pull_requests" / f"{scanning.slug('acme/app')}.json"
+        path.parent.mkdir(mode=0o700)
+        path.write_text("{not json")
+        results = self.poll()
+        self.assertIn("cannot be read", results["acme/app"])
+        self.assertFalse(scanjob.poll_ok(results["acme/app"]))
+        self.assertEqual(f.calls(), [])
+
     def test_run_one_refuses_a_pull_request_for_a_target_that_does_not_scan_them(self):
         pull = pullrequests.PullRequest(7, self.pr7, True)
         with self.assertRaisesRegex(SetupError, "does not scan pull requests"):

@@ -961,7 +961,23 @@ def run_pull_requests(
                 log.write(f"pull requests: {name}: the failure could not be audited either: {audit_exc}\n")
             log.flush()
             continue
-        chosen = pullrequests.select(listing, recorded, targets.max_pull_requests)
+        state_path = state_dir / "pull_requests" / f"{scanning.slug(name)}.json"
+        try:
+            state = pullrequests.load_state(state_path)
+            extra = pullrequests.eligible(listing, state)
+            scanning.write_private(state_path, pullrequests.state_json(pullrequests.next_state(listing, state, extra)))
+        except (ShoalscanError, OSError) as exc:
+            detail = f"pull-request discovery failed: {str(exc)[:250]}"
+            results[name] = f"scan_error: {detail}"
+            log.write(f"pull requests: {name}: {detail}\n")
+            _audit_discovery_failure(targets, name, detail)
+            continue
+        if state is None:
+            log.write(
+                f"pull requests: {name}: first poll; pull requests above #{max(listing.pulls, default=0)} and heads "
+                "that move are scanned even without a merge ref from now on\n"
+            )
+        chosen = pullrequests.select(listing, recorded, targets.max_pull_requests, without_merge_ref=extra)
         mergeable = sum(1 for p in listing.pulls.values() if p.has_merge_ref)
         results[name] = (
             f"listed: {len(chosen.to_scan)} to scan, {len(chosen.already_scanned)} already scanned, "
@@ -970,7 +986,7 @@ def run_pull_requests(
         log.write(
             f"pull requests: {name}: {len(listing.pulls)} pull request refs, {mergeable} with a merge ref; "
             f"{results[name][8:]}, {len(chosen.failed)} waiting to retry a scan error, {len(chosen.throttled)} "
-            f"scanned within the hour, {chosen.not_open} closed or never scanned without a merge ref\n"
+            f"scanned within the hour, {chosen.not_open} closed, or older and unchanged without a merge ref\n"
         )
         for pull in chosen.deferred:
             results[f"{name}#{pull.number}"] = "deferred: over max_pull_requests, next poll"

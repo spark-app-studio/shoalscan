@@ -2,8 +2,10 @@
 
 import os
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest import mock
 
 import helpers  # noqa: F401 - puts src/ on the import path
@@ -157,6 +159,52 @@ class SelectTests(unittest.TestCase):
         self.assertEqual(pullrequests.head_ref_number("refs/pull/12/head"), 12)
         for ref in ("refs/pull/12/merge", "main", "refs/pull/012/head", "refs/pull/x/head"):
             self.assertIsNone(pullrequests.head_ref_number(ref))
+
+
+class PollStateTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "state.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def listing(self, **heads) -> Listing:
+        return Listing(A, {int(n[1:]): PullRequest(int(n[1:]), sha, False) for n, sha in heads.items()})
+
+    def test_the_first_poll_sets_the_mark_and_scans_nothing_without_a_merge_ref(self):
+        self.assertIsNone(pullrequests.load_state(self.path))
+        first = self.listing(n3=B, n5=C)
+        self.assertEqual(pullrequests.eligible(first, None), set())
+        state = pullrequests.next_state(first, None, set())
+        self.path.write_text(pullrequests.state_json(state))
+        state = pullrequests.load_state(self.path)
+        self.assertEqual((state.mark, state.heads, state.tracked), (5, {3: B, 5: C}, set()))
+
+    def test_new_numbers_and_moved_heads_become_eligible_and_stay_so(self):
+        state = pullrequests.PollState(5, {3: B, 5: C, 4: D}, set())
+        later = self.listing(n3=B, n4=M, n5=C, n6=D)  # #4 moved, #6 is new, #3 and #5 are unchanged
+        extra = pullrequests.eligible(later, state)
+        self.assertEqual(extra, {4, 6})
+        # A poll that could not scan them (caps) keeps them eligible though nothing moves again.
+        state = pullrequests.next_state(later, state, extra)
+        self.assertEqual(state.mark, 5)
+        self.assertEqual(pullrequests.eligible(later, state), {4, 6})
+        chosen = pullrequests.select(later, [], 10, NOW, without_merge_ref=extra)
+        self.assertEqual([p.number for p in chosen.to_scan], [4, 6])
+        self.assertEqual(chosen.not_open, 2)
+
+    def test_a_state_that_cannot_be_read_fails_closed(self):
+        for text in (
+            "{",
+            "[]",
+            '{"mark": "x", "heads": {}, "tracked": []}',
+            '{"mark": 1, "heads": {"1": "zz"}, "tracked": []}',
+        ):
+            with self.subTest(text=text):
+                self.path.write_text(text)
+                with self.assertRaises(DiscoveryError):
+                    pullrequests.load_state(self.path)
 
 
 class ListRemoteTests(unittest.TestCase):
