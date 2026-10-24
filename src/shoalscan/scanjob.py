@@ -443,9 +443,9 @@ class Job:
         the work directory. Only objects are fetched; nothing is checked out here."""
         pull = self.pull
         t = self.target
-        source = t.source if t.kind == "url" else self.git_out("remote", "get-url", "origin")
-        if t.kind == "mirror" or not source:
-            raise SetupError("pull requests are fetched from the target's origin, and this target has none")
+        if t.kind != "url" or not t.source:
+            raise SetupError("pull requests are fetched anonymously from an https source only")
+        source = t.source
         objects = self.clone / ".git" / "objects" if (self.clone / ".git").is_dir() else self.clone / "objects"
         if not objects.is_dir():
             raise SetupError("the clone has no object store")
@@ -472,7 +472,6 @@ class Job:
             "--",
             source,
             f"+{pull.ref}:{pull.fetch_ref}",
-            admin_fetch=t.kind == "clone",
             watch=watch,
         )
         if fetched != 0:
@@ -777,6 +776,13 @@ def run_one(
         raise SetupError(f"{name!r} is not a registered scan target")
     if pull is not None and (run_id is not None or not target.pull_requests):
         raise SetupError(f"{name} does not scan pull requests (pull_requests = true in {scanning.TARGETS_FILE})")
+    if pull is not None and target.kind != "url":
+        # Pull requests are fetched anonymously, never with an administrator's git configuration (credentials,
+        # insteadOf rules), which a mirror or a hand-set clone would need.
+        raise SetupError(
+            f"{name}: pull requests are fetched anonymously from an https source, and this target's source is a "
+            f"{target.kind}"
+        )
     pinned = None
     if run_id is not None:
         db = targets.history_db or history.default_db_path()

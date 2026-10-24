@@ -776,6 +776,13 @@ def rev(repo: Path, ref: str) -> str:
     ).stdout.strip()
 
 
+def permissive_pairs(job, admin_fetch: bool = False):
+    """The worker's git settings, with the file protocol allowed: the tests' origin is a local repository."""
+    pairs = scanning.GIT_ADMIN_FETCH if admin_fetch else scanning.GIT_HARDENED + scanning.GIT_URL_ONLY
+    kept = tuple(p for p in pairs if p[0] not in ("protocol.file.allow", "protocol.allow"))
+    return (*kept, ("protocol.allow", "always"))
+
+
 class PullRequestTests(WorkerTestCase):
     """`scanjob --pull-requests`: the listing, dedupe, limits, failing closed, and the policy from the base."""
 
@@ -783,6 +790,11 @@ class PullRequestTests(WorkerTestCase):
         super().setUp()
         self.f = Fixture(self.base)
         f = self.f
+        # The targets are https sources, as pull requests need; here the origin is a local repository, so these
+        # tests alone let git use the file protocol too.
+        patcher = mock.patch.object(scanjob.Job, "git_pairs", permissive_pairs)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         (f.origin / ".shoalscan.toml").write_text("# BASE POLICY\n", encoding="utf-8")
         git("add", ".shoalscan.toml", cwd=f.origin)
         git("commit", "-q", "-m", "policy", cwd=f.origin)
@@ -807,8 +819,15 @@ class PullRequestTests(WorkerTestCase):
 
     def targets(self, **top) -> scanning.Targets:
         targets = self.f.targets()
-        target = replace(targets.targets["acme/app"], pull_requests=True)
+        target = replace(
+            targets.targets["acme/app"], kind="url", source=self.f.origin.as_uri(), clone=None, pull_requests=True
+        )
         return replace(targets, targets={"acme/app": target}, **top)
+
+    @property
+    def clone(self) -> Path:
+        targets = self.targets()
+        return targets.clone_dir(targets.targets["acme/app"])
 
     def discover(self, targets, target):
         # The real listing of the origin, as `git ls-remote` shows it (the origin is local here, not https).
@@ -840,11 +859,11 @@ class PullRequestTests(WorkerTestCase):
         self.assertEqual((opts["--kind"], opts["--ref"], opts["--commit"]), ("pr", "refs/pull/7/head", self.pr7))
         # The pull request never entered the branch clone: no ref, no branch, not even its objects.
         refs = subprocess.run(
-            ["git", "-C", str(f.clone), "for-each-ref", "--format=%(refname)"], capture_output=True, text=True
+            ["git", "-C", str(self.clone), "for-each-ref", "--format=%(refname)"], capture_output=True, text=True
         ).stdout
         self.assertNotIn("pull", refs)
         missing = subprocess.run(
-            ["git", "-C", str(f.clone), "cat-file", "-e", f"{self.pr7}^{{commit}}"], capture_output=True
+            ["git", "-C", str(self.clone), "cat-file", "-e", f"{self.pr7}^{{commit}}"], capture_output=True
         )
         self.assertNotEqual(missing.returncode, 0)
         (trigger,) = f.rows("SELECT who, trigger, outcome, detail FROM scan_triggers")
@@ -1005,8 +1024,8 @@ class PullRequestTests(WorkerTestCase):
         detail = [r[0] for r in f.rows("SELECT detail FROM scan_triggers") if r[0] and "#8" in r[0]]
         self.assertIn("needs more than max_clone_mb", detail[0])
         # The branch clone is still there, still small, and still scans.
-        self.assertTrue((f.clone / ".git").is_dir())
-        self.assertLess(scanjob.tree_size(f.clone), 1024 * 1024)
+        self.assertTrue((self.clone / "HEAD").is_file() or (self.clone / ".git").is_dir())
+        self.assertLess(scanjob.tree_size(self.clone), 1024 * 1024)
         self.assertEqual(scanjob.run_one(f.state, targets, "acme/app", "x", io.StringIO()), "passed")
 
     def pull_request_with(self, number: int, files: dict) -> str:
@@ -1179,6 +1198,11 @@ class PullRequestTests(WorkerTestCase):
         pull = pullrequests.PullRequest(7, self.pr7, True)
         with self.assertRaisesRegex(SetupError, "does not scan pull requests"):
             scanjob.run_one(self.f.state, self.f.targets(), "acme/app", "x", io.StringIO(), pull=pull)
+        # A hand-set clone (only reachable around the loader, which refuses it) is refused by name.
+        targets = self.f.targets()
+        clone = replace(targets, targets={"acme/app": replace(targets.targets["acme/app"], pull_requests=True)})
+        with self.assertRaisesRegex(SetupError, "fetched anonymously from an https source, and this target's source"):
+            scanjob.run_one(self.f.state, clone, "acme/app", "x", io.StringIO(), pull=pull)
         self.assertEqual(self.f.calls(), [])
 
     def test_pull_requests_need_an_https_source(self):
