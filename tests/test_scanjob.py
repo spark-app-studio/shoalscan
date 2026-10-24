@@ -13,13 +13,15 @@ import textwrap
 import time
 import unittest
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
 import helpers
 
 from shoalscan import history, process, pullrequests, scanjob
-from shoalscan.dashboard import scanning
+from shoalscan.dashboard import scancontrol, scanning
+from shoalscan.dashboard.data import Data
 from shoalscan.errors import SetupError
 
 # Stands in for the interpreter that runs `python -m shoalscan`. `scan` writes
@@ -876,9 +878,11 @@ class PullRequestTests(WorkerTestCase):
         again = self.poll(self.targets(cooldown_seconds=0))
         self.assertEqual(again["acme/app"], "listed: 0 to scan, 1 already scanned, 0 over max_pull_requests")
         self.assertEqual(len([c for c in f.calls() if c[2] == "scan"]), 1)
-        # A new head of the same pull request is scanned.
+        # A new head of the same pull request waits an hour since the pull request's last scan, then is scanned.
         self.pr7 = self.open_pull_request(7, "x = 77\n")
-        self.assertEqual(self.poll(self.targets(cooldown_seconds=0))["acme/app#7"], "passed")
+        self.assertTrue(self.poll(self.targets(cooldown_seconds=0))["acme/app#7"].startswith("deferred: this pull"))
+        with mock.patch.object(pullrequests, "PER_PULL_INTERVAL", timedelta(0)):
+            self.assertEqual(self.poll(self.targets(cooldown_seconds=0))["acme/app#7"], "passed")
         self.assertEqual(len(f.rows("SELECT id FROM runs WHERE kind = 'pr'")), 2)
 
     def test_a_pull_request_without_a_merge_ref_is_not_scanned(self):
@@ -936,15 +940,19 @@ class PullRequestTests(WorkerTestCase):
         f = self.f
         self.open_pull_request(8, "x = 8\n")
         self.open_pull_request(9, "x = 9\n")
-        results = self.poll(self.targets(max_pull_requests=2, max_scans_per_hour=1))
-        # Newest first: #9 is scanned, #8 waits for the hourly limit, #7 is over the cap.
-        self.assertEqual(results["acme/app#9"], "passed")
+        results = self.poll(self.targets(max_pull_requests=2, max_pr_scans_per_hour=1, max_scans_per_hour=1))
+        # Never-scanned pull requests, lowest number first: #7 is scanned, #8 waits for the hourly limit, #9 is
+        # over the cap.
+        self.assertEqual(results["acme/app#7"], "passed")
         self.assertTrue(results["acme/app#8"].startswith("deferred: the hourly limit"), results)
-        self.assertTrue(results["acme/app#7"].startswith("deferred: over max_pull_requests"), results)
+        self.assertTrue(results["acme/app#9"].startswith("deferred: over max_pull_requests"), results)
         self.assertTrue(all(scanjob.poll_ok(o) for o in results.values()), results)
-        self.assertEqual(f.rows("SELECT ref FROM runs"), [("refs/pull/9/head",)])
-        # Pull-request scans count against the dashboard's hourly cap too.
-        self.assertEqual(len(scanning.read_requests(f.state)["recent"]), 1)
+        self.assertEqual(f.rows("SELECT ref FROM runs"), [("refs/pull/7/head",)])
+        # Pull-request scans have a budget of their own: the dashboard's is untouched.
+        requests = scanning.read_requests(f.state)
+        self.assertEqual((len(requests["pr_recent"]), len(requests["recent"])), (1, 0))
+        control = scancontrol.ScanControl(f.state, f.db)
+        self.assertEqual(control.global_remaining(self.targets(max_scans_per_hour=1)), 0)
 
     def test_disabled_targets_and_targets_without_pull_requests_are_left_alone(self):
         targets = self.targets()
@@ -1060,6 +1068,36 @@ class PullRequestTests(WorkerTestCase):
         with mock.patch.object(scanjob, "check_free_space"):
             results = self.poll(targets)
         self.assertIn("twice (for the Gitleaks staging copy)", self.checkout_refusal(results, 8))
+
+    def test_a_failed_or_timed_out_scan_is_recorded_as_a_scan_error_and_not_retried(self):
+        f = self.f
+        (f.bin / "slow").write_text("1")
+        targets = self.targets(timeout_seconds=2, cooldown_seconds=0)
+        results = self.poll(targets)
+        self.assertEqual(results["acme/app#7"], "timeout")
+        self.assertFalse(scanjob.poll_ok(results["acme/app#7"]))
+        (run,) = f.rows("SELECT id, kind, ref, commit_sha, outcome FROM runs")
+        self.assertEqual(run[1:], ("pr", "refs/pull/7/head", self.pr7, "scan_error"))
+        (trigger,) = f.rows("SELECT outcome, run_id, detail FROM scan_triggers")
+        self.assertEqual(trigger[:2], ("timeout", run[0]))
+        self.assertIn("recorded as a scan error", trigger[2])
+        # The next poll does not spend its budget on the same head again.
+        (f.bin / "slow").unlink()
+        again = self.poll(targets)
+        self.assertTrue(again["acme/app#7"].startswith("deferred: its last scan was a scan error"), again)
+        self.assertEqual(len([c for c in f.calls() if c[2] == "scan"]), 1)
+        # The Runs page shows the failure and why.
+        data = Data(history.open_read_only(f.db))
+        try:
+            (item,) = data.pull_requests(data.repo_id("acme/app"))["items"]
+        finally:
+            data.conn.close()
+        self.assertEqual((item["number"], item["latest"]["outcome"]), (7, "scan_error"))
+        self.assertIn("stopped after", item["error"])
+        # A size refusal is recorded the same way.
+        self.pull_request_with(8, {"zeros.bin": bytes(3 * 1024 * 1024)})
+        self.poll(replace(targets, max_checkout_mb=1, timeout_seconds=60))
+        self.assertEqual(f.rows("SELECT outcome FROM runs WHERE ref = 'refs/pull/8/head'"), [("scan_error",)])
 
     def test_run_one_refuses_a_pull_request_for_a_target_that_does_not_scan_them(self):
         pull = pullrequests.PullRequest(7, self.pr7, True)

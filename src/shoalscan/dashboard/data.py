@@ -1189,7 +1189,14 @@ class Data:
             match = _PULL_HEAD_REF.fullmatch(row["ref"])
             if match is None:
                 continue
-            items.append({"number": int(match.group(1)), "runs": row["ref_runs"], "latest": _run_dict(row)})
+            item = {"number": int(match.group(1)), "runs": row["ref_runs"], "latest": _run_dict(row), "error": None}
+            if row["outcome"] == "scan_error":
+                # Why the scan failed, from the scan audit: a fetch, a size limit, the scan itself or the deadline.
+                audit = self.conn.execute(
+                    "SELECT detail FROM scan_triggers WHERE run_id = ? ORDER BY id DESC LIMIT 1", (row["id"],)
+                ).fetchone()
+                item["error"] = audit[0] if audit else None
+            items.append(item)
         return {"total": total, "items": items}
 
     def deletions(self, repo_name: str, limit: int = 20) -> dict:

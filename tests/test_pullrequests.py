@@ -3,12 +3,13 @@
 import os
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 import helpers  # noqa: F401 - puts src/ on the import path
 
 from shoalscan import pullrequests
-from shoalscan.pullrequests import DiscoveryError, Listing, PullRequest
+from shoalscan.pullrequests import DiscoveryError, Listing, PullRequest, Recorded
 
 A = "a" * 40
 B = "b" * 40
@@ -92,36 +93,65 @@ class ParseTests(unittest.TestCase):
         )
 
 
+NOW = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+
+
+def ran(ref: str, commit: str, hours_ago: float, outcome: str = "passed") -> Recorded:
+    return Recorded(ref, commit, outcome, (NOW - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+
 class SelectTests(unittest.TestCase):
     def listing(self, *pulls: PullRequest) -> Listing:
         return Listing(A, {p.number: p for p in pulls})
 
+    def select(self, pulls, recorded, cap=10):
+        return pullrequests.select(self.listing(*pulls), recorded, cap, NOW)
+
     def test_only_pull_requests_with_a_merge_ref_are_open(self):
-        chosen = pullrequests.select(self.listing(PullRequest(1, B, False), PullRequest(2, C, True)), [], 10)
+        chosen = self.select([PullRequest(1, B, False), PullRequest(2, C, True)], [])
         self.assertEqual([p.number for p in chosen.to_scan], [2])
         self.assertEqual(chosen.not_open, 1)
 
     def test_a_head_with_a_recorded_run_is_skipped_whatever_its_ref(self):
-        recorded = [("refs/pull/2/head", C), ("refs/pull/9/merge", D)]
-        chosen = pullrequests.select(self.listing(PullRequest(2, C, True), PullRequest(4, D, True)), recorded, 10)
+        recorded = [ran("refs/pull/2/head", C, 5), ran("refs/pull/9/merge", D, 5, "blocked")]
+        chosen = self.select([PullRequest(2, C, True), PullRequest(4, D, True)], recorded)
         self.assertEqual(chosen.to_scan, [])
-        self.assertEqual([p.number for p in chosen.already_scanned], [4, 2])
+        self.assertEqual([p.number for p in chosen.already_scanned], [2, 4])
 
     def test_a_new_head_of_a_scanned_pull_request_without_a_merge_ref_is_scanned(self):
         # An open pull request with conflicts may lose its merge ref; its earlier run says it is worth a look.
-        recorded = [("refs/pull/5/head", B)]
-        chosen = pullrequests.select(self.listing(PullRequest(5, C, False), PullRequest(6, D, False)), recorded, 10)
+        chosen = self.select([PullRequest(5, C, False), PullRequest(6, D, False)], [ran("refs/pull/5/head", B, 5)])
         self.assertEqual([p.number for p in chosen.to_scan], [5])
         self.assertEqual(chosen.not_open, 1)
-        # A scheduled-looking ref or a merge ref is not "seen before".
-        chosen = pullrequests.select(self.listing(PullRequest(5, C, False)), [("refs/pull/5/merge", B)], 10)
+        # A merge ref's run is not "seen before".
+        chosen = self.select([PullRequest(5, C, False)], [ran("refs/pull/5/merge", B, 5)])
         self.assertEqual(chosen.to_scan, [])
 
-    def test_newest_first_and_capped(self):
+    def test_a_scan_error_is_retried_after_a_day_and_after_everything_else(self):
+        recorded = [ran("refs/pull/3/head", B, 2, "scan_error"), ran("refs/pull/4/head", C, 30, "scan_error")]
+        pulls = [PullRequest(3, B, True), PullRequest(4, C, True), PullRequest(9, D, True)]
+        chosen = self.select(pulls, recorded)
+        self.assertEqual([p.number for p in chosen.failed], [3])
+        self.assertEqual([p.number for p in chosen.to_scan], [9, 4])
+        # A scan error never hides a run with results for the same head.
+        chosen = self.select([PullRequest(3, B, True)], [*recorded, ran("refs/pull/3/head", B, 1)])
+        self.assertEqual([p.number for p in chosen.already_scanned], [3])
+
+    def test_one_busy_pull_request_cannot_monopolise_the_scans(self):
+        # #5 is force-pushed again and again; it is scanned at most once an hour, and the pull requests scanned
+        # longest ago (or never) go first.
+        recorded = [ran("refs/pull/5/head", B, 0.2), ran("refs/pull/6/head", C, 3), ran("refs/pull/7/head", D, 9)]
+        pulls = [PullRequest(5, M, True), PullRequest(6, "1" * 40, True), PullRequest(7, "2" * 40, True)]
+        pulls.append(PullRequest(8, "3" * 40, True))
+        chosen = self.select(pulls, recorded)
+        self.assertEqual([p.number for p in chosen.throttled], [5])
+        self.assertEqual([p.number for p in chosen.to_scan], [8, 7, 6])
+
+    def test_capped_in_order(self):
         pulls = [PullRequest(n, f"{n:040x}", True) for n in (3, 11, 7, 20)]
-        chosen = pullrequests.select(self.listing(*pulls), [], 2)
-        self.assertEqual([p.number for p in chosen.to_scan], [20, 11])
-        self.assertEqual([p.number for p in chosen.deferred], [7, 3])
+        chosen = self.select(pulls, [], 2)
+        self.assertEqual([p.number for p in chosen.to_scan], [3, 7])
+        self.assertEqual([p.number for p in chosen.deferred], [11, 20])
 
     def test_head_ref_number(self):
         self.assertEqual(pullrequests.head_ref_number("refs/pull/12/head"), 12)

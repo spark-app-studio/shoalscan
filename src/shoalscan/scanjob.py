@@ -114,6 +114,10 @@ class ScanTimeout(Exception):  # noqa: N818 - a signal to stop the scan, not an 
     pass
 
 
+class PullMovedError(SetupError):
+    """The pull request's head changed after it was listed: nothing to record, the new head comes next poll."""
+
+
 class TooLargeError(SetupError):
     """A directory a git command writes grew past its limit; the command was stopped."""
 
@@ -476,7 +480,7 @@ class Job:
             raise TooLargeError(watch.message)
         commit = self.git_out("rev-parse", "--verify", "--quiet", f"{pull.fetch_ref}^{{commit}}", repo=repo)
         if commit != pull.head:
-            raise SetupError(
+            raise PullMovedError(
                 f"pull request #{pull.number} moved after it was listed; its new head is scanned on the next poll"
             )
         return commit
@@ -794,6 +798,7 @@ def run_one(
     trigger_id = None
     conn = None
     outcome, run_id, detail = "failed", None, None
+    record_failure = False  # a pull request whose scan failed is recorded as a scan error
     started = history.parse_timestamp(None)
     try:
         sweep_stale_work(state_dir)
@@ -807,11 +812,18 @@ def run_one(
         outcome, run_id = job.execute()
     except ScanTimeout:
         outcome, detail = "timeout", f"stopped after {targets.timeout_seconds // 60} minutes; nothing was recorded"
+        record_failure = job is not None
     except Stop:
         outcome, detail = "failed", "stopped by a signal; nothing was recorded"
     except (ShoalscanError, OSError, subprocess.SubprocessError) as exc:
         outcome, detail = "failed", str(exc)[:300]
+        record_failure = job is not None and not isinstance(exc, PullMovedError)
     finally:
+        if pull is not None and record_failure and conn is not None:
+            # Visible on the dashboard, and not tried again until the head changes (or RETRY_AFTER).
+            run_id = _record_pull_failure(conn, name, pull, started, job)
+            if run_id is not None and detail:
+                detail = detail.replace("; nothing was recorded", "; recorded as a scan error")
         if pull is not None:
             # Which pull request, in the audit row too: scan_triggers has no ref of its own.
             detail = f"pull request #{pull.number} at {pull.head[:12]}" + (f": {detail}" if detail else "")
@@ -835,6 +847,18 @@ def run_one(
         )
         scanning.release_lock(state_dir)
     return outcome
+
+
+def _record_pull_failure(conn, name: str, pull: pullrequests.PullRequest, started: str, job) -> int | None:
+    """Record a pull request's failed scan (fetch, size limits, scan or deadline) as a scan-error run."""
+    try:
+        return history.record_run(
+            conn, history.RunInfo(name, pull.ref, pull.head, "pr", started), [], {}, {}, check_exit=2
+        ).run_id
+    except (ShoalscanError, sqlite3.Error) as exc:
+        if job is not None:
+            job.say(f"the scan error could not be recorded: {str(exc)[:200]}")
+        return None
 
 
 def run_nightly(state_dir: Path, targets: scanning.Targets, log, wait_seconds: int | None = None) -> dict[str, str]:
@@ -875,10 +899,10 @@ def discover_pull_requests(targets: scanning.Targets, target: scanning.Target) -
     )
 
 
-def _recorded_pull_runs(targets: scanning.Targets, name: str) -> list[tuple[str, str]]:
+def _recorded_pull_runs(targets: scanning.Targets, name: str) -> list[pullrequests.Recorded]:
     conn = history.open_for_write(targets.history_db or history.default_db_path())
     try:
-        return history.pull_request_runs(conn, name)
+        return [pullrequests.Recorded(*row) for row in history.pull_request_runs(conn, name)]
     finally:
         conn.close()
 
@@ -901,7 +925,7 @@ def run_pull_requests(
     each new head as a pull-request run, one after another (see `shoalscan.pullrequests`).
 
     A target's poll waits out cooldown_minutes since its last poll; every scan counts against, and stops at,
-    max_scans_per_hour, like a scan started from the dashboard; one poll scans at most max_pull_requests.
+    max_pr_scans_per_hour, a budget apart from the dashboard's; one poll scans at most max_pull_requests.
     Results are keyed by target name (the poll) and by `name#N` (one pull request).
     """
     discover = discover or discover_pull_requests
@@ -945,21 +969,26 @@ def run_pull_requests(
         )
         log.write(
             f"pull requests: {name}: {len(listing.pulls)} pull request refs, {mergeable} with a merge ref; "
-            f"{results[name][8:]}, {chosen.not_open} closed or never scanned without a merge ref\n"
+            f"{results[name][8:]}, {len(chosen.failed)} waiting to retry a scan error, {len(chosen.throttled)} "
+            f"scanned within the hour, {chosen.not_open} closed or never scanned without a merge ref\n"
         )
         for pull in chosen.deferred:
             results[f"{name}#{pull.number}"] = "deferred: over max_pull_requests, next poll"
+        for pull in chosen.throttled:
+            results[f"{name}#{pull.number}"] = "deferred: this pull request was scanned less than an hour ago"
+        for pull in chosen.failed:
+            results[f"{name}#{pull.number}"] = "deferred: its last scan was a scan error, tried again after a day"
         for pull in chosen.to_scan:
             label = f"{name}#{pull.number}"
-            if scanning.hourly_wait(targets, scanning.read_requests(state_dir)):
-                results[label] = "deferred: the hourly limit (max_scans_per_hour) is reached, next poll"
+            if scanning.hourly_wait(targets, scanning.read_requests(state_dir), pull_requests=True):
+                results[label] = "deferred: the hourly limit (max_pr_scans_per_hour) is reached, next poll"
                 log.write(f"pull requests: {label}: {results[label][10:]}\n")
                 continue
             deadline = time.monotonic() + wait
             while scanning.lock_holder(state_dir) is not None and time.monotonic() < deadline:
                 time.sleep(2)
             requests = scanning.read_requests(state_dir)
-            requests["recent"].append(time.time())
+            requests["pr_recent"].append(time.time())
             scanning.write_requests(state_dir, requests)
             try:
                 results[label] = run_one(state_dir, targets, name, PR_WHO, log, PR_TRIGGER, pull=pull)

@@ -16,10 +16,17 @@ How "open" is decided, and its limits (checked against github.com):
 - So a pull request is a candidate when it has a merge ref, or when an earlier
   pull-request run of the same `refs/pull/N/head` is recorded (an open pull
   request with conflicts that was scanned before still gets its new heads
-  scanned). A head that already has a recorded pull-request run is skipped.
-  Candidates go newest first, and a poll scans at most `max_pull_requests`.
-  A closed pull request that kept its merge ref is scanned at most once,
-  because its head never changes again.
+  scanned). A head that already has a recorded pull-request run with results
+  is skipped. A head whose run was a scan error is tried again only after
+  RETRY_AFTER, after every other candidate. A closed pull request that kept
+  its merge ref is scanned at most once, because its head never changes again.
+
+Fairness, because anyone can open or push to a pull request: a pull request
+is scanned at most once per PER_PULL_INTERVAL, however often it is pushed to,
+and candidates go in order of when their pull request was last scanned
+(never first, then the longest ago; lower numbers first among equals), so one
+busy pull request cannot keep the others waiting. A poll scans at most
+`max_pull_requests`.
 
 Fail closed: when `git ls-remote` fails, times out, writes more than
 MAX_LISTING_BYTES, prints a line that is not `<sha>\\t<ref>`, lists a ref twice,
@@ -37,6 +44,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 from shoalscan.errors import SetupError
 
@@ -45,6 +53,10 @@ MAX_PULL_NUMBER = 10**9
 _SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _PULL_REF = re.compile(r"refs/pull/([1-9][0-9]*)/(head|merge)")
 _HEAD_REF = re.compile(r"refs/pull/([1-9][0-9]{0,9})/head")
+# A head whose run was a scan error is tried again after this long; a pull request is scanned at most once per
+# PER_PULL_INTERVAL.
+RETRY_AFTER = timedelta(hours=24)
+PER_PULL_INTERVAL = timedelta(hours=1)
 
 
 class DiscoveryError(SetupError):
@@ -73,11 +85,23 @@ class Listing:
     pulls: dict[int, PullRequest]
 
 
+@dataclass(frozen=True)
+class Recorded:
+    """A recorded pull-request run of this repository, as `history.pull_request_runs` lists it."""
+
+    ref: str
+    commit: str
+    outcome: str
+    scanned_at: str  # 2026-10-24T10:00:00Z
+
+
 @dataclass
 class Selection:
     to_scan: list[PullRequest] = field(default_factory=list)
     deferred: list[PullRequest] = field(default_factory=list)  # over the cap; next poll
-    already_scanned: list[PullRequest] = field(default_factory=list)  # the head has a recorded run
+    already_scanned: list[PullRequest] = field(default_factory=list)  # the head has a run with results
+    failed: list[PullRequest] = field(default_factory=list)  # a scan error, tried again after RETRY_AFTER
+    throttled: list[PullRequest] = field(default_factory=list)  # scanned less than PER_PULL_INTERVAL ago
     not_open: int = 0  # head refs without a merge ref and never scanned: closed, or unknown
 
 
@@ -135,25 +159,46 @@ def head_ref_number(ref: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def select(listing: Listing, recorded: list[tuple[str, str]], cap: int) -> Selection:
-    """What one poll scans. `recorded` is the (ref, commit) of every pull-request run of this repository.
+def _time(stamp: str) -> datetime:
+    return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
-    A candidate has a merge ref, or a recorded run of its head ref; a head commit that already has a recorded
-    pull-request run is skipped, whatever its ref. Newest first, at most `cap`.
+
+def select(listing: Listing, recorded: list[Recorded], cap: int, now: datetime | None = None) -> Selection:
+    """What one poll scans, given every recorded pull-request run of this repository (see the module's notes).
+
+    A candidate has a merge ref, or a recorded run of its head ref. A head commit with a recorded run that has
+    results is skipped, whatever its ref; one whose runs are all scan errors waits RETRY_AFTER and then goes
+    last. A pull request scanned less than PER_PULL_INTERVAL ago waits. The rest go in order of when their pull
+    request was last scanned (never first), lower numbers first among equals, at most `cap`.
     """
-    commits = {commit for _ref, commit in recorded}
-    seen = {n for n in (head_ref_number(ref) for ref, _commit in recorded) if n is not None}
+    now = now or datetime.now(timezone.utc)
+    by_commit: dict[str, list[Recorded]] = {}
+    last_scan: dict[int, datetime] = {}
+    for run in recorded:
+        by_commit.setdefault(run.commit, []).append(run)
+        number = head_ref_number(run.ref)
+        if number is not None:
+            when = _time(run.scanned_at)
+            last_scan[number] = max(when, last_scan.get(number, when))
+    never = datetime.min.replace(tzinfo=timezone.utc)
     out = Selection()
     candidates = []
-    for number in sorted(listing.pulls, reverse=True):
+    for number in sorted(listing.pulls):
         pull = listing.pulls[number]
-        if not pull.has_merge_ref and number not in seen:
+        runs = by_commit.get(pull.head, [])
+        if not pull.has_merge_ref and number not in last_scan:
             out.not_open += 1
-        elif pull.head in commits:
+        elif any(r.outcome != "scan_error" for r in runs):
             out.already_scanned.append(pull)
+        elif runs and now - max(_time(r.scanned_at) for r in runs) < RETRY_AFTER:
+            out.failed.append(pull)
+        elif number in last_scan and now - last_scan[number] < PER_PULL_INTERVAL:
+            out.throttled.append(pull)
         else:
-            candidates.append(pull)
-    out.to_scan, out.deferred = candidates[:cap], candidates[cap:]
+            candidates.append((bool(runs), last_scan.get(number, never), number, pull))
+    candidates.sort(key=lambda c: c[:3])
+    ordered = [c[3] for c in candidates]
+    out.to_scan, out.deferred = ordered[:cap], ordered[cap:]
     return out
 
 

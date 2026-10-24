@@ -236,8 +236,10 @@ class Targets:
     # The checkout of the commit being scanned: its total size (as git's tree lists it) and its files.
     max_checkout_mb: int = 2048
     max_checkout_files: int = 200_000
-    # At most this many pull requests are scanned by one `scanjob --pull-requests` poll.
+    # At most this many pull requests are scanned by one `scanjob --pull-requests` poll, and in one hour (a
+    # budget of their own: pull-request scans never use up the dashboard's max_scans_per_hour).
     max_pull_requests: int = 10
+    max_pr_scans_per_hour: int = 6
     # Scans fail unless the scanners can run without network access (see shoalscan.process).
     require_network_sandbox: bool = True
     mirrors: dict[str, Path] = field(default_factory=dict)
@@ -489,6 +491,7 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
         "min_free_mb",
         "max_clone_mb",
         "max_pull_requests",
+        "max_pr_scans_per_hour",
         "max_checkout_mb",
         "max_checkout_files",
         "require_network_sandbox",
@@ -578,6 +581,7 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
         min_free_mb=_int(data.get("min_free_mb", 2048), "min_free_mb", 0, 10_000_000),
         max_clone_mb=_int(data.get("max_clone_mb", 2048), "max_clone_mb", 1, 10_000_000),
         max_pull_requests=_int(data.get("max_pull_requests", 10), "max_pull_requests", 1, 100),
+        max_pr_scans_per_hour=_int(data.get("max_pr_scans_per_hour", 6), "max_pr_scans_per_hour", 1, 60),
         max_checkout_mb=_int(data.get("max_checkout_mb", 2048), "max_checkout_mb", 1, 10_000_000),
         max_checkout_files=_int(data.get("max_checkout_files", 200_000), "max_checkout_files", 1, 100_000_000),
         require_network_sandbox=_bool(data.get("require_network_sandbox", True), "require_network_sandbox"),
@@ -612,6 +616,7 @@ def dump_targets(t: Targets, raw_top: dict) -> str:
         "min_free_mb",
         "max_clone_mb",
         "max_pull_requests",
+        "max_pr_scans_per_hour",
         "max_checkout_mb",
         "max_checkout_files",
     ):
@@ -715,8 +720,10 @@ def read_json(path: Path) -> dict:
 #
 # scan_requests.json holds when each target was last asked for (by name; a
 # pull-request poll of a target under "<name>#pull-requests", which no target
-# name can be) and the times of the last hour's scans, which the dashboard and
-# `scanjob --pull-requests` both count against max_scans_per_hour.
+# name can be), the times of the last hour's scans from the dashboard
+# ("recent", against max_scans_per_hour) and, apart, those of pull-request
+# scans ("pr_recent", against max_pr_scans_per_hour), so pull requests, which
+# anyone can open, never use up the dashboard's budget.
 
 HOUR = 3600
 PULL_REQUESTS_KEY = "#pull-requests"
@@ -725,8 +732,16 @@ PULL_REQUESTS_KEY = "#pull-requests"
 def read_requests(state_dir: Path) -> dict:
     data = read_json(state_dir / REQUESTS_FILE)
     targets = data.get("targets") if isinstance(data.get("targets"), dict) else {}
-    recent = [t for t in data.get("recent", []) if isinstance(t, (int, float)) and time.time() - t < HOUR]
-    return {"targets": {k: v for k, v in targets.items() if isinstance(v, (int, float))}, "recent": recent}
+
+    def last_hour(key: str) -> list:
+        values = data.get(key) if isinstance(data.get(key), list) else []
+        return [t for t in values if isinstance(t, (int, float)) and time.time() - t < HOUR]
+
+    return {
+        "targets": {k: v for k, v in targets.items() if isinstance(v, (int, float))},
+        "recent": last_hour("recent"),
+        "pr_recent": last_hour("pr_recent"),
+    }
 
 
 def write_requests(state_dir: Path, requests: dict) -> None:
@@ -739,12 +754,13 @@ def cooldown_wait(targets: Targets, key: str, requests: dict) -> int:
     return max(0, int(last + targets.cooldown_seconds - time.time())) if last else 0
 
 
-def hourly_wait(targets: Targets, requests: dict) -> int:
-    """Seconds until the hourly cap allows another scan."""
-    recent = sorted(requests["recent"])
-    if len(recent) < targets.max_scans_per_hour:
+def hourly_wait(targets: Targets, requests: dict, pull_requests: bool = False) -> int:
+    """Seconds until the hourly cap allows another scan: the dashboard's, or the pull-request scans' own."""
+    recent = sorted(requests["pr_recent" if pull_requests else "recent"])
+    cap = targets.max_pr_scans_per_hour if pull_requests else targets.max_scans_per_hour
+    if len(recent) < cap:
         return 0
-    return max(0, int(recent[-targets.max_scans_per_hour] + HOUR - time.time()))
+    return max(0, int(recent[-cap] + HOUR - time.time()))
 
 
 # ---------------------------------------------------------------- the lock

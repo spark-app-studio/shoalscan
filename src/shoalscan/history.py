@@ -1349,14 +1349,15 @@ def run_commit(conn: sqlite3.Connection, repo: str, run_id: int) -> tuple[str, s
     return (row[0], row[1], row[2], row[3]) if row else None
 
 
-def pull_request_runs(conn: sqlite3.Connection, repo: str) -> list[tuple[str, str]]:
-    """The (ref, commit) of every pull-request run of this repository, whatever its outcome."""
+def pull_request_runs(conn: sqlite3.Connection, repo: str) -> list[tuple[str, str, str, str]]:
+    """The (ref, commit, outcome, scanned_at) of every pull-request run of this repository."""
     rows = conn.execute(
-        "SELECT runs.ref, runs.commit_sha FROM runs JOIN repos ON repos.id = runs.repo_id "
+        "SELECT runs.ref, runs.commit_sha, COALESCE(runs.outcome, CASE runs.result WHEN 'pass' THEN 'passed' ELSE "
+        "'blocked' END), runs.scanned_at FROM runs JOIN repos ON repos.id = runs.repo_id "
         "WHERE repos.name = ? AND runs.kind = 'pr'",
         (repo,),
     ).fetchall()
-    return [(row[0], row[1]) for row in rows]
+    return [(row[0], row[1], row[2], row[3]) for row in rows]
 
 
 def list_runs(conn: sqlite3.Connection, repo: str) -> list[dict]:

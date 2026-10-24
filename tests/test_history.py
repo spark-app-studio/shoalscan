@@ -67,10 +67,10 @@ class PullRequestRunTests(HistoryTestCase):
         self.assertEqual(
             sorted(history.pull_request_runs(self.conn, "acme/app")),
             [
-                ("refs/pull/4/merge", "4" * 40),
-                ("refs/pull/7/head", "1" * 40),
-                ("refs/pull/7/head", "2" * 40),
-                ("refs/pull/9/head", "3" * 40),
+                ("refs/pull/4/merge", "4" * 40, "passed", "2026-10-04T00:00:00Z"),
+                ("refs/pull/7/head", "1" * 40, "passed", "2026-10-01T00:00:00Z"),
+                ("refs/pull/7/head", "2" * 40, "blocked", "2026-10-03T00:00:00Z"),
+                ("refs/pull/9/head", "3" * 40, "passed", "2026-10-02T00:00:00Z"),
             ],
         )
         self.assertEqual(history.pull_request_runs(self.conn, "acme/other"), [])

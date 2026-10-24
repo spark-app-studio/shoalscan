@@ -1018,7 +1018,8 @@
         el("td", null, "#" + p.number),
         el("td", { "class": "mono", title: r.commit }, r.commit.slice(0, 10)),
         el("td", null, fmtTime(r.scanned_at)),
-        el("td", { "class": cls }, internalLink(M.href("runs", { run: r.id }), r.status.label, "Show the detail of run " + r.id)),
+        el("td", { "class": cls }, internalLink(M.href("runs", { run: r.id }), r.status.label, "Show the detail of run " + r.id),
+          p.error ? el("div", { "class": "muted small" }, p.error) : ""),
         num(r.new_blocking), num(r["new"]), num(r.unscanned.changed_and_unscanned), el("td", { "class": "num" }, String(p.runs))));
     });
     $("runs-pulls-more").textContent = pulls.total > pulls.items.length
