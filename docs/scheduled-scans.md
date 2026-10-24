@@ -33,6 +33,7 @@ A public repository's pull requests should not run on your own CI runners: anyon
 
 ```toml
 max_pull_requests = 10       # optional: at most this many pull requests scanned per poll (1 to 100)
+max_pr_scans_per_hour = 6    # optional: pull-request scans per hour, a budget apart from the dashboard's (1 to 60)
 
 [[target]]
 name = "owner/project"
@@ -42,26 +43,45 @@ nightly = true
 pull_requests = true         # set by hand only
 ```
 
-Each poll does this for every enabled target with `pull_requests = true`, one after another:
+Everything in a pull request is treated as written by an attacker: its code, its file names, its size, its configuration and how often it is pushed to. Each poll does this for every enabled target with `pull_requests = true`, one after another:
 
-1. **List the pull requests.** One anonymous `git ls-remote` of the source lists `refs/heads/<branch>`, `refs/pull/*/head` and `refs/pull/*/merge`. It runs with the same git hardening as every other fetch: https only, no prompts, no credential helpers, no redirects. It does not use the GitHub API, so it needs no token and meets no API rate limit.
-2. **Decide which ones are open.** GitHub keeps `refs/pull/N/head` for every pull request ever opened, so a head ref alone says nothing. `refs/pull/N/merge`, GitHub's test merge with the base branch, exists for open pull requests that can be merged, so a pull request with a merge ref is a candidate. An open pull request with conflicts may have no merge ref; it is still a candidate when an earlier pull-request run of its `refs/pull/N/head` is recorded, so its new heads keep being scanned.
-3. **Skip what is already scanned.** A head commit that already has a pull-request run in the history is skipped, whatever recorded it. The rest are scanned newest first, at most `max_pull_requests` per poll; the others wait for the next poll.
-4. **Scan each head as a pull-request run.** The worker fetches `refs/pull/N/head` into a ref of its own in the existing clone (`refs/shoalscan/pull/N`, removed afterwards), checks that it is still the commit the listing showed, and scans it in a temporary worktree, exactly like a scheduled scan: the same lock, deadline (`timeout_minutes`), free-space check (`min_free_mb`), clone size limit (`max_clone_mb`), network sandbox and git hardening, so no hook, filter driver, LFS download or submodule runs on the fetched code. The run is recorded with `--kind pr` and the ref `refs/pull/N/head`.
+1. **List the pull requests.** One anonymous `git ls-remote` of the source lists `refs/heads/<branch>`, `refs/pull/*/head` and `refs/pull/*/merge`. It runs with the same git hardening as every other fetch (https only, no prompts, no credential helpers, no redirects) and with `HOME=/nonexistent`, so no `~/.netrc` is ever read. It does not use the GitHub API, so it needs no token and meets no API rate limit.
+2. **Decide which ones are open.** GitHub keeps `refs/pull/N/head` for every pull request ever opened, so a head ref alone says nothing. A pull request is a candidate when:
+   - it has `refs/pull/N/merge`, GitHub's test merge with the base branch, which exists for open pull requests that can be merged;
+   - an earlier pull-request run of its `refs/pull/N/head` is recorded, so an open pull request that later gets conflicts keeps being scanned; or
+   - the target's poll state says so. The first poll of a target writes `pull_requests/<target>.json` in the state directory, with the highest pull request number it saw (the high-water mark) and every head it listed. From then on, a pull request above the mark (opened since polling began, such as one that conflicts from its first push and so never gets a merge ref), or one whose head moved since the previous poll, is a candidate, and stays one. The hundreds of closed pull requests whose head refs GitHub keeps are never scanned by the first poll, and later only when one moves.
+3. **Skip what is already scanned, fairly.** A head that already has a pull-request run with results is skipped, whatever recorded it, as long as nothing it depends on changed (see below). A pull request is scanned at most once an hour, however often it is pushed to. The candidates go in order of when their pull request was last scanned: never first, then the longest ago, lower numbers first among equals; heads whose results are out of date come after the never-scanned ones, and retries of scan errors last. At most `max_pull_requests` go per poll and `max_pr_scans_per_hour` per hour; the others wait for the next poll. So one busy pull request, or a flood of new ones, cannot keep the others waiting for long, and pull requests never use up the dashboard's `max_scans_per_hour` or delay the nightly job.
+4. **Fetch the head into a throwaway repository.** The worker fetches `refs/pull/N/head` into a bare repository in its temporary work directory that borrows the branch clone's objects read-only (`objects/info/alternates`), checks that it is still the commit the listing showed, and removes that repository afterwards. The pull request's objects never enter the branch clone or count against its size; they have their own `max_clone_mb` limit, and a fetch that grows past it is stopped.
+5. **Check the size before checking out.** Git objects are compressed, so a few kilobytes of objects can expand to gigabytes. Before the checkout, the worker lists the commit's tree and refuses it when it would be larger than `max_checkout_mb`, has more files than `max_checkout_files`, has a path deeper than 64 directories, or the disk cannot hold it twice (Gitleaks may copy it) besides `min_free_mb`. The size is also watched while git writes the checkout.
+6. **Scan the head as a pull-request run**, in a temporary worktree, exactly like a scheduled scan: the same lock, deadline (`timeout_minutes`), network sandbox and git hardening, so no hook, filter driver, LFS download or submodule runs on the fetched code, and scanner output is stripped of control and escape sequences before it reaches the log. The run is recorded with `--kind pr` and the ref `refs/pull/N/head`.
 
-The pull request never decides how it is checked. Its policy is the one a scheduled scan of the target uses: the target's configuration file or managed policy, else the `.shoalscan.toml` at the head of the registered branch, read from git. Its baseline is the target's baseline file outside the clone. The repository rule directories the policy names are read from the head of the registered branch (`scan --rules-commit`), and the changed files are listed against the merge base of the pull request and that head (`check --changed-since`), so a changed file that could not be fully scanned fails the run, as it does under `--policy-ref` in CI. A new finding is one the target's baseline does not accept.
+The **head** of the pull request is scanned, not GitHub's merge result: the code the author wrote, compared with its merge base on the registered branch.
 
-The results stay on the dashboard: the Runs page lists each pull request with its latest run, its number and its head commit ([The pages](dashboard.md#the-pages)). Nothing is posted to the pull request or anywhere else.
+The pull request never decides how it is checked:
 
-Polls respect the dashboard's limits. A target is polled again only after `cooldown_minutes`, and every pull-request scan counts against `max_scans_per_hour`, which the dashboard's own scans share; a poll stops scanning when the hourly cap is reached and leaves the rest for the next poll. Every scan is audited on the Runs page under "pull-request poll", with the pull request's number and head commit.
+- Its policy is the one a scheduled scan of the target uses: the target's configuration file or managed policy, else the `.shoalscan.toml` at the head of the registered branch, read from git. Its baseline is the target's baseline file outside the clone.
+- The repository rule directories the policy names are read from the head of the registered branch (`scan --rules-commit`).
+- The changed files are listed against the merge base of the pull request and that head (`check --changed-since`), so a changed file that could not be fully scanned fails the run, as it does under `--policy-ref` in CI.
+- A new finding is one the target's baseline does not accept. An inline suppression the pull request adds on one of its changed lines fails the run too: a change from outside cannot silence a finding itself.
+- A stale baseline entry (the pull request fixed a baselined finding) is reported but does not fail the run: the pull request cannot change the baseline, and a fix is no new risk.
+- The results depend on the head of the registered branch and the target's policy and baseline files as well as on the pull request's head. The poll state keeps a scan key (a SHA-256 of those) for each head's results, and a head whose results were recorded under another key is scanned again, within the limits above.
 
-The poll fails closed. When the listing fails, times out, prints more than 32 MB, has a line that is not a ref, lists a ref twice, or does not show the registered branch (the proof that it really is a listing of that repository), the poll records a scan error in the scan audit and exits with 1; it never reports "nothing to scan". A pull request that moved between the listing and the fetch records nothing and is scanned on the next poll, and so is one whose scan timed out or failed before it was recorded. A head whose run was recorded as a scan error is not tried again until it changes.
+The results stay on the dashboard: the Runs page lists each pull request with its latest run, its number, its head commit, its new and new blocking findings, its suppressions and new suppressions, and, for a failed scan, why it failed ([The pages](dashboard.md#the-pages)). Pull-request runs never feed the trend charts or the headline run. Nothing is posted to the pull request or anywhere else.
 
-Limits of the listing, as GitHub behaves today:
+A target is polled again only after `cooldown_minutes`. The dashboard and the poll change `scan_requests.json` under the same lock, and a reservation in the hourly budget is given back when its scan never started. Every scan is audited on the Runs page under "pull-request poll", with the pull request's number and head commit.
 
-- An open pull request with conflicts and no earlier run may have no merge ref, so it is not found until its conflicts are resolved.
-- Some closed pull requests, and pull requests GitHub has deleted, keep their merge refs. Each one is scanned at most once, because its head never changes again. The first poll of a busy repository can find several of them; `max_pull_requests` bounds each poll, newest first.
+The poll fails closed:
+
+- When the listing fails, times out, prints more than 32 MB, has a line that is not a ref, lists a ref twice, or does not show the registered branch (the proof that it really is a listing of that repository), or when the poll state cannot be read, the poll records a scan error in the scan audit and exits with 1; it never reports "nothing to scan".
+- A head whose fetch, size check or scan fails or times out is recorded as a pull-request run with the outcome scan error, so it shows on the dashboard and is not tried again until it changes, or after a day, after every other candidate.
+- A pull request that moved between the listing and the fetch records nothing; its new head is scanned on the next poll.
+
+Limits, as GitHub behaves today:
+
+- An open pull request that existed before the first poll, conflicts with its base and never had a run has no merge ref, so it is not found until its head moves or its conflicts are resolved.
+- Some closed pull requests, and pull requests GitHub has deleted, keep their merge refs. Each one is scanned at most once, because its head never changes again.
 - A pull request is checked against the target's registered branch, whatever branch it targets.
+- Inline markers of other scanners (Trivy's) on changed lines are not counted as new suppressions.
 - Forges other than GitHub name their pull request refs differently (GitLab uses `refs/merge-requests/N/head`); only GitHub's `refs/pull/` refs are listed.
 
 ### Running the poll regularly

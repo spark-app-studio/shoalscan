@@ -89,6 +89,8 @@ shoalscan baseline rename-path src/old_name.py src/new_name.py
 
 ## Pull requests: the policy comes from the base branch
 
+`check --changed-since <commit>` is for a change checked against a configuration and baseline kept outside it, as the scan worker checks a pull request of a public repository ([details](scheduled-scans.md#scanning-the-open-pull-requests-of-a-public-repository)). The changed files are listed against the merge base with that commit, and a changed file that was not fully scanned fails, as under `--policy-ref`. An inline suppression whose marker is on a line the change added fails too, because the change's author is not trusted to silence findings. Stale baseline entries are reported but do not fail: the change cannot edit that baseline. Pair it with `scan --rules-commit <commit>`, so the repository rule directories also come from that commit.
+
 On a pull request, run both commands with `--policy-ref` set to the base commit's full SHA. In GitHub Actions that is `github.event.pull_request.base.sha`:
 
 ```sh
