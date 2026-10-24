@@ -392,7 +392,7 @@ def _new_silenced(meta: dict, changed: set[str], added, markers: list[dict]) -> 
             continue
         if path not in lines:
             lines[path] = added(path)
-        if not lines[path] & set(range(start, min(end, start + 100_000) + 1)):
+        if not any(start <= line <= end for line in lines[path]):
             continue
         if any(m.get("path") == path and m.get("line") in (start - 1, start) for m in markers):
             continue

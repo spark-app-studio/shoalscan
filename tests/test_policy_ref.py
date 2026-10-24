@@ -301,6 +301,9 @@ class PolicyRefTests(unittest.TestCase):
         # Any added line inside the block counts; none, or an unchanged file, does not.
         self.assertEqual(_new_silenced(meta, {"a.tf"}, lambda p: {9}, [])[0]["line"], 4)
         self.assertEqual(_new_silenced(meta, {"a.tf"}, lambda p: {10}, []), [])
+        # However long the silenced block, an added line at its far end counts.
+        far = {"silenced_total": 1, "silenced_list": [{**span, "end": 5_000_000}]}
+        self.assertEqual(len(_new_silenced(far, {"a.tf"}, lambda p: {4_999_999}, [])), 1)
         self.assertEqual(_new_silenced(meta, set(), lambda p: {5}, []), [])
         # A new marker right above it already counts the same thing.
         self.assertEqual(_new_silenced(meta, {"a.tf"}, lambda p: {5}, [{"path": "a.tf", "line": 3}]), [])
