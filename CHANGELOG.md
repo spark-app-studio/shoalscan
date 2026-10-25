@@ -2,7 +2,7 @@
 
 All notable changes to Shoalscan are recorded here.
 
-## Unreleased
+## 0.4.0 (2026-10-24)
 
 ### Added
 
