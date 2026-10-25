@@ -98,6 +98,7 @@ def cmd_record(args: argparse.Namespace) -> int:
             review_transitions=not args.commit_rescan,
             max_runs=args.max_runs,
             keep_pr_days=args.keep_pr_days,
+            max_pr_runs=args.max_pr_runs,
         )
     finally:
         conn.close()
@@ -256,7 +257,8 @@ def cmd_triage_export(args: argparse.Namespace) -> int:
             "rf.run_id "
             " JOIN repos rp ON rp.id = r.repo_id WHERE rp.name = fr.repo_name AND fk.tool = fr.tool AND fk.rule = "
             "fr.rule "
-            " AND fk.path = fr.path AND fk.fingerprint = fr.fingerprint ORDER BY r.scanned_at DESC LIMIT 1) "
+            " AND fk.path = fr.path AND fk.fingerprint = fr.fingerprint AND r.kind = 'scheduled' "
+            "ORDER BY r.scanned_at DESC LIMIT 1) "
             "FROM finding_reviews fr WHERE fr.repo_name = ? AND fr.status IN ('false_positive', 'accepted_risk', "
             "'wont_fix') "
             "ORDER BY fr.path, fr.rule, fr.fingerprint",
@@ -529,7 +531,13 @@ def add_commands(sub: argparse._SubParsersAction) -> None:
         "--max-runs",
         type=int,
         default=history.DEFAULT_MAX_RUNS,
-        help=f"runs kept per repository (default: {history.DEFAULT_MAX_RUNS})",
+        help=f"scheduled runs kept per repository (default: {history.DEFAULT_MAX_RUNS})",
+    )
+    p.add_argument(
+        "--max-pr-runs",
+        type=int,
+        default=history.DEFAULT_MAX_PR_RUNS,
+        help=f"pull-request runs kept per repository, counted apart (default: {history.DEFAULT_MAX_PR_RUNS})",
     )
     p.add_argument(
         "--keep-pr-days",

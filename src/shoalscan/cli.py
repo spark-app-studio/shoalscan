@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import hashlib
 import json
 import sys
@@ -89,6 +90,15 @@ class Policy:
         }
 
 
+def _require_attr_source() -> None:
+    """Refuse a git that ignores GIT_ATTR_SOURCE (older than 2.40), as the scan worker does: with such a git the
+    change's own .gitattributes (a clean filter, say) would shape the diffs that decide what the change touched."""
+    from shoalscan.dashboard.scanning import GIT_TOO_OLD, git_attr_probe
+
+    if not git_attr_probe():
+        raise SetupError(GIT_TOO_OLD)
+
+
 def _policy(args: argparse.Namespace) -> Policy:
     ref = getattr(args, "policy_ref", None)
     path = Path(args.config) if args.config else Path(args.repo) / CONFIG_NAME
@@ -99,6 +109,7 @@ def _policy(args: argparse.Namespace) -> Policy:
         raise SetupError(
             "--config and --policy-ref cannot be used together: with a policy ref the configuration comes from the ref"
         )
+    _require_attr_source()
     repo = Path(args.repo)
     commit = gitref.resolve_commit(repo, ref)
     data = gitref.show_file(repo, commit, CONFIG_NAME)
@@ -184,15 +195,35 @@ def _do_scan(args: argparse.Namespace):
             _print_adoption(policy)
         # Without a policy ref, `check` may accept an edit to the baseline it reads.
         baseline = _baseline_path(args, policy.config) if policy.ref is None else None
-        result = run_scan(
-            Path(args.repo),
-            policy.config,
-            tools,
-            out,
-            policy=policy.record(),
-            baseline=baseline,
-            require_network_sandbox=getattr(args, "require_network_sandbox", False),
-        )
+        rules_commit = getattr(args, "rules_commit", None)
+        if rules_commit is None:
+            result = run_scan(
+                Path(args.repo),
+                policy.config,
+                tools,
+                out,
+                policy=policy.record(),
+                baseline=baseline,
+                require_network_sandbox=getattr(args, "require_network_sandbox", False),
+            )
+            return result, policy.config
+        # An explicit configuration whose repository rule dirs come from another commit (the base branch's head,
+        # when the scan worker scans a pull request), never from the tree being scanned.
+        if policy.ref is not None or not args.config:
+            raise SetupError("--rules-commit needs --config and cannot be used with --policy-ref")
+        commit = gitref.resolve_commit(Path(args.repo), rules_commit)
+        with tempfile.TemporaryDirectory(prefix="shoalscan-policy-rules-") as tmp:
+            gitref.archive_dirs(Path(args.repo), commit, list(policy.config.opengrep.rule_dirs), Path(tmp))
+            result = run_scan(
+                Path(args.repo),
+                policy.config,
+                tools,
+                out,
+                rule_root=Path(tmp),
+                policy={**policy.record(), "rules_commit": commit},
+                baseline=baseline,
+                require_network_sandbox=getattr(args, "require_network_sandbox", False),
+            )
         return result, policy.config
     # The repository's own rules also come from the policy ref.
     with tempfile.TemporaryDirectory(prefix="shoalscan-policy-rules-") as tmp:
@@ -324,13 +355,75 @@ def _reported_in(meta: dict, findings: list, path: str) -> bool:
     return any(isinstance(s, dict) and s.get("path") == path for s in meta.get("suppression_list") or [])
 
 
+def _new_suppressions(meta: dict, changed: set[str], added) -> list[dict]:
+    """The inline suppressions whose marker is on a line the change added. The scan lists at most
+    MAX_SUPPRESSION_LIST of them; when it left some out, which are new cannot be told, and the check stops."""
+    listed = meta.get("suppression_list")
+    total = (meta.get("suppressions") or {}).get("total", 0)
+    if not isinstance(listed, list) or (isinstance(total, int) and total > len(listed)):
+        raise SetupError(
+            "the scan did not list every inline suppression, so the check cannot tell which ones the change added"
+        )
+    lines: dict[str, set[int]] = {}
+    out = []
+    for entry in listed:
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(path, str) or path not in changed:
+            continue
+        if entry.get("member"):
+            # A marker inside a changed chart archive: its line is a member's, which the archive's diff cannot
+            # show, so it counts as new.
+            out.append(entry)
+            continue
+        if path not in lines:
+            lines[path] = added(path)
+        if entry.get("line") in lines[path]:
+            out.append(entry)
+    return out
+
+
+def _new_silenced(meta: dict, changed: set[str], added, markers: list[dict]) -> list[dict]:
+    """The findings a scanner silenced because of an inline comment whose lines overlap lines the change added,
+    whether the comment is new or was already there (a marker silences the line below it, and a match or block that
+    starts there): a change must not hide new code under an old marker. One that a new marker of the same file
+    already explains (the marker on its first line or the line above) is not listed twice."""
+    listed = meta.get("silenced_list")
+    total = meta.get("silenced_total")
+    if not isinstance(listed, list) or not isinstance(total, int) or total > len(listed):
+        raise SetupError(
+            "the scan did not list every finding an inline comment silenced, so the check cannot tell which ones "
+            "the change hides"
+        )
+    lines: dict[str, list[int]] = {}  # each changed file's added lines, sorted, for a binary search per span
+    out = []
+    for span in listed:
+        path = span.get("path") if isinstance(span, dict) else None
+        start, end = (span.get("start"), span.get("end")) if isinstance(span, dict) else (None, None)
+        if not isinstance(path, str) or path not in changed or not isinstance(start, int) or not isinstance(end, int):
+            continue
+        if path not in lines:
+            lines[path] = sorted(added(path))
+        first = bisect.bisect_left(lines[path], start)
+        if first == len(lines[path]) or lines[path][first] > end:
+            continue
+        if any(m.get("path") == path and m.get("line") in (start - 1, start) for m in markers):
+            continue
+        out.append({"path": path, "line": start, "rules": [span.get("rule")], "silenced": span.get("tool")})
+    return out
+
+
 def cmd_check(args: argparse.Namespace) -> int:
+    if getattr(args, "changed_since", None):
+        _require_attr_source()  # before anything else is read (--policy-ref checks it in _policy)
     out = _out_dir(args)
     policy = _policy(args)
     config = policy.config
     repo = Path(args.repo)
     # A check that stops early must not leave an older details file behind.
     (out / CHECK_JSON).unlink(missing_ok=True)
+    if gitref.worktree_state(repo.resolve()) is not None:
+        # A path the scanners cannot report faithfully (not UTF-8, a control character) would pass unscanned.
+        gitref.check_path_names(repo)
     findings_sha256 = (
         hashlib.sha256((out / FINDINGS_JSON).read_bytes()).hexdigest() if (out / FINDINGS_JSON).is_file() else ""
     )
@@ -359,6 +452,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     baseline = load_baseline(baseline_path)
     base_baseline = None
     changed = None
+    new_suppressions = None
     added = None
     moved = None
     if policy.commit is not None:
@@ -377,6 +471,19 @@ def cmd_check(args: argparse.Namespace) -> int:
         def added(path: str) -> set[int]:
             return gitref.added_lines(repo, commit, path)
 
+    elif getattr(args, "changed_since", None):
+        # An explicit configuration and baseline, with the changed files listed against the merge base with
+        # another commit (the base branch's head, when the scan worker scans a pull request).
+        since = gitref.resolve_commit(repo, args.changed_since)
+        changed = gitref.changed_files(repo, since)
+        print(f"Changed files: compared with the merge base of HEAD and {since[:12]}.")
+
+        def added(path: str) -> set[int]:
+            return gitref.added_lines(repo, since, path)
+
+        new_suppressions = _new_suppressions(meta, set(changed), added)
+        new_suppressions += _new_silenced(meta, set(changed), added, new_suppressions)
+
     result = compare(
         findings,
         baseline,
@@ -394,6 +501,9 @@ def cmd_check(args: argparse.Namespace) -> int:
         adoption=policy.adoption,
         parse_warn_only=config.parse_warn_only,
         test_code_rules=config.test_code.rules,
+        new_suppressions=new_suppressions,
+        # A change checked against an outside baseline cannot remove its stale entries: they are reported only.
+        stale_blocks=not getattr(args, "changed_since", None),
     )
     write_atomic(out / CHECK_JSON, json.dumps(details(result, findings_sha256), sort_keys=True) + "\n")
     print(render_report(result))
@@ -503,7 +613,7 @@ def cmd_baseline_accept(args: argparse.Namespace) -> int:
     return 0
 
 
-def _policy_option(p: argparse.ArgumentParser) -> None:
+def _policy_option(p: argparse._ActionsContainer) -> None:
     p.add_argument(
         "--policy-ref",
         help=(
@@ -543,7 +653,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="fail unless the scanners can run in an operating-system network sandbox (sandbox-exec or unshare --net)",
     )
-    _policy_option(p)
+    group = p.add_mutually_exclusive_group()
+    _policy_option(group)
+    group.add_argument(
+        "--rules-commit",
+        metavar="COMMIT",
+        help=(
+            "with --config: read the repository rule dirs from this commit instead of the tree being scanned (a full "
+            "SHA or a refs/heads/ or refs/remotes/ ref)"
+        ),
+    )
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("check", help="compare findings with the baseline")
@@ -556,7 +675,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow a repository directory that is not a git work tree (the findings are then not tied to a commit)",
     )
-    _policy_option(p)
+    group = p.add_mutually_exclusive_group()
+    _policy_option(group)
+    group.add_argument(
+        "--changed-since",
+        metavar="COMMIT",
+        help=(
+            "with an explicit configuration and baseline: also fail on changed files that were not fully scanned, "
+            "comparing HEAD with its merge base with this commit (a full SHA or a refs/heads/ or refs/remotes/ ref)"
+        ),
+    )
     p.set_defaults(func=cmd_check)
 
     p = sub.add_parser("baseline", help="manage the baseline")

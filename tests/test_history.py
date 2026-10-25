@@ -46,6 +46,64 @@ class HistoryTestCase(unittest.TestCase):
         return self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
 
+class PullRequestRunTests(HistoryTestCase):
+    """Pull-request runs of refs/pull/N/head: the worker's dedupe query and the dashboard's per-pull-request list."""
+
+    def pr(self, ref: str, commit: str, at: str, kind: str = "pr", result: str = "pass") -> int:
+        return history.record_run(
+            self.conn,
+            history.RunInfo("acme/app", ref, commit, kind, at),
+            [],
+            {},
+            {"result": result, "findings": 0},
+        ).run_id
+
+    def test_new_suppressions_are_stored_and_block(self):
+        run_id = history.record_run(
+            self.conn,
+            history.RunInfo("acme/app", "refs/pull/3/head", "6" * 40, "pr", "2026-10-01T00:00:00Z"),
+            [],
+            {},
+            {"result": "fail", "findings": 0, "new_suppressions": 2},
+        ).run_id
+        data = Data(history.open_read_only(self.db))
+        try:
+            run = data.run(data.repo_id("acme/app"), run_id)
+        finally:
+            data.conn.close()
+        self.assertEqual(run["suppressions"]["new"], 2)
+        self.assertEqual(run["status"]["label"], "Blocked: 2 new inline suppressions")
+
+    def test_the_latest_run_of_each_pull_request(self):
+        self.pr("refs/pull/7/head", "1" * 40, "2026-10-01T00:00:00Z")
+        latest7 = self.pr("refs/pull/7/head", "2" * 40, "2026-10-03T00:00:00Z", result="fail")
+        latest9 = self.pr("refs/pull/9/head", "3" * 40, "2026-10-02T00:00:00Z")
+        self.pr("refs/pull/4/merge", "4" * 40, "2026-10-04T00:00:00Z")  # recorded by a CI job: not listed
+        self.pr("main", "5" * 40, "2026-10-05T00:00:00Z", kind="scheduled")
+        self.assertEqual(
+            sorted(history.pull_request_runs(self.conn, "acme/app")),
+            [
+                ("refs/pull/4/merge", "4" * 40, "passed", "2026-10-04T00:00:00Z"),
+                ("refs/pull/7/head", "1" * 40, "passed", "2026-10-01T00:00:00Z"),
+                ("refs/pull/7/head", "2" * 40, "blocked", "2026-10-03T00:00:00Z"),
+                ("refs/pull/9/head", "3" * 40, "passed", "2026-10-02T00:00:00Z"),
+            ],
+        )
+        self.assertEqual(history.pull_request_runs(self.conn, "acme/other"), [])
+        data = Data(history.open_read_only(self.db))
+        try:
+            pulls = data.pull_requests(data.repo_id("acme/app"))
+        finally:
+            data.conn.close()
+        self.assertEqual(pulls["total"], 2)
+        self.assertEqual(
+            [(p["number"], p["runs"], p["latest"]["id"], p["latest"]["commit"]) for p in pulls["items"]],
+            [(7, 2, latest7, "2" * 40), (9, 1, latest9, "3" * 40)],
+        )
+        self.assertEqual(pulls["items"][0]["latest"]["outcome"], "blocked")
+        self.assertEqual(pulls["items"][0]["latest"]["suppressions"]["new"], 0)
+
+
 class RecordTests(HistoryTestCase):
     def test_new_database_is_private_versioned_and_in_wal_mode(self):
         self.assertEqual(stat.S_IMODE(os.stat(self.db).st_mode) & 0o077, 0)
@@ -174,6 +232,31 @@ class RecordTests(HistoryTestCase):
             [r[0] for r in self.conn.execute("SELECT kind FROM runs ORDER BY id")], ["scheduled", "scheduled"]
         )
 
+    def test_pull_request_runs_never_push_scheduled_runs_or_their_reviews_out(self):
+        keep = finding("r", "kept.py", "k:0")
+        record(self.conn, self.tmp, "acme/app", "1" * 40, 1, [keep])
+        self.conn.execute(
+            "INSERT INTO finding_reviews (repo_name, tool, rule, path, fingerprint, status, description, updated_at, "
+            "updated_by) VALUES ('acme/app', 'opengrep', 'r', 'kept.py', 'k:0', 'accepted_risk', 'accepted', "
+            "'2026-09-01T00:00:00Z', 'a reviewer')"
+        )
+        # A flood of pull-request runs, each with its own finding and the scheduled run's finding too.
+        for n in range(2, 8):
+            record(
+                self.conn, self.tmp, "acme/app", f"{n:040x}", n, [keep, finding("p", f"pr{n}.py", f"{n}:0")], kind="pr"
+            )
+        repo_id = self.conn.execute("SELECT id FROM repos").fetchone()[0]
+        self.conn.execute("BEGIN")
+        history.prune(self.conn, repo_id, max_runs=1, keep_pr_days=90, max_pr_runs=2)
+        self.conn.execute("COMMIT")
+        kinds = [r for r in self.conn.execute("SELECT kind, commit_sha FROM runs ORDER BY scanned_at")]
+        self.assertEqual(kinds, [("scheduled", "1" * 40), ("pr", f"{6:040x}"), ("pr", f"{7:040x}")])
+        paths = {r[0] for r in self.conn.execute("SELECT path FROM finding_keys")}
+        self.assertEqual(paths, {"kept.py", "pr6.py", "pr7.py"})
+        self.assertEqual(self.count("finding_reviews"), 1)
+        with self.assertRaises(SetupError):
+            history.prune(self.conn, repo_id, max_runs=1, keep_pr_days=90, max_pr_runs=0)
+
     def test_too_many_findings_are_refused(self):
         items = [finding("r", "a.py", "1:0"), finding("r", "b.py", "2:0")]
         path = write_findings(self.tmp, items)
@@ -239,8 +322,10 @@ class DerivedMetricsTests(HistoryTestCase):
         self.assertEqual([p["baseline_size"] for p in o["series"]], [3, 3, 2, 2])
         self.assertEqual(o["series"][-1]["open"], {"ERROR": 1, "WARNING": 1, "INFO": 1})
         self.assertEqual((o["series"][-1]["unscanned_skipped"], o["series"][-1]["unscanned_errored"]), (2, 1))
-        # The latest run of any kind is the pull-request run.
-        self.assertEqual(o["latest_run"]["kind"], "pr")
+        # The headline run is the newest scheduled run, never the newer pull-request run.
+        self.assertEqual((o["latest_run"]["kind"], o["latest_run"]["scanned_at"][:10]), ("scheduled", "2026-09-22"))
+        self.assertEqual(self.data.latest_run_of("acme/app")["kind"], "scheduled")
+        self.assertEqual([r["latest"]["kind"] for r in self.data.repos() if r["name"] == "acme/app"], ["scheduled"])
 
     def test_new_fixed_time_to_fix_and_ages(self):
         o = self.data.overview(self.repo)
@@ -275,10 +360,14 @@ class DerivedMetricsTests(HistoryTestCase):
         )
         self.assertEqual(o["time_to_fix"]["fixed"], 0)
 
-    def test_a_repository_without_scheduled_runs_uses_all_runs(self):
+    def test_pull_request_runs_never_feed_the_trends_or_the_headline(self):
+        # On a public repository anyone can open a pull request; its runs are no part of the posture.
         record(self.conn, self.tmp, "acme/prs", "7" * 40, 3, [finding("r", "a.py", "1:0")], kind="pr")
-        o = self.data.overview(self.data.repo_id("acme/prs"))
-        self.assertEqual((o["trend_kind"], len(o["series"])), ("all", 1))
+        repo = self.data.repo_id("acme/prs")
+        o = self.data.overview(repo)
+        self.assertEqual((o["trend_kind"], len(o["series"]), o["latest_run"]), ("scheduled", 0, None))
+        self.assertIsNone(self.data.resolve_run(repo, None))
+        self.assertIsNone(self.data.latest_run_of("acme/prs"))
 
     def test_findings_filters_and_first_seen(self):
         run = self.data.resolve_run(self.repo, None)

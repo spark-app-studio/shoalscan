@@ -1,0 +1,23 @@
+# Scans the new heads of the open pull requests of every repository
+# registered in the dashboard's scan_targets.toml with pull_requests = true,
+# started by shoalscan-pull-requests.timer. It lists them with an anonymous
+# git ls-remote, needs no credentials and posts nothing anywhere.
+#
+#   1. Edit the path to shoalscan below.
+#   2. Copy both files to ~/.config/systemd/user/
+#   3. systemctl --user daemon-reload
+#      systemctl --user enable --now shoalscan-pull-requests.timer
+
+[Unit]
+Description=Shoalscan scans of the open pull requests of the registered repositories
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.cache/shoalscan/venv/bin/shoalscan scanjob --pull-requests --state-dir %h/.config/shoalscan/dashboard
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+TimeoutStartSec=6h

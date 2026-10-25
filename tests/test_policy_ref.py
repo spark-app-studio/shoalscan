@@ -177,6 +177,194 @@ class PolicyRefTests(unittest.TestCase):
         self.assertIn("  generated/huge.py", out)
         self.assertEqual(summary["unscanned"]["changed_but_excluded"], 1)
 
+    def explicit_policy(self) -> tuple[list[str], list[str]]:
+        """The base branch's configuration and baseline as files outside the repository, as the scan worker passes
+        them for a pull request."""
+        outside = Path(self.tmp.name) / "registered"
+        outside.mkdir(exist_ok=True)
+        (outside / "policy.toml").write_text(git(self.repo, "show", "main:.shoalscan.toml"), encoding="utf-8")
+        (outside / "baseline.toml").write_text(git(self.repo, "show", "main:baseline.toml"), encoding="utf-8")
+        return ["--config", str(outside / "policy.toml")], ["--baseline", str(outside / "baseline.toml")]
+
+    def run_explicit(self):
+        config, baseline = self.explicit_policy()
+        code, _, err = self.cli("scan", *config, "--rules-commit", "refs/heads/main")
+        self.assertEqual(code, 0, err)
+        code, out, err = self.cli("check", *config, *baseline, "--changed-since", "refs/heads/main")
+        line = [x for x in out.splitlines() if x.startswith("SHOALSCAN_SUMMARY ")]
+        return code, (json.loads(line[0].split(" ", 1)[1]) if line else {}), out + err
+
+    def test_rules_commit_keeps_the_base_rules_when_the_change_deletes_them(self):
+        # The change deletes the repository rule, relaxes its own policy and adds a new finding.
+        (self.repo / ".shoalscan.toml").write_text(
+            'baseline = "baseline.toml"\nexcludes = ["src"]\n[opengrep]\ncommunity_rules = false\n', encoding="utf-8"
+        )
+        (self.repo / "security-rules" / "pickle.yaml").unlink()
+        (self.repo / "src" / "more.py").write_text(
+            "import pickle\n\ndef more(b):\n    return pickle.loads(b)\n", encoding="utf-8"
+        )
+        self.commit("relax")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 1, out)
+        self.assertIn("repo.security-rules.no-pickle-loads", out)
+        self.assertEqual(summary["new_blocking"], 1)
+        self.assertIn("compared with the merge base of HEAD and", out)
+        findings = json.loads((self.out / "findings.json").read_text())
+        self.assertEqual(findings["policy"]["rules_commit"], git(self.repo, "rev-parse", "main").strip())
+
+    def test_changed_since_fails_a_changed_file_that_was_not_scanned(self):
+        (self.repo / "src" / "huge.py").write_text("y = 2\n" * 600, encoding="utf-8")
+        self.commit("big file")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(summary["unscanned"]["changed_and_unscanned"], 1)
+        # Without --changed-since the same check only reports it.
+        config, baseline = self.explicit_policy()
+        code, out, err = self.cli("check", *config, *baseline)
+        self.assertEqual(code, 0, out + err)
+
+    def test_changed_since_fails_a_suppression_the_change_added(self):
+        marker = "no" + "sem"
+        (self.repo / "src" / "more.py").write_text(
+            f"import pickle\n\ndef more(b):\n    return pickle.loads(b)  # {marker}: "
+            "repo.security-rules.no-pickle-loads #12 trusted input\n",
+            encoding="utf-8",
+        )
+        self.commit("silence it")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 1, out)
+        self.assertEqual((summary["new_suppressions"], summary["new_blocking"]), (1, 0))
+        self.assertIn("New inline suppressions on lines the change added (1)", out)
+        self.assertIn("src/more.py:4", out)
+        details = json.loads((self.out / "check.json").read_text())
+        self.assertEqual(details["new_suppressions"][0]["path"], "src/more.py")
+        # Without --changed-since (a trusted branch) a valid suppression is only counted.
+        config, baseline = self.explicit_policy()
+        code, out, err = self.cli("check", *config, *baseline)
+        self.assertEqual(code, 0, out + err)
+
+    def test_changed_since_fails_new_code_under_a_marker_that_was_already_there(self):
+        # The base branch holds a valid marker above a harmless line; the change puts new code on that line, which
+        # Opengrep then silences, though the change added no marker.
+        marker = "no" + "sem"
+        git(self.repo, "checkout", "-q", "main")
+        (self.repo / "src" / "old.py").write_text(
+            f"import pickle\n\ndef old(b):\n    # {marker}: repo.security-rules.no-pickle-loads #12 trusted\n"
+            "    return b\n",
+            encoding="utf-8",
+        )
+        self.commit("a marker on main")
+        git(self.repo, "checkout", "-q", "-B", "change")
+        (self.repo / "src" / "old.py").write_text(
+            f"import pickle\n\ndef old(b):\n    # {marker}: repo.security-rules.no-pickle-loads #12 trusted\n"
+            "    return pickle.loads(b)\n",
+            encoding="utf-8",
+        )
+        self.commit("new code under the old marker")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 1, out)
+        self.assertEqual((summary["new_suppressions"], summary["new_blocking"]), (1, 0))
+        self.assertIn("src/old.py:5  (repo.security-rules.no-pickle-loads; a finding opengrep silenced)", out)
+        findings = json.loads((self.out / "findings.json").read_text())
+        self.assertEqual(findings["silenced_total"], len(findings["silenced_list"]))
+        self.assertIn(("src/old.py", 5), [(e["path"], e["start"]) for e in findings["silenced_list"]])
+
+    def test_a_file_named_like_pathspec_magic_cannot_hide_its_added_lines(self):
+        # Without literal pathspecs, `git diff <base> -- ':(exclude)*.py'` prints nothing for this file, so its
+        # new marker would not count as new.
+        marker = "no" + "sem"
+        name = ":(exclude)*.py"
+        git(self.repo, "checkout", "-q", "main")
+        (self.repo / "src" / name).write_text("import pickle\n\ndef odd(b):\n    return b\n", encoding="utf-8")
+        self.commit("an odd name on main")
+        git(self.repo, "checkout", "-q", "-B", "change")
+        (self.repo / "src" / name).write_text(
+            f"import pickle\n\ndef odd(b):\n    return pickle.loads(b)  # {marker}: "
+            "repo.security-rules.no-pickle-loads #12 trusted\n",
+            encoding="utf-8",
+        )
+        self.commit("silence it under an odd name")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 1, out)
+        self.assertGreaterEqual(summary["new_suppressions"], 1)
+        self.assertIn(f"src/{name}:4", out)
+
+    def test_silenced_findings_cannot_be_told_from_a_cut_list(self):
+        from shoalscan.cli import _new_silenced
+
+        span = {"tool": "trivy", "rule": "AVD-1", "path": "a.tf", "start": 4, "end": 9}
+        with self.assertRaisesRegex(SetupError, "did not list every finding an inline comment silenced"):
+            _new_silenced({"silenced_total": 2, "silenced_list": [span]}, {"a.tf"}, lambda p: {5}, [])
+        with self.assertRaisesRegex(SetupError, "did not list every finding"):
+            _new_silenced({}, {"a.tf"}, lambda p: {5}, [])
+        meta = {"silenced_total": 1, "silenced_list": [span]}
+        # Any added line inside the block counts; none, or an unchanged file, does not.
+        self.assertEqual(_new_silenced(meta, {"a.tf"}, lambda p: {9}, [])[0]["line"], 4)
+        self.assertEqual(_new_silenced(meta, {"a.tf"}, lambda p: {10}, []), [])
+        # However long the silenced block, an added line at its far end counts.
+        far = {"silenced_total": 1, "silenced_list": [{**span, "end": 5_000_000}]}
+        self.assertEqual(len(_new_silenced(far, {"a.tf"}, lambda p: {4_999_999}, [])), 1)
+        # The edges of a span count, the lines just outside it do not, with many spans and many added lines.
+        spans = [{**span, "start": n * 10, "end": n * 10 + 2} for n in range(1, 20_001)]
+        many = {"silenced_total": len(spans), "silenced_list": spans}
+        added_lines = set(range(3, 200_000, 10)) | {50_000, 60_002}
+        found = sorted(e["line"] for e in _new_silenced(many, {"a.tf"}, lambda p: added_lines, []))
+        self.assertEqual(found, [50_000, 60_000])
+        self.assertEqual(_new_silenced(meta, set(), lambda p: {5}, []), [])
+        # A new marker right above it already counts the same thing.
+        self.assertEqual(_new_silenced(meta, {"a.tf"}, lambda p: {5}, [{"path": "a.tf", "line": 3}]), [])
+
+    def test_new_suppressions_cannot_be_told_from_a_cut_list(self):
+        from shoalscan.cli import _new_suppressions
+
+        meta = {"suppressions": {"total": 3}, "suppression_list": [{"path": "a.py", "line": 1}]}
+        with self.assertRaisesRegex(SetupError, "did not list every inline suppression"):
+            _new_suppressions(meta, {"a.py"}, lambda path: {1})
+        meta["suppressions"]["total"] = 1
+        self.assertEqual(_new_suppressions(meta, {"a.py"}, lambda path: {1}), [{"path": "a.py", "line": 1}])
+        self.assertEqual(_new_suppressions(meta, {"a.py"}, lambda path: {2}), [])
+        self.assertEqual(_new_suppressions(meta, {"b.py"}, lambda path: {1}), [])
+
+    def test_changed_since_reports_stale_entries_without_failing(self):
+        # The change fixes the baselined finding. Its baseline is managed outside it, so it cannot remove the
+        # entry: the stale entry is reported, and is no reason to fail the change.
+        (self.repo / "src" / "load.py").write_text(
+            "import json\n\ndef load(b):\n    return json.loads(b)\n", encoding="utf-8"
+        )
+        self.commit("fix")
+        code, summary, out = self.run_explicit()
+        self.assertEqual(code, 0, out)
+        self.assertGreaterEqual(summary["stale"], 1)
+        self.assertIn("They do not fail this change", out)
+        config, baseline = self.explicit_policy()
+        code, out, err = self.cli("check", *config, *baseline)
+        self.assertEqual(code, 1, out + err)
+
+    def test_a_git_that_ignores_the_attribute_source_is_refused(self):
+        # Older git silently ignores GIT_ATTR_SOURCE, and the change's .gitattributes would apply: fail closed.
+        from unittest import mock
+
+        from shoalscan.dashboard import scanning
+
+        config, baseline = self.explicit_policy()
+        with mock.patch.object(scanning, "git_attr_probe", return_value=False):
+            for args in (("scan",), ("check",)):
+                code, _, err = self.cli(*args, policy=True)
+                self.assertEqual(code, 2, args)
+                self.assertIn("git 2.40 or later is required", err)
+            code, _, err = self.cli("check", *config, *baseline, "--changed-since", "refs/heads/main")
+            self.assertEqual(code, 2)
+            self.assertIn("git 2.40 or later is required", err)
+
+    def test_rules_commit_needs_an_explicit_configuration(self):
+        code, _, err = self.cli("scan", "--rules-commit", "refs/heads/main")
+        self.assertEqual(code, 2)
+        self.assertIn("--rules-commit needs --config", err)
+        config, _ = self.explicit_policy()
+        code, _, err = self.cli("scan", *config, "--rules-commit", "main")
+        self.assertEqual(code, 2)
+        self.assertIn("ambiguous", err)
+
     def test_a_tag_cannot_shadow_the_policy_ref(self):
         base = git(self.repo, "rev-parse", "refs/heads/main").strip()
         git(self.repo, "update-ref", "refs/remotes/origin/main", base)

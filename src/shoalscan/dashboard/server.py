@@ -1196,7 +1196,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, {"repo": repo, **self.app.overview(data, repo_id)})
             if path == "/api/runs":
                 runs = data.runs(repo_id, _int(query, "limit", 100, 1, 500), _int(query, "offset", 0, 0, 10**9))
-                return self.send_json(200, {"repo": repo, **runs, "deletions": data.deletions(repo)})
+                return self.send_json(
+                    200,
+                    {
+                        "repo": repo,
+                        **runs,
+                        "deletions": data.deletions(repo),
+                        "pull_requests": data.pull_requests(repo_id),
+                    },
+                )
             if path == "/api/similar":
                 threshold = _threshold(query)
                 return self.send_json(

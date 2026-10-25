@@ -7,8 +7,8 @@ What Shoalscan reads and writes, in one place. Each entry links to the guide tha
 | Command | What it does | Guide |
 | --- | --- | --- |
 | `shoalscan install` | Downloads the pinned scanners and rules, checks their SHA-256 and signatures, and installs them. | [Getting started](getting-started.md#install-the-pinned-scanners) |
-| `shoalscan scan` | Runs the scanners over a repository and writes `findings.json` and `findings.sarif`. Makes no network calls. `--require-network-sandbox` makes it fail unless the scanners run in an operating-system network sandbox. | [Getting started](getting-started.md#the-first-scan), [Scanners](scanners.md) |
-| `shoalscan check` | Compares the findings with the baseline and the policy, prints a report and a `SHOALSCAN_SUMMARY` line, and writes `check.json`. | [Baseline and check](baseline-and-check.md#the-check) |
+| `shoalscan scan` | Runs the scanners over a repository and writes `findings.json` and `findings.sarif`. Makes no network calls. `--require-network-sandbox` makes it fail unless the scanners run in an operating-system network sandbox. `--rules-commit <commit>`, with `--config`, reads the repository rule directories from that commit instead of the scanned tree. | [Getting started](getting-started.md#the-first-scan), [Scanners](scanners.md) |
+| `shoalscan check` | Compares the findings with the baseline and the policy, prints a report and a `SHOALSCAN_SUMMARY` line, and writes `check.json`. `--changed-since <commit>`, with an explicit configuration and baseline, also fails on changed files (against the merge base with that commit) that were not fully scanned and on inline suppressions on added lines (and silenced findings overlapping them), and only reports stale baseline entries. `--policy-ref` and `--changed-since` need git 2.40 or later and refuse an older git. | [Baseline and check](baseline-and-check.md#the-check) |
 | `shoalscan baseline init` | Writes the baseline from a full scan, with an issue and a reason. | [Baseline and check](baseline-and-check.md#the-baseline-file) |
 | `shoalscan baseline accept --test-code` | Adds baseline entries for findings labelled as test code that a person accepts, recording who, when and the reason "test code". | [Test code labels](test-code.md#accepting-a-finding-in-test-code) |
 | `shoalscan baseline rename-path` | Points baseline entries for a moved file or directory at its new path. | [Baseline and check](baseline-and-check.md#moving-and-renaming-files) |
@@ -20,7 +20,7 @@ What Shoalscan reads and writes, in one place. Each entry links to the guide tha
 | `shoalscan report` | Writes a dated security report on one repository from the history. | [Report](report.md) |
 | `shoalscan history list-runs`, `delete-run` | Lists a repository's runs, or deletes one. | [Dashboard](dashboard.md#correcting-the-history) |
 | `shoalscan serve` | Serves the dashboard over HTTPS; `serve init-tls`, `serve user` and `serve oidc` manage its certificate, users and sign-in. | [Dashboard](dashboard.md#serving-the-dashboard) |
-| `shoalscan scanjob` | Scans a target registered in `scan_targets.toml`, or all nightly targets. | [Scanning from the dashboard](dashboard-scanning.md), [Scheduled scans](scheduled-scans.md) |
+| `shoalscan scanjob` | Scans a target registered in `scan_targets.toml`, all nightly targets (`--nightly`), or the new heads of the open pull requests of targets with `pull_requests = true` (`--pull-requests`). | [Scanning from the dashboard](dashboard-scanning.md), [Scheduled scans](scheduled-scans.md) |
 
 ## Exit codes
 

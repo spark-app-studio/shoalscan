@@ -13,12 +13,15 @@ import textwrap
 import time
 import unittest
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 import helpers
 
-from shoalscan import history, process, scanjob
-from shoalscan.dashboard import scanning
+from shoalscan import history, process, pullrequests, scanjob
+from shoalscan.dashboard import scancontrol, scanning
+from shoalscan.dashboard.data import Data
 from shoalscan.errors import SetupError
 
 # Stands in for the interpreter that runs `python -m shoalscan`. `scan` writes
@@ -51,9 +54,11 @@ if args[:3] == ["-m", "shoalscan", "scan"]:
     with open(here / "seen_config.jsonl", "a") as seen:
         seen.write(json.dumps([str(config), data.decode()]) + "\\n")
     digest = hashlib.sha256(data).hexdigest()
+    skipped = [{{"path": "app.py", "reason": "too large"}}] if (here / "skip_app").exists() else []
     meta = {{"policy": {{"ref": None, "commit": None, "config_sha256": digest, "adoption": False}},
             "worktree": worktree_state(repo), "suppressions": {{"total": 0, "invalid": 0, "suppressed_findings": 0}},
-            "unscanned": {{"skipped": [], "errors": []}}, "scanners": {{}}, "shoalscan_version": "test"}}
+            "unscanned": {{"skipped": skipped, "errors": []}}, "scanners": {{}}, "shoalscan_version": "test",
+            "suppression_list": [], "silenced_total": 0, "silenced_list": []}}
     (out / "findings.json").write_text(findings_to_json([], meta))
     sys.exit(2 if (here / "scanfail").exists() else 0)
 os.execv({python!r}, [{python!r}, *args])
@@ -537,6 +542,21 @@ class IsolationTests(WorkerTestCase):
         self.assertEqual(f.rows("SELECT outcome FROM scan_triggers"), [("passed",)])
 
 
+class LogTests(WorkerTestCase):
+    def test_control_and_escape_sequences_never_reach_the_log(self):
+        f = Fixture(self.base)
+        log = io.StringIO()
+        targets = f.targets()
+        job = scanjob.Job(f.state, targets, targets.targets["acme/app"], "x", log)
+        try:
+            job.say("file \x1b[2J\x1b]0;owned\x07evil\r\nname\x9b31m \u202etxt.exe\tend")
+        finally:
+            job.cleanup()
+        line = log.getvalue().split(" ", 1)[1]
+        self.assertEqual(line, "file [2J]0;ownedevilname31m txt.exe end\n")
+        self.assertEqual(scanning.sanitise_log(["a\x1b[31mb\u2066c"], None), ["a[31mbc"])
+
+
 class GitProbeTests(WorkerTestCase):
     def test_the_real_git_honours_the_attribute_source(self):
         self.assertTrue(scanning.git_attr_probe(), "this git must honour GIT_ATTR_SOURCE")
@@ -748,6 +768,555 @@ class NightlyTests(WorkerTestCase):
         names = [dict(zip(c[3::2], c[4::2], strict=True))["--repo-name"] for c in f.calls() if c[2] == "record"]
         self.assertEqual(names, ["acme/first", "acme/mirrored"])
         self.assertEqual(f.rows("SELECT who FROM scan_triggers"), [("nightly job",), ("nightly job",)])
+
+
+def rev(repo: Path, ref: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", ref], capture_output=True, text=True, check=True, timeout=60
+    ).stdout.strip()
+
+
+def permissive_pairs(job, admin_fetch: bool = False):
+    """The worker's git settings, with the file protocol allowed: the tests' origin is a local repository."""
+    pairs = scanning.GIT_ADMIN_FETCH if admin_fetch else scanning.GIT_HARDENED + scanning.GIT_URL_ONLY
+    kept = tuple(p for p in pairs if p[0] not in ("protocol.file.allow", "protocol.allow"))
+    return (*kept, ("protocol.allow", "always"))
+
+
+class PullRequestTests(WorkerTestCase):
+    """`scanjob --pull-requests`: the listing, dedupe, limits, failing closed, and the policy from the base."""
+
+    def setUp(self):
+        super().setUp()
+        self.f = Fixture(self.base)
+        f = self.f
+        # The targets are https sources, as pull requests need; here the origin is a local repository, so these
+        # tests alone let git use the file protocol too.
+        patcher = mock.patch.object(scanjob.Job, "git_pairs", permissive_pairs)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        (f.origin / ".shoalscan.toml").write_text("# BASE POLICY\n", encoding="utf-8")
+        git("add", ".shoalscan.toml", cwd=f.origin)
+        git("commit", "-q", "-m", "policy", cwd=f.origin)
+        self.base_head = rev(f.origin, "HEAD")
+        self.pr7 = self.open_pull_request(7, "x = 7  # pull request\n")
+
+    def open_pull_request(self, number: int, app: str, merge_ref: bool = True) -> str:
+        """A pull request on the origin, as GitHub keeps one: refs/pull/N/head, and refs/pull/N/merge while open.
+        The change also tries to relax its own policy."""
+        f = self.f
+        git("checkout", "-q", "-b", f"pr{number}", "main", cwd=f.origin)
+        (f.origin / "app.py").write_text(app, encoding="utf-8")
+        (f.origin / ".shoalscan.toml").write_text("# PR POLICY\nscanners = []\n", encoding="utf-8")
+        git("commit", "-q", "-am", f"pull request {number}", cwd=f.origin)
+        head = rev(f.origin, "HEAD")
+        git("checkout", "-q", "main", cwd=f.origin)
+        git("branch", "-q", "-D", f"pr{number}", cwd=f.origin)
+        git("update-ref", f"refs/pull/{number}/head", head, cwd=f.origin)
+        if merge_ref:
+            git("update-ref", f"refs/pull/{number}/merge", head, cwd=f.origin)
+        return head
+
+    def targets(self, **top) -> scanning.Targets:
+        targets = self.f.targets()
+        target = replace(
+            targets.targets["acme/app"], kind="url", source=self.f.origin.as_uri(), clone=None, pull_requests=True
+        )
+        return replace(targets, targets={"acme/app": target}, **top)
+
+    @property
+    def clone(self) -> Path:
+        targets = self.targets()
+        return targets.clone_dir(targets.targets["acme/app"])
+
+    def discover(self, targets, target):
+        # The real listing of the origin, as `git ls-remote` shows it (the origin is local here, not https).
+        return pullrequests.discover(["git"], dict(os.environ), str(self.f.origin), target.branch, 30)
+
+    def poll(self, targets=None, discover=None) -> dict:
+        targets = targets or self.targets()
+        return scanjob.run_pull_requests(
+            self.f.state, targets, io.StringIO(), wait_seconds=1, discover=discover or self.discover
+        )
+
+    def test_a_pull_request_is_scanned_with_the_base_policy_and_recorded_as_a_pr_run(self):
+        f = self.f
+        results = self.poll()
+        self.assertEqual(results["acme/app#7"], "passed")
+        self.assertTrue(results["acme/app"].startswith("listed: 1 to scan"), results)
+        self.assertEqual(f.rows("SELECT kind, ref, commit_sha FROM runs"), [("pr", "refs/pull/7/head", self.pr7)])
+        scan, check, record = f.calls()
+        self.assertEqual([scan[2], check[2], record[2]], ["scan", "check", "record"])
+        # The pull request's code was scanned, with the policy at the head of main, never the change's own.
+        self.assertEqual((f.bin / "seen_app.txt").read_text(), "x = 7  # pull request\n")
+        seen = json.loads((f.bin / "seen_config.jsonl").read_text().splitlines()[-1])
+        self.assertEqual(seen[1], "# BASE POLICY\n")
+        self.assertEqual(scan[scan.index("--rules-commit") + 1], self.base_head)
+        self.assertEqual(check[check.index("--changed-since") + 1], self.base_head)
+        baseline = Path(check[check.index("--baseline") + 1])
+        self.assertTrue(baseline.is_relative_to(f.state), baseline)
+        opts = dict(zip(record[3::2], record[4::2], strict=False))
+        self.assertEqual((opts["--kind"], opts["--ref"], opts["--commit"]), ("pr", "refs/pull/7/head", self.pr7))
+        # The pull request never entered the branch clone: no ref, no branch, not even its objects.
+        refs = subprocess.run(
+            ["git", "-C", str(self.clone), "for-each-ref", "--format=%(refname)"], capture_output=True, text=True
+        ).stdout
+        self.assertNotIn("pull", refs)
+        missing = subprocess.run(
+            ["git", "-C", str(self.clone), "cat-file", "-e", f"{self.pr7}^{{commit}}"], capture_output=True
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        (trigger,) = f.rows("SELECT who, trigger, outcome, detail FROM scan_triggers")
+        self.assertEqual(trigger[:3], ("pull-request poll", "pull-request", "passed"))
+        self.assertEqual(trigger[3], f"pull request #7 at {self.pr7[:12]}")
+        self.assertIsNone(scanning.lock_holder(f.state))
+
+    def test_a_registered_policy_decides_for_pull_requests_too(self):
+        f = self.f
+        targets = self.targets()
+        scanning.write_policy(targets, targets.targets["acme/app"], "# MANAGED POLICY\n")
+        self.assertEqual(self.poll(targets)["acme/app#7"], "passed")
+        seen = json.loads((f.bin / "seen_config.jsonl").read_text().splitlines()[-1])
+        self.assertEqual(seen[1], "# MANAGED POLICY\n")
+
+    def test_the_real_check_fails_a_changed_file_that_was_not_scanned(self):
+        f = self.f
+        # The stand-in scan reports app.py as skipped. The pull request changed it since the merge base, so the
+        # real check fails the change; a scheduled scan of main only reports it.
+        (f.bin / "skip_app").write_text("1")
+        self.assertEqual(self.poll()["acme/app#7"], "blocked")
+        self.assertEqual(f.rows("SELECT kind, changed_unscanned FROM runs"), [("pr", 1)])
+        self.assertEqual(scanjob.run_one(f.state, f.targets(), "acme/app", "x", io.StringIO()), "passed")
+        self.assertEqual(f.rows("SELECT kind, changed_unscanned FROM runs ORDER BY id"), [("pr", 1), ("scheduled", 0)])
+
+    def test_a_head_with_a_recorded_run_is_not_scanned_again_and_polls_wait_out_the_cooldown(self):
+        f = self.f
+        self.assertEqual(self.poll()["acme/app#7"], "passed")
+        again = self.poll()
+        self.assertTrue(again["acme/app"].startswith("skipped: cooldown"), again)
+        self.assertNotIn("acme/app#7", again)
+        again = self.poll(self.targets(cooldown_seconds=0))
+        self.assertEqual(again["acme/app"], "listed: 0 to scan, 1 already scanned, 0 over max_pull_requests")
+        self.assertEqual(len([c for c in f.calls() if c[2] == "scan"]), 1)
+        # A new head of the same pull request waits an hour since the pull request's last scan, then is scanned.
+        self.pr7 = self.open_pull_request(7, "x = 77\n")
+        self.assertTrue(self.poll(self.targets(cooldown_seconds=0))["acme/app#7"].startswith("deferred: this pull"))
+        with mock.patch.object(pullrequests, "PER_PULL_INTERVAL", timedelta(0)):
+            self.assertEqual(self.poll(self.targets(cooldown_seconds=0))["acme/app#7"], "passed")
+        self.assertEqual(len(f.rows("SELECT id FROM runs WHERE kind = 'pr'")), 2)
+
+    def test_a_pull_request_without_a_merge_ref_is_not_scanned(self):
+        f = self.f
+        git("update-ref", "-d", "refs/pull/7/merge", cwd=f.origin)
+        results = self.poll()
+        self.assertEqual(results["acme/app"], "listed: 0 to scan, 0 already scanned, 0 over max_pull_requests")
+        self.assertEqual(f.calls(), [])
+
+    def test_a_failed_listing_is_a_scan_error_never_nothing_to_scan(self):
+        f = self.f
+
+        def broken(targets, target):
+            raise pullrequests.DiscoveryError("git ls-remote failed (exit 128): fatal: unable to access")
+
+        results = self.poll(discover=broken)
+        self.assertTrue(results["acme/app"].startswith("scan_error: pull-request discovery failed"), results)
+        self.assertFalse(scanjob.poll_ok(results["acme/app"]))
+        self.assertEqual(f.calls(), [])
+        (row,) = f.rows("SELECT target, who, trigger, outcome, run_id, detail FROM scan_triggers")
+        self.assertEqual(row[:5], ("acme/app", "pull-request poll", "pull-request", "scan_error", None))
+        self.assertIn("unable to access", row[5])
+
+    def test_an_error_text_from_the_remote_cannot_drive_the_terminal(self):
+        def hostile(targets, target):
+            raise pullrequests.DiscoveryError("fatal: \x1b]0;owned\x07remote said \x1b[2Jno\u202e")
+
+        log = io.StringIO()
+        scanjob.run_pull_requests(self.f.state, self.targets(), log, wait_seconds=1, discover=hostile)
+        self.assertIn("remote said [2Jno", log.getvalue())
+        self.assertNotIn("\x1b", log.getvalue())
+        self.assertNotIn("\u202e", log.getvalue())
+
+    def test_a_listing_that_does_not_show_the_branch_is_a_scan_error(self):
+        def elsewhere(targets, target):
+            return pullrequests.discover(["git"], dict(os.environ), str(self.f.origin), "no-such-branch", 30)
+
+        results = self.poll(discover=elsewhere)
+        self.assertIn("does not show the branch", results["acme/app"])
+        self.assertEqual(self.f.calls(), [])
+
+    def test_the_command_line_exits_non_zero_when_the_listing_fails(self):
+        f = self.f
+        f.write(
+            f'[[target]]\nname = "acme/web"\nsource = "https://github.com/acme/web.git"\nbranch = "main"\n'
+            f'pull_requests = true\npython = "{f.python}"\n'
+        )
+        failure = pullrequests.DiscoveryError("git ls-remote did not finish within 300 seconds")
+        with mock.patch.object(scanjob, "discover_pull_requests", side_effect=failure), mock.patch("sys.stdout"):
+            code = scanjob.main(["--pull-requests", "--state-dir", str(f.state)])
+        self.assertEqual(code, 1)
+        self.assertEqual(f.rows("SELECT target, outcome FROM scan_triggers"), [("acme/web", "scan_error")])
+        self.assertFalse((f.state / "clones").exists())
+
+    def test_a_pull_request_that_moved_after_the_listing_is_scanned_at_its_fetched_head(self):
+        f = self.f
+        # The listing shows an older head; by the fetch the pull request has moved to pr7.
+        stale = pullrequests.Listing(self.base_head, {7: pullrequests.PullRequest(7, self.base_head, True)})
+        targets = self.targets(cooldown_seconds=0)
+        results = self.poll(targets, discover=lambda targets, target: stale)
+        self.assertEqual(results["acme/app#7"], "passed")
+        self.assertEqual(f.rows("SELECT ref, commit_sha FROM runs"), [("refs/pull/7/head", self.pr7)])
+        (detail,) = f.rows("SELECT detail FROM scan_triggers")[0]
+        self.assertEqual(detail, f"pull request #7 at {self.pr7[:12]}")
+        # The attempt counts against the pull request's hourly limit, whatever the listing says next.
+        state = json.loads((f.state / "pull_requests" / f"{scanning.slug('acme/app')}.json").read_text())
+        self.assertIn("7", state["attempts"])
+        again = self.poll(targets, discover=lambda targets, target: stale)
+        self.assertTrue(again["acme/app#7"].startswith("deferred: this pull request was scanned"), again)
+
+    def test_the_hourly_limit_and_the_per_poll_cap(self):
+        f = self.f
+        self.open_pull_request(8, "x = 8\n")
+        self.open_pull_request(9, "x = 9\n")
+        results = self.poll(self.targets(max_pull_requests=2, max_pr_scans_per_hour=1, max_scans_per_hour=1))
+        # Never-scanned pull requests, lowest number first: #7 is scanned, #8 waits for the hourly limit, #9 is
+        # over the cap.
+        self.assertEqual(results["acme/app#7"], "passed")
+        self.assertTrue(results["acme/app#8"].startswith("deferred: the hourly limit"), results)
+        self.assertTrue(results["acme/app#9"].startswith("deferred: over max_pull_requests"), results)
+        self.assertTrue(all(scanjob.poll_ok(o) for o in results.values()), results)
+        self.assertEqual(f.rows("SELECT ref FROM runs"), [("refs/pull/7/head",)])
+        # Pull-request scans have a budget of their own: the dashboard's is untouched.
+        requests = scanning.read_requests(f.state)
+        self.assertEqual((len(requests["pr_recent"]), len(requests["recent"])), (1, 0))
+        control = scancontrol.ScanControl(f.state, f.db)
+        self.assertEqual(control.global_remaining(self.targets(max_scans_per_hour=1)), 0)
+
+    def test_disabled_targets_and_targets_without_pull_requests_are_left_alone(self):
+        targets = self.targets()
+        disabled = replace(targets, targets={"acme/app": replace(targets.targets["acme/app"], enabled=False)})
+        self.assertEqual(self.poll(disabled), {"acme/app": "skipped: disabled"})
+        self.assertEqual(self.poll(self.f.targets()), {})
+        self.assertEqual(self.f.calls(), [])
+
+    def test_discovery_and_fetches_never_see_the_home_directory(self):
+        f = self.f
+        seen = {}
+
+        def fake_discover(git_argv, env, source, branch, timeout):
+            seen["discover"] = env
+            raise pullrequests.DiscoveryError("stop here")
+
+        f.write('[[target]]\nname = "acme/web"\nsource = "https://github.com/acme/web.git"\nbranch = "main"\n')
+        targets = f.targets()
+        target = replace(targets.targets["acme/web"], pull_requests=True)
+        with mock.patch.object(pullrequests, "discover", side_effect=fake_discover):
+            with self.assertRaises(pullrequests.DiscoveryError):
+                scanjob.discover_pull_requests(targets, target)
+        self.assertEqual(seen["discover"]["HOME"], scanjob.NO_HOME)
+        self.assertNotIn("XDG_CONFIG_HOME", seen["discover"])
+        self.assertEqual(seen["discover"]["GIT_CONFIG_GLOBAL"], "/dev/null")
+        job = scanjob.Job(f.state, targets, target, "x", io.StringIO())
+        try:
+            job.run = lambda argv, **kw: seen.setdefault("git", kw["env"]) and 0
+            job.git("fetch", "origin")
+            self.assertEqual(seen["git"]["HOME"], scanjob.NO_HOME)
+        finally:
+            job.cleanup()
+
+    def test_a_pull_request_with_too_many_objects_is_stopped_and_the_clone_is_untouched(self):
+        f = self.f
+        git("checkout", "-q", "-b", "big", "main", cwd=f.origin)
+        (f.origin / "noise.bin").write_bytes(os.urandom(3 * 1024 * 1024))  # does not compress
+        git("add", "noise.bin", cwd=f.origin)
+        git("commit", "-q", "-m", "big", cwd=f.origin)
+        big = rev(f.origin, "HEAD")
+        git("checkout", "-q", "main", cwd=f.origin)
+        git("update-ref", "refs/pull/8/head", big, cwd=f.origin)
+        git("update-ref", "refs/pull/8/merge", big, cwd=f.origin)
+        targets = self.targets()
+        targets = replace(targets, targets={"acme/app": replace(targets.targets["acme/app"], max_clone_mb=1)})
+        results = self.poll(targets)
+        self.assertNotIn(results["acme/app#8"], ("passed", "blocked"))
+        self.assertEqual(results["acme/app#7"], "passed")
+        detail = [r[0] for r in f.rows("SELECT detail FROM scan_triggers") if r[0] and "#8" in r[0]]
+        self.assertIn("needs more than max_clone_mb", detail[0])
+        # The branch clone is still there, still small, and still scans.
+        self.assertTrue((self.clone / "HEAD").is_file() or (self.clone / ".git").is_dir())
+        self.assertLess(scanjob.tree_size(self.clone), 1024 * 1024)
+        self.assertEqual(scanjob.run_one(f.state, targets, "acme/app", "x", io.StringIO()), "passed")
+
+    def pull_request_with(self, number: int, files: dict) -> str:
+        f = self.f
+        git("checkout", "-q", "-b", f"files{number}", "main", cwd=f.origin)
+        for name, data in files.items():
+            (f.origin / name).parent.mkdir(parents=True, exist_ok=True)
+            (f.origin / name).write_bytes(data)
+            git("add", name, cwd=f.origin)
+        git("commit", "-q", "-m", f"files {number}", cwd=f.origin)
+        head = rev(f.origin, "HEAD")
+        git("checkout", "-q", "main", cwd=f.origin)
+        git("update-ref", f"refs/pull/{number}/head", head, cwd=f.origin)
+        git("update-ref", f"refs/pull/{number}/merge", head, cwd=f.origin)
+        return head
+
+    def checkout_refusal(self, results: dict, number: int) -> str:
+        self.assertNotIn(results[f"acme/app#{number}"], ("passed", "blocked"))
+        (detail,) = [r[0] for r in self.f.rows("SELECT detail FROM scan_triggers") if r[0] and f"#{number} " in r[0]]
+        return detail
+
+    def test_a_highly_compressible_pull_request_is_refused_before_it_is_checked_out(self):
+        # 3 MB of zeros compress to a few KB: within max_clone_mb, but the checkout would be large.
+        self.pull_request_with(8, {"zeros.bin": bytes(3 * 1024 * 1024)})
+        targets = replace(self.targets(), max_checkout_mb=1)
+        targets = replace(targets, targets={"acme/app": replace(targets.targets["acme/app"], max_clone_mb=1)})
+        started = []
+        real_run = scanjob.Job.run
+
+        def spy(job, argv, **kw):
+            if "worktree" in argv and "add" in argv and "pull.git" in " ".join(argv):
+                started.append(argv)
+            return real_run(job, argv, **kw)
+
+        with mock.patch.object(scanjob.Job, "run", spy):
+            results = self.poll(targets)
+        self.assertIn("would be 3 MB, more than max_checkout_mb (1 MB)", self.checkout_refusal(results, 8))
+        # #8 was never checked out; #7 (small) was.
+        self.assertEqual(len(started), 1)
+        self.assertEqual(results["acme/app#7"], "passed")
+        # The refused attempt ran no scan, so it gave its place in max_pr_scans_per_hour back.
+        self.assertEqual(len(scanning.read_requests(self.f.state)["pr_recent"]), 1)
+
+    def test_too_many_files_or_too_deep_a_path_is_refused(self):
+        self.pull_request_with(8, {f"many/{n}.txt": b"x" for n in range(5)})
+        self.pull_request_with(9, {"/".join(["d"] * 70) + "/deep.txt": b"x"})
+        results = self.poll(replace(self.targets(), max_checkout_files=4))
+        self.assertIn("more than max_checkout_files (4)", self.checkout_refusal(results, 8))
+        self.assertIn("deeper than 64 directories", self.checkout_refusal(results, 9))
+
+    def test_the_checkout_is_also_measured_while_and_after_git_writes_it(self):
+        self.pull_request_with(8, {"zeros.bin": bytes(3 * 1024 * 1024)})
+        with mock.patch.object(scanjob.Job, "check_checkout", return_value=0):
+            results = self.poll(replace(self.targets(), max_checkout_mb=1))
+        self.assertIn("grew to more than max_checkout_mb", self.checkout_refusal(results, 8))
+
+    def test_the_room_for_the_checkout_counts_whole_blocks_and_each_file(self):
+        # 2,000 one-byte files: 2 KB of content, but about 16 MB on disk, twice.
+        self.pull_request_with(8, {f"tiny/{n}.txt": b"x" for n in range(2000)})
+        usage = mock.Mock(free=(100 + 10) * 1024 * 1024)
+        with (
+            mock.patch.object(scanjob, "check_free_space"),
+            mock.patch.object(scanjob.shutil, "disk_usage", return_value=usage),
+        ):
+            results = self.poll(replace(self.targets(), min_free_mb=100))
+        self.assertIn("16 MB on disk twice", self.checkout_refusal(results, 8))
+
+    def test_the_checkout_needs_room_for_the_gitleaks_copy(self):
+        self.pull_request_with(8, {"zeros.bin": bytes(3 * 1024 * 1024)})
+        # Room for min_free_mb and one copy of the 3 MB checkout, not two.
+        usage = mock.Mock(free=(100 + 4) * 1024 * 1024)
+        with (
+            mock.patch.object(scanjob, "check_free_space"),
+            mock.patch.object(scanjob.shutil, "disk_usage", return_value=usage),
+        ):
+            results = self.poll(replace(self.targets(), min_free_mb=100))
+        self.assertIn("twice (for the Gitleaks staging copy)", self.checkout_refusal(results, 8))
+
+    def test_a_failed_or_timed_out_scan_is_recorded_as_a_scan_error_and_not_retried(self):
+        f = self.f
+        (f.bin / "slow").write_text("1")
+        targets = self.targets(timeout_seconds=2, cooldown_seconds=0)
+        results = self.poll(targets)
+        self.assertEqual(results["acme/app#7"], "timeout")
+        self.assertFalse(scanjob.poll_ok(results["acme/app#7"]))
+        (run,) = f.rows("SELECT id, kind, ref, commit_sha, outcome FROM runs")
+        self.assertEqual(run[1:], ("pr", "refs/pull/7/head", self.pr7, "scan_error"))
+        (trigger,) = f.rows("SELECT outcome, run_id, detail FROM scan_triggers")
+        self.assertEqual(trigger[:2], ("timeout", run[0]))
+        self.assertIn("recorded as a scan error", trigger[2])
+        # The next poll does not spend its budget on the same head again.
+        (f.bin / "slow").unlink()
+        again = self.poll(targets)
+        self.assertTrue(again["acme/app#7"].startswith("deferred: its last scan was a scan error"), again)
+        self.assertEqual(len([c for c in f.calls() if c[2] == "scan"]), 1)
+        # The Runs page shows the failure and why.
+        data = Data(history.open_read_only(f.db))
+        try:
+            (item,) = data.pull_requests(data.repo_id("acme/app"))["items"]
+        finally:
+            data.conn.close()
+        self.assertEqual((item["number"], item["latest"]["outcome"]), (7, "scan_error"))
+        self.assertIn("stopped after", item["error"])
+        # A size refusal is recorded the same way.
+        self.pull_request_with(8, {"zeros.bin": bytes(3 * 1024 * 1024)})
+        self.poll(replace(targets, max_checkout_mb=1, timeout_seconds=60))
+        self.assertEqual(f.rows("SELECT outcome FROM runs WHERE ref = 'refs/pull/8/head'"), [("scan_error",)])
+
+    def test_a_pull_request_that_conflicts_from_its_first_push_is_scanned(self):
+        f = self.f
+        old = self.open_pull_request(3, "x = 3\n", merge_ref=False)  # closed long ago: a head ref only
+        targets = self.targets(cooldown_seconds=0)
+        first = self.poll(targets)
+        self.assertEqual(first["acme/app#7"], "passed")
+        self.assertNotIn("acme/app#3", first)
+        state = json.loads((f.state / "pull_requests" / f"{scanning.slug('acme/app')}.json").read_text())
+        self.assertEqual((state["mark"], state["heads"]["3"]), (7, old))
+        # #8 is opened with conflicts: GitHub gives it no merge ref. It is above the mark, so it is scanned.
+        pr8 = self.open_pull_request(8, "x = 8\n", merge_ref=False)
+        self.assertEqual(self.poll(targets)["acme/app#8"], "passed")
+        self.assertIn(("refs/pull/8/head", pr8), f.rows("SELECT ref, commit_sha FROM runs"))
+        # The old head-only #3 is left alone until its head moves.
+        self.assertNotIn("acme/app#3", self.poll(targets))
+        self.open_pull_request(3, "x = 33\n", merge_ref=False)
+        self.assertEqual(self.poll(targets)["acme/app#3"], "passed")
+
+    def test_an_unreadable_poll_state_is_a_scan_error(self):
+        f = self.f
+        path = f.state / "pull_requests" / f"{scanning.slug('acme/app')}.json"
+        path.parent.mkdir(mode=0o700)
+        path.write_text("{not json")
+        results = self.poll()
+        self.assertIn("cannot be read", results["acme/app"])
+        self.assertFalse(scanjob.poll_ok(results["acme/app"]))
+        self.assertEqual(f.calls(), [])
+
+    def test_a_head_is_scanned_again_when_the_policy_or_the_branch_changes(self):
+        f = self.f
+        targets = self.targets(cooldown_seconds=0)
+        self.assertEqual(self.poll(targets)["acme/app#7"], "passed")
+        with mock.patch.object(pullrequests, "PER_PULL_INTERVAL", timedelta(0)):
+            self.assertEqual(self.poll(targets)["acme/app"][:31], "listed: 0 to scan, 1 already sc")
+            scanning.write_policy(targets, targets.targets["acme/app"], "# MANAGED POLICY\n")
+            self.assertEqual(self.poll(targets)["acme/app#7"], "passed")
+            self.assertEqual(self.poll(targets)["acme/app"][:31], "listed: 0 to scan, 1 already sc")
+            (f.origin / "other.py").write_text("y = 1\n", encoding="utf-8")
+            git("add", "other.py", cwd=f.origin)
+            git("commit", "-q", "-m", "main moves", cwd=f.origin)
+            self.assertEqual(self.poll(targets)["acme/app#7"], "passed")
+        # Each scan replaced the run of the same head.
+        self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(1,)])
+        self.assertEqual(len([c for c in f.calls() if c[2] == "scan"]), 3)
+
+    def test_a_scan_that_never_started_gives_its_reservation_back(self):
+        f = self.f
+        self.assertTrue(scanning.acquire_lock(f.state, "acme/other"))
+        try:
+            results = self.poll()
+        finally:
+            scanning.release_lock(f.state)
+        self.assertEqual(results["acme/app#7"], "skipped: another scan is running")
+        self.assertEqual(scanning.read_requests(f.state)["pr_recent"], [])
+        self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(0,)])
+
+    def test_scan_requests_are_changed_under_a_lock_both_sides_take(self):
+        f = self.f
+        probe = (
+            "import fcntl, os, sys; fd = os.open(sys.argv[1], os.O_RDWR)\n"
+            "try:\n    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\nexcept BlockingIOError:\n    sys.exit(3)\n"
+        )
+        with scanning.locked_requests(f.state) as requests:
+            requests["pr_recent"].append(time.time())
+            busy = subprocess.run([sys.executable, "-c", probe, str(f.state / scanning.REQUESTS_LOCK)], timeout=30)
+        self.assertEqual(busy.returncode, 3)
+        self.assertEqual(len(scanning.read_requests(f.state)["pr_recent"]), 1)
+        # A body that fails writes nothing.
+        with self.assertRaises(RuntimeError), scanning.locked_requests(f.state) as requests:
+            requests["pr_recent"].clear()
+            raise RuntimeError("stop")
+        self.assertEqual(len(scanning.read_requests(f.state)["pr_recent"]), 1)
+
+    def test_a_failure_of_this_machine_is_not_held_against_the_pull_request(self):
+        f = self.f
+        targets = self.targets(cooldown_seconds=0)
+        full = SetupError("not enough free disk space: 1 MB free where the scan works")
+        with mock.patch.object(scanjob, "check_free_space", side_effect=full):
+            results = self.poll(targets)
+        self.assertEqual(results["acme/app#7"], "failed")
+        self.assertFalse(scanjob.poll_ok(results["acme/app#7"]))
+        # Nothing recorded against the head, the reservation given back, and tried again once the hour is over.
+        self.assertEqual(f.rows("SELECT COUNT(*) FROM runs"), [(0,)])
+        self.assertEqual(scanning.read_requests(f.state)["pr_recent"], [])
+        with mock.patch.object(pullrequests, "PER_PULL_INTERVAL", timedelta(0)):
+            self.assertEqual(self.poll(targets)["acme/app#7"], "passed")
+
+    def test_a_path_that_is_not_utf8_refuses_the_pull_request(self):
+        # Built with git plumbing: macOS cannot hold such a name in a work tree, Linux can. Opengrep would list it
+        # as U+FFFD and never match it, so its code would pass unscanned.
+        f = self.f
+        blob = subprocess.run(
+            ["git", "-C", str(f.origin), "hash-object", "-w", "--stdin"], input=b"eval(x)\n", capture_output=True
+        ).stdout.strip()
+        tree = subprocess.run(
+            ["git", "-C", str(f.origin), "ls-tree", "-z", "main"], capture_output=True, check=True
+        ).stdout
+        tree += b"100644 blob " + blob + b"\tbad\xff.py\0"
+        tree_sha = (
+            subprocess.run(["git", "-C", str(f.origin), "mktree", "-z"], input=tree, capture_output=True, check=True)
+            .stdout.decode()
+            .strip()
+        )
+        commit = subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.invalid",
+                "-C",
+                str(f.origin),
+                "commit-tree",
+                tree_sha,
+                "-p",
+                "main",
+                "-m",
+                "bad name",
+            ],
+            capture_output=True,
+            check=True,
+            text=True,
+        ).stdout.strip()
+        git("update-ref", "refs/pull/8/head", commit, cwd=f.origin)
+        git("update-ref", "refs/pull/8/merge", commit, cwd=f.origin)
+        results = self.poll()
+        self.assertEqual(results["acme/app#7"], "passed")
+        self.assertEqual(results["acme/app#8"], "failed")
+        self.assertIn("not valid UTF-8 or holds a control character", self.checkout_refusal(results, 8))
+        self.assertEqual(f.rows("SELECT outcome FROM runs WHERE ref = 'refs/pull/8/head'"), [("scan_error",)])
+
+    def test_run_one_refuses_a_pull_request_for_a_target_that_does_not_scan_them(self):
+        pull = pullrequests.PullRequest(7, self.pr7, True)
+        with self.assertRaisesRegex(SetupError, "does not scan pull requests"):
+            scanjob.run_one(self.f.state, self.f.targets(), "acme/app", "x", io.StringIO(), pull=pull)
+        # A hand-set clone (only reachable around the loader, which refuses it) is refused by name.
+        targets = self.f.targets()
+        clone = replace(targets, targets={"acme/app": replace(targets.targets["acme/app"], pull_requests=True)})
+        with self.assertRaisesRegex(SetupError, "fetched anonymously from an https source, and this target's source"):
+            scanjob.run_one(self.f.state, clone, "acme/app", "x", io.StringIO(), pull=pull)
+        self.assertEqual(self.f.calls(), [])
+
+    def test_pull_requests_need_an_https_source(self):
+        f = self.f
+        f.write(f'[[target]]\nname = "acme/app"\nclone = "{f.clone}"\nbranch = "main"\npull_requests = true\n')
+        with self.assertRaisesRegex(SetupError, "needs an https source"):
+            f.targets()
+        f.write('[[target]]\nname = "a/b"\nsource = "https://github.com/a/b"\nbranch = "main"\npull_requests = 1\n')
+        with self.assertRaisesRegex(SetupError, "true or false"):
+            f.targets()
+        for value in (0, 101):
+            f.write(f"max_pull_requests = {value}\n")
+            with self.assertRaisesRegex(SetupError, "max_pull_requests"):
+                f.targets()
+        f.write(
+            'max_pull_requests = 3\n[[target]]\nname = "a/b"\nsource = "https://github.com/a/b"\nbranch = "main"\n'
+            "pull_requests = true\n"
+        )
+        targets = f.targets()
+        self.assertEqual((targets.max_pull_requests, targets.targets["a/b"].pull_requests), (3, True))
+        # The dashboard keeps the hand-set line when it rewrites the file.
+        scanning.save_targets(f.state, targets)
+        text = (f.state / scanning.TARGETS_FILE).read_text()
+        self.assertIn("pull_requests = true", text)
+        self.assertIn("max_pull_requests = 3", text)
+        self.assertEqual(f.targets(), targets)
 
 
 @unittest.skipUnless(

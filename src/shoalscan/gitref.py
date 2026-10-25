@@ -14,11 +14,13 @@ import os
 import re
 import subprocess
 import tarfile
+import threading
 from pathlib import Path, PurePosixPath
 
 from shoalscan.errors import SetupError
 
 GIT_TIMEOUT_SECONDS = 120
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 MAX_GIT_OUTPUT = 256 * 1024 * 1024
 _REF_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./@{}^~\-]{0,250}$")
 
@@ -29,16 +31,93 @@ def validate_ref(ref: str) -> str:
     return ref
 
 
-def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    cmd = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args]
+def _run_bounded(cmd: list[str], env: dict, what: str) -> subprocess.CompletedProcess:
+    """Run git, reading its output as it is written: past MAX_GIT_OUTPUT bytes, or past GIT_TIMEOUT_SECONDS, git is
+    killed and the command fails, so a huge diff (`--text` of a large binary file, say) never fills memory first."""
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=GIT_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        raise SetupError(f"git timed out: {' '.join(args[:2])}") from None
+        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     except OSError as exc:
         raise SetupError(f"git could not run: {exc}") from None
-    if len(proc.stdout) > MAX_GIT_OUTPUT:
+    timed_out = threading.Event()
+
+    def stop() -> None:
+        timed_out.set()
+        proc.kill()
+
+    timer = threading.Timer(GIT_TIMEOUT_SECONDS, stop)
+    timer.daemon = True
+    timer.start()
+    err_tail = bytearray()
+
+    def drain_stderr() -> None:
+        # Read all of it (a full pipe would stall git), keep the last 64 KiB.
+        while chunk := proc.stderr.read(65536):
+            err_tail.extend(chunk)
+            del err_tail[:-65536]
+
+    reader = threading.Thread(target=drain_stderr, daemon=True)
+    reader.start()
+    out = bytearray()
+    too_large = False
+    try:
+        while chunk := proc.stdout.read(1024 * 1024):
+            out += chunk
+            if len(out) > MAX_GIT_OUTPUT:
+                too_large = True
+                proc.kill()
+                break
+    finally:
+        proc.stdout.close()
+        returncode = proc.wait()
+        timer.cancel()
+        reader.join(timeout=5)
+        proc.stderr.close()
+    if too_large:
         raise SetupError("git output is larger than allowed")
+    if timed_out.is_set():
+        raise SetupError(f"git timed out: {what}")
+    return subprocess.CompletedProcess(cmd, returncode, bytes(out), bytes(err_tail))
+
+
+def _git(repo: Path, *args: str, check: bool = True, magic: bool = False) -> subprocess.CompletedProcess:
+    """Run git in `repo`. Paths are literal (GIT_LITERAL_PATHSPECS): a file name such as `:(exclude)*.py` or
+    `:/x`, which a change can commit, must name that file and never act as pathspec magic, even after `--`.
+    Only a caller that writes its own pathspec magic around a path it controls passes `magic`.
+
+    Neither the repository's own `.gitattributes` nor the machine's system or global git configuration take
+    part: attributes are read from the empty tree (GIT_ATTR_SOURCE, which git 2.40 and later honour) and no
+    system or global configuration is read, so no clean filter, textconv or external diff (git-lfs, say) can
+    change what the diffs below show. The repository is trusted as a safe directory for this one command, since
+    the operator pointed Shoalscan at it."""
+    cmd = [
+        "git",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.attributesFile=/dev/null",
+        "-c",
+        f"safe.directory={os.path.abspath(repo)}",
+        "-C",
+        str(repo),
+        *args,
+    ]
+    # No inherited GIT_* variable (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_CONFIG_COUNT and the like) may steer
+    # these commands: only the ones set here, as the scan worker's git_env does.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update(
+        {
+            "GIT_ATTR_SOURCE": EMPTY_TREE,
+            "GIT_ATTR_NOSYSTEM": "1",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    env["GIT_LITERAL_PATHSPECS"] = "0" if magic else "1"
+    env["GIT_NOGLOB_PATHSPECS"] = "1"
+    proc = _run_bounded(cmd, env, " ".join(args[:2]))
     if check and proc.returncode != 0:
         detail = proc.stderr.decode("utf-8", errors="replace").strip()[-500:]
         raise SetupError(f"git {' '.join(args[:2])} failed: {detail}")
@@ -115,22 +194,50 @@ def merge_base(repo: Path, commit: str) -> str:
     return out
 
 
+def path_name(raw: bytes) -> str:
+    """A path as git printed it (with -z), decoded strictly. A name that is not valid UTF-8, or that holds a control
+    character, is refused: the scanners report such a name differently (Opengrep with U+FFFD) or not at all, so it
+    could never be matched with their results, and its code would pass unscanned."""
+    try:
+        name = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        name = None
+    if name is None or any(c < " " or "\x7f" <= c <= "\x9f" for c in name):
+        shown = raw.decode("utf-8", errors="backslashreplace")[:200].encode("unicode_escape").decode("ascii")
+        raise SetupError(
+            f"the repository has a path that is not valid UTF-8 or holds a control character ({shown}); such a file "
+            "cannot be matched with what the scanners report, so nothing is checked. Rename it."
+        )
+    return name
+
+
+def path_names(raw: bytes) -> list[str]:
+    """NUL-separated paths from git, each checked with `path_name`."""
+    return [path_name(p) for p in raw.split(b"\0") if p]
+
+
+def check_path_names(repo: Path) -> None:
+    """Refuse a work tree with a tracked or untracked (not ignored) path that `path_name` refuses."""
+    path_names(_git(repo, "ls-files", "--cached", "--others", "--exclude-standard", "-z").stdout)
+
+
 def changed_files(repo: Path, commit: str) -> list[str]:
     """Files the change adds, copies, modifies, renames or retypes, compared
     with the merge base of `commit` and HEAD. The working tree counts,
     untracked files included, so a local run sees uncommitted edits."""
     base = merge_base(repo, commit)
-    out = _git(repo, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=ACMRT", base).stdout
+    out = _git(
+        repo, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", "--no-renames", "--diff-filter=ACMRT", base
+    ).stdout
     untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").stdout
-    names = (out + b"\0" + untracked).decode("utf-8", errors="replace").split("\0")
-    return sorted({p for p in names if p})
+    return sorted(set(path_names(out + b"\0" + untracked)))
 
 
 def diff_against(repo: Path, commit: str, paths: list[str], max_lines: int = 400) -> str:
     """The working tree's diff against `commit` for `paths`, cut to `max_lines` lines."""
     if not paths:
         return ""
-    out = _git(repo, "diff", "--no-color", "--no-ext-diff", commit, "--", *paths).stdout
+    out = _git(repo, "diff", "--no-color", "--no-ext-diff", "--no-textconv", commit, "--", *paths).stdout
     lines = out.decode("utf-8", errors="replace").splitlines()
     if len(lines) > max_lines:
         lines = lines[:max_lines] + [f"... ({len(lines) - max_lines} more lines)"]
@@ -171,10 +278,18 @@ def baseline_binding_path(repo: Path, baseline: Path) -> str | None:
 def _changes_digest(
     repo: Path, tree: str | None, options: tuple[str, ...], pathspec: tuple[str, ...]
 ) -> tuple[bool, str]:
-    status = _git(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", *options, *pathspec).stdout
+    # The pathspec here is Shoalscan's own (":/" and ":(exclude,literal)<baseline>"), so magic stays on.
+    magic = bool(pathspec)
+    status = _git(
+        repo, "status", "--porcelain=v1", "-z", "--untracked-files=all", *options, *pathspec, magic=magic
+    ).stdout
     digest = hashlib.sha256(status)
     if tree is not None:
-        digest.update(_git(repo, "diff", "--no-ext-diff", "--binary", *options, "HEAD", *pathspec).stdout)
+        digest.update(
+            _git(
+                repo, "diff", "--no-ext-diff", "--no-textconv", "--binary", *options, "HEAD", *pathspec, magic=magic
+            ).stdout
+        )
     for entry in status.split(b"\0"):
         if entry.startswith(b"?? "):
             path = repo / entry[3:].decode("utf-8", errors="surrogateescape")
@@ -212,37 +327,63 @@ def worktree_state(repo: Path, baseline: str | None = None) -> dict | None:
     return state
 
 
+# Lines counted as added for a changed file that cannot be read: enough to cover any marker or parse gap in it.
+UNREADABLE_LINES = 1_000_000
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
 def added_lines(repo: Path, commit: str, path: str) -> set[int]:
-    """Line numbers (in the current file) that the change added or modified."""
+    """Line numbers (in the current file) that the change added or modified.
+
+    Call it only for a file `changed_files` listed. The diff is always textual (`--text`): a file with a NUL
+    byte would otherwise be "binary" and show no lines at all. A file whose diff has no hunk (a mode change,
+    or an empty diff, which for a changed file is itself suspicious) counts as added in full, so nothing in it
+    can pass for unchanged; one that cannot be read counts as one huge file."""
     tracked = _git(repo, "ls-files", "--error-unmatch", "--", path, check=False).returncode == 0
     if not tracked:
         full = repo / path
         try:
             count = len(full.read_bytes().split(b"\n"))
         except OSError:
-            return set()
+            count = UNREADABLE_LINES
         return set(range(1, count + 1))
     out = _git(
-        repo, "diff", "--no-color", "--no-ext-diff", "--no-renames", "-U0", merge_base(repo, commit), "--", path
+        repo,
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--text",
+        "--no-renames",
+        "-U0",
+        merge_base(repo, commit),
+        "--",
+        path,
     ).stdout
     lines: set[int] = set()
+    hunks = 0
     for line in out.decode("utf-8", errors="replace").split("\n"):
         match = _HUNK.match(line)
         if match:
+            hunks += 1
             start, count = int(match.group(1)), int(match.group(2) if match.group(2) is not None else 1)
             lines.update(range(start, start + count))
+    if not hunks:
+        try:
+            count = len((repo / path).read_bytes().split(b"\n"))
+        except OSError:
+            count = UNREADABLE_LINES
+        return set(range(1, count + 1))
     return lines
 
 
 def renames(repo: Path, commit: str) -> list[tuple[str, str]]:
     """(old, new) pairs that git reports as renames with at least 90% similarity."""
-    out = _git(repo, "diff", "-M90%", "--name-status", "-z", merge_base(repo, commit)).stdout.decode(
-        "utf-8", errors="replace"
-    )
-    parts = out.split("\0")
+    out = _git(
+        repo, "diff", "--no-ext-diff", "--no-textconv", "-M90%", "--name-status", "-z", merge_base(repo, commit)
+    ).stdout
+    # Decoded as strictly as changed_files: a status letter passes, a bad name is refused.
+    parts = [path_name(p) if p else "" for p in out.split(b"\0")]
     pairs = []
     i = 0
     while i < len(parts) and parts[i]:

@@ -10,7 +10,6 @@ again for itself; the request contributes nothing but the target's name.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -37,7 +36,6 @@ ENV_ALLOW = (
     "XDG_DATA_HOME",
     "XDG_CONFIG_HOME",
 )
-HOUR = 3600
 
 
 class ScanControl:
@@ -73,20 +71,13 @@ class ScanControl:
         return self._worker is not None or scanning.lock_holder(self.state_dir) is not None
 
     def _requests(self) -> dict:
-        data = scanning.read_json(self.state_dir / scanning.REQUESTS_FILE)
-        targets = data.get("targets") if isinstance(data.get("targets"), dict) else {}
-        recent = [t for t in data.get("recent", []) if isinstance(t, (int, float)) and time.time() - t < HOUR]
-        return {"targets": {k: v for k, v in targets.items() if isinstance(v, (int, float))}, "recent": recent}
+        return scanning.read_requests(self.state_dir)
 
     def cooldown_remaining(self, targets: scanning.Targets, name: str, requests: dict | None = None) -> int:
-        last = (requests or self._requests())["targets"].get(name)
-        return max(0, int(last + targets.cooldown_seconds - time.time())) if last else 0
+        return scanning.cooldown_wait(targets, name, requests or self._requests())
 
     def global_remaining(self, targets: scanning.Targets, requests: dict | None = None) -> int:
-        recent = sorted((requests or self._requests())["recent"])
-        if len(recent) < targets.max_scans_per_hour:
-            return 0
-        return max(0, int(recent[-targets.max_scans_per_hour] + HOUR - time.time()))
+        return scanning.hourly_wait(targets, requests or self._requests())
 
     def status(self, read_triggers) -> dict:
         """What runs or last ran. `running` is decided first and the status file and
@@ -151,27 +142,27 @@ class ScanControl:
         with self._lock:
             if self.running():
                 return 409, {"error": "a scan is already running", "status": self.status(read_triggers)}
-            requests = self._requests()
-            wait = self.cooldown_remaining(targets, name, requests)
-            if wait:
-                return 429, {
-                    "error": f"this target was scanned recently; try again in {wait} seconds",
-                    "retry_after": wait,
-                }
-            wait = self.global_remaining(targets, requests)
-            if wait:
-                return 429, {
-                    "error": (
-                        f"the hourly limit of {targets.max_scans_per_hour} scans is reached; try again in {wait} "
-                        "seconds"
-                    ),
-                    "retry_after": wait,
-                }
-            self._spawn(target.name, trigger, run_id, who)
-            now = time.time()
-            requests["targets"][target.name] = now
-            requests["recent"].append(now)
-            scanning.write_private(self.state_dir / scanning.REQUESTS_FILE, json.dumps(requests))
+            # The worker's pull-request polls change the same file: both take its lock.
+            with scanning.locked_requests(self.state_dir) as requests:
+                wait = self.cooldown_remaining(targets, name, requests)
+                if wait:
+                    return 429, {
+                        "error": f"this target was scanned recently; try again in {wait} seconds",
+                        "retry_after": wait,
+                    }
+                wait = self.global_remaining(targets, requests)
+                if wait:
+                    return 429, {
+                        "error": (
+                            f"the hourly limit of {targets.max_scans_per_hour} scans is reached; try again in {wait} "
+                            "seconds"
+                        ),
+                        "retry_after": wait,
+                    }
+                self._spawn(target.name, trigger, run_id, who)
+                now = time.time()
+                requests["targets"][target.name] = now
+                requests["recent"].append(now)
         return 202, {"started": target.name, "status": self.status(read_triggers)}
 
     def _spawn(self, name: str, trigger: str = "dashboard", run_id: int | None = None, who: str | None = None) -> None:

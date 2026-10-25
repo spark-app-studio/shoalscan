@@ -369,6 +369,27 @@ def ignored_count(doc: dict) -> int:
     )
 
 
+def ignored_spans(doc: dict, root: Path) -> list[dict]:
+    """Where Opengrep found something an inline comment silenced: its rule and the lines the match spans. A marker
+    silences its own line and the next, and a match that starts there, however far it runs, so a marker that was
+    already there can silence code a change adds below it."""
+    out = []
+    for r in doc["results"]:
+        if not (isinstance(r, dict) and isinstance(r.get("extra"), dict) and r["extra"].get("is_ignored") is True):
+            continue
+        try:
+            rule, path, start, end = r["check_id"], r["path"], r["start"]["line"], r["end"]["line"]
+        except (KeyError, TypeError):
+            raise ScanError(f"opengrep result is malformed: {str(r)[:300]}") from None
+        if not isinstance(rule, str) or not isinstance(path, str) or not isinstance(start, int):
+            raise ScanError(f"opengrep result is malformed: {str(r)[:300]}")
+        end = end if isinstance(end, int) and end >= start else start
+        out.append(
+            {"tool": "opengrep", "rule": rule[:300], "path": relative_path(path, root), "start": start, "end": end}
+        )
+    return out
+
+
 def check_rules_ran(doc: dict, staged: set[str]) -> int:
     """Fail if Opengrep ran a rule that was not staged. Returns the number of rules that ran."""
     timing = doc.get("time")

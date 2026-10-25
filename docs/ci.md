@@ -1,6 +1,6 @@
 # CI
 
-Shoalscan runs as one step in any CI system. On a pull request, pass `--policy-ref` with the base commit's full SHA to both `scan` and `check`, so the configuration, the baseline and the rule directories come from the base branch ([why](baseline-and-check.md#pull-requests-the-policy-comes-from-the-base-branch)). Nothing needs a token or a secret.
+Shoalscan runs as one step in any CI system. On a pull request, pass `--policy-ref` with the base commit's full SHA to both `scan` and `check`, so the configuration, the baseline and the rule directories come from the base branch ([why](baseline-and-check.md#pull-requests-the-policy-comes-from-the-base-branch)). Nothing needs a token or a secret. `--policy-ref` needs git 2.40 or later, so that the change's own `.gitattributes` cannot shape the diffs; Shoalscan refuses an older git. GitHub's `ubuntu-latest` runners have a recent git; on Ubuntu 22.04 (git 2.34), install a newer one first, for example from the git-core PPA (`add-apt-repository ppa:git-core/ppa`).
 
 ## GitHub Actions
 

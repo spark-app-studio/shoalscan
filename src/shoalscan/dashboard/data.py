@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from collections import Counter
 from datetime import date, datetime, timedelta
@@ -38,6 +39,9 @@ MAX_TREND_RUNS = 400
 # Heat score weights for the component heatmap.
 HEAT_WEIGHTS = {"ERROR": 10, "WARNING": 3, "INFO": 1}
 HEAT_LEVELS = 5
+# Pull requests listed on the Runs page, newest first; and the ref their runs carry.
+MAX_PULL_REQUESTS = 50
+_PULL_HEAD_REF = re.compile(r"refs/pull/([1-9][0-9]{0,9})/head")
 FILE_KINDS = ("skipped", "error", "changed_unscanned", "partial_warning", "partial_warn_only", "excluded_changed")
 
 _RUN_COLUMNS = (
@@ -46,7 +50,7 @@ _RUN_COLUMNS = (
     "baseline_additions, suppressions, suppressions_invalid, suppressed_findings, unscanned_skipped, "
     "unscanned_errored, changed_unscanned, policy_ref, shoalscan_version, duration_seconds, outcome, check_exit, "
     "details_known, files_known, suppressions_known, partial_warnings, partial_warn_only, excluded_changed, "
-    "blocking_class_count, scanners, test_code, "
+    "blocking_class_count, scanners, test_code, new_suppressions, "
     "EXISTS (SELECT 1 FROM scan_triggers st WHERE st.run_id = runs.id AND st.trigger = 'rescan-commit') AS rescanned"
 )
 SORTS = ("priority",)
@@ -208,6 +212,9 @@ def run_status(d: dict) -> dict:
         _count(d["baseline_additions"], "baseline entry added", "baseline entries added")
         if d["baseline_additions"]
         else None,
+        _count(d["new_suppressions"], "new inline suppression", "new inline suppressions")
+        if d.get("new_suppressions")
+        else None,
     ]
     reasons = [r for r in reasons if r]
     notes = []
@@ -273,6 +280,7 @@ def _run_dict(row: sqlite3.Row) -> dict:
             "total": d["suppressions"],
             "invalid": d["suppressions_invalid"],
             "suppressed_findings": d["suppressed_findings"],
+            "new": d["new_suppressions"],
         },
         "unscanned": {
             "skipped": d["unscanned_skipped"],
@@ -359,7 +367,7 @@ class Data:
         out = []
         for row in self.conn.execute("SELECT id, name FROM repos ORDER BY name"):
             latest = self.conn.execute(
-                f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? ORDER BY scanned_at DESC, id DESC LIMIT 1",
+                f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? AND kind = 'scheduled' ORDER BY scanned_at DESC, id DESC LIMIT 1",  # noqa: E501 - one literal, so Opengrep's raw-query rule still sees it
                 (row["id"],),
             ).fetchone()
             count = self.conn.execute("SELECT COUNT(*) FROM runs WHERE repo_id = ?", (row["id"],)).fetchone()[0]
@@ -377,10 +385,9 @@ class Data:
         )
 
     def _trend_kinds(self, repo_id: int) -> tuple[str, ...]:
-        has = self.conn.execute(
-            f"SELECT 1 FROM runs WHERE repo_id = ? AND kind = 'scheduled' AND {_TREND} LIMIT 1", (repo_id,)
-        ).fetchone()
-        return ("scheduled",) if has else ("scheduled", "pr")
+        """Only scheduled runs feed the trends, the headline run and the reviews: a pull-request run scanned a
+        change nobody has accepted yet, which on a public repository anyone can open."""
+        return ("scheduled",)
 
     def _trend_runs(self, repo_id: int) -> list[sqlite3.Row]:
         kinds = self._trend_kinds(repo_id)
@@ -401,10 +408,11 @@ class Data:
     def overview(self, repo_id: int) -> dict:
         runs = self._trend_runs(repo_id)
         latest_any = self.conn.execute(
-            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? ORDER BY scanned_at DESC, id DESC LIMIT 1", (repo_id,)
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = ? AND kind = 'scheduled' ORDER BY scanned_at DESC, id DESC LIMIT 1",  # noqa: E501 - one literal, so Opengrep's raw-query rule still sees it
+            (repo_id,),
         ).fetchone()
         result: dict = {
-            "trend_kind": "scheduled" if self._trend_kinds(repo_id) == ("scheduled",) else "all",
+            "trend_kind": "scheduled",
             "latest_run": _run_dict(latest_any) if latest_any else None,
             "latest_trend_run": _run_dict(runs[-1]) if runs else None,
             "series": [
@@ -1165,6 +1173,36 @@ class Data:
         ).fetchall()
         return {"total": total, "limit": limit, "offset": offset, "runs": [_run_dict(r) for r in rows]}
 
+    def pull_requests(self, repo_id: int, limit: int = MAX_PULL_REQUESTS) -> dict:
+        """Each pull request's latest run (pull-request runs of `refs/pull/N/head`, as `scanjob --pull-requests`
+        records them), newest first, with how many runs of it there are."""
+        total = self.conn.execute(
+            "SELECT COUNT(DISTINCT ref) FROM runs WHERE repo_id = ? AND kind = 'pr' AND ref GLOB 'refs/pull/*/head'",
+            (repo_id,),
+        ).fetchone()[0]
+        rows = self.conn.execute(
+            f"SELECT {_RUN_COLUMNS}, (SELECT COUNT(*) FROM runs r2 WHERE r2.repo_id = runs.repo_id AND r2.kind = 'pr' "
+            "AND r2.ref = runs.ref) AS ref_runs FROM runs WHERE repo_id = ? AND kind = 'pr' AND ref GLOB "
+            "'refs/pull/*/head' AND id = (SELECT r3.id FROM runs r3 WHERE r3.repo_id = runs.repo_id AND r3.kind = 'pr' "
+            "AND r3.ref = runs.ref ORDER BY r3.scanned_at DESC, r3.id DESC LIMIT 1) ORDER BY scanned_at DESC, id DESC "
+            "LIMIT ?",
+            (repo_id, max(1, min(limit, MAX_PAGE))),
+        ).fetchall()
+        items = []
+        for row in rows:
+            match = _PULL_HEAD_REF.fullmatch(row["ref"])
+            if match is None:
+                continue
+            item = {"number": int(match.group(1)), "runs": row["ref_runs"], "latest": _run_dict(row), "error": None}
+            if row["outcome"] == "scan_error":
+                # Why the scan failed, from the scan audit: a fetch, a size limit, the scan itself or the deadline.
+                audit = self.conn.execute(
+                    "SELECT detail FROM scan_triggers WHERE run_id = ? ORDER BY id DESC LIMIT 1", (row["id"],)
+                ).fetchone()
+                item["error"] = audit[0] if audit else None
+            items.append(item)
+        return {"total": total, "items": items}
+
     def deletions(self, repo_name: str, limit: int = 20) -> dict:
         """Runs of this repository deleted with `shoalscan history delete-run`, newest first."""
         count = self.conn.execute("SELECT COUNT(*) FROM deletions WHERE repo_name = ?", (repo_name,)).fetchone()[0]
@@ -1194,7 +1232,7 @@ class Data:
 
     def latest_run_of(self, name: str) -> dict | None:
         row = self.conn.execute(
-            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = (SELECT id FROM repos WHERE name = ?) ORDER BY scanned_at DESC, id DESC LIMIT 1",  # noqa: E501 - one literal, so Opengrep's raw-query rule still sees it
+            f"SELECT {_RUN_COLUMNS} FROM runs WHERE repo_id = (SELECT id FROM repos WHERE name = ?) AND kind = 'scheduled' ORDER BY scanned_at DESC, id DESC LIMIT 1",  # noqa: E501 - one literal, so Opengrep's raw-query rule still sees it
             (name,),
         ).fetchone()
         return _run_dict(row) if row else None
@@ -1210,7 +1248,7 @@ class Data:
 
     def latest_scanners(self) -> dict:
         row = self.conn.execute(
-            f"SELECT scanners FROM runs WHERE {_TREND} ORDER BY scanned_at DESC, id DESC LIMIT 1"
+            f"SELECT scanners FROM runs WHERE kind = 'scheduled' AND {_TREND} ORDER BY scanned_at DESC, id DESC LIMIT 1"
         ).fetchone()
         if not row:
             return {}

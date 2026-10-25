@@ -105,6 +105,27 @@ def quiet(argv):
     return code, out.getvalue(), err.getvalue()
 
 
+class PullRequestTextTests(unittest.TestCase):
+    """The text a finding is embedded and described with comes from scheduled runs, never a pull request's."""
+
+    def test_a_newer_pull_request_run_never_supplies_the_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            conn = history.open_for_write(tmp / "h.sqlite3")
+            try:
+                record(conn, tmp, "acme/app", "1" * 40, 1, [finding("r", "a.py", "f:0", message="from main")])
+                record(
+                    conn, tmp, "acme/app", "2" * 40, 5, [finding("r", "a.py", "f:0", message="from a pr")], kind="pr"
+                )
+                repo_id = conn.execute("SELECT id FROM repos").fetchone()[0]
+                ((key_id, text),) = embeddings._latest_texts(conn, repo_id)
+                self.assertIn("from main", text)
+                self.assertNotIn("from a pr", text)
+                self.assertEqual(embeddings._describe(conn, key_id, 1.0)["message"], "from main")
+            finally:
+                conn.close()
+
+
 class SettingsTests(unittest.TestCase):
     def test_only_ollama_on_loopback(self):
         self.assertEqual(embeddings.validate_host("http://localhost:11434"), "http://localhost:11434")

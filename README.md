@@ -82,7 +82,7 @@ shoalscan scan && shoalscan check
 9. [Reviewing findings](docs/reviewing-findings.md): review statuses, automatic verification of fixes, and `triage export`.
 10. [The triage work list](docs/triage.md): `shoalscan triage`, a prioritised work list of the last scan's findings, grouped by rule family and component.
 11. [The security report](docs/report.md): `shoalscan report`, a dated report on a repository's security over a period, from the run history.
-12. [Scheduled scans](docs/scheduled-scans.md): nightly scans of the default branch with the example script and units.
+12. [Scheduled scans](docs/scheduled-scans.md): nightly scans of the default branch with the example script and units, and scans of the open pull requests of a public repository without credentials.
 13. [Scanning from the dashboard](docs/dashboard-scanning.md): registered repositories, Rescan, and the Configuration page.
 14. [Security model](docs/security-model.md): how the dashboard and the scan worker protect themselves.
 15. [Limits](docs/limits.md): what static analysis and Shoalscan's own safeguards cannot do.

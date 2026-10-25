@@ -1,3 +1,4 @@
+import plistlib
 import re
 import stat
 import subprocess
@@ -261,6 +262,20 @@ class NightlyTargetsUnitTests(unittest.TestCase):
         self.assertIn(
             "OnCalendar=", (EXAMPLES / "scheduled" / "shoalscan-nightly-targets.timer").read_text(encoding="utf-8")
         )
+
+
+class PullRequestUnitTests(unittest.TestCase):
+    def test_the_units_run_the_pull_request_poll(self):
+        with open(EXAMPLES / "scheduled" / "local.shoalscan.pull-requests.plist", "rb") as handle:
+            plist = plistlib.load(handle)
+        self.assertEqual(plist["ProgramArguments"][1:4], ["scanjob", "--pull-requests", "--state-dir"])
+        self.assertEqual(plist["StartInterval"], 900)
+        service = (EXAMPLES / "scheduled" / "shoalscan-pull-requests.service").read_text(encoding="utf-8")
+        self.assertIn("scanjob --pull-requests --state-dir", service)
+        self.assertIn("\nPrivateTmp=yes\n", service)
+        self.assertIn("\nNoNewPrivileges=yes\n", service)
+        timer = (EXAMPLES / "scheduled" / "shoalscan-pull-requests.timer").read_text(encoding="utf-8")
+        self.assertIn("\nOnUnitActiveSec=15m\n", timer)
 
 
 if __name__ == "__main__":

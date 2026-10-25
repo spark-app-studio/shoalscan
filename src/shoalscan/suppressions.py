@@ -89,6 +89,7 @@ class Suppression:
     issue: str | None
     bare: bool
     kind: str = "opengrep"  # whose marker: "opengrep" or "trivy"
+    member: str | None = None  # the file inside a packaged chart the marker is in; `path` is the archive
 
     @property
     def valid(self) -> bool:
@@ -187,7 +188,7 @@ def _trivy_markers(rel: str, data: bytes, member: str = "") -> list[Suppression]
     for number, line in enumerate(data.decode("utf-8", errors="replace").split("\n"), start=1):
         for ids, issue, bare in parse_trivy_line(line):
             text = f"{member}: {line.strip()}" if member else line.strip()
-            found.append(Suppression(rel, number, text, ids, issue, bare, kind="trivy"))
+            found.append(Suppression(rel, number, text, ids, issue, bare, kind="trivy", member=member or None))
     return found
 
 

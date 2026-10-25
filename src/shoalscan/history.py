@@ -41,6 +41,7 @@ MAX_MESSAGE_CHARS = 4000
 MAX_FIELD_CHARS = 1024
 DEFAULT_MAX_RUNS = 2000
 DEFAULT_KEEP_PR_DAYS = 90
+DEFAULT_MAX_PR_RUNS = 2000
 MAX_FUTURE = timedelta(hours=24)
 
 _REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@:+-]{0,199}$")
@@ -309,6 +310,10 @@ MIGRATIONS: tuple[str, ...] = (
     # columns (run_findings.test_scope, runs.test_scoped) and automatic reviews. Worked out in Python:
     # see `_migration_15`.
     "python:_migration_15",
+    # 16: inline suppressions a pull request added on its changed lines (`check --changed-since`), which fail it.
+    """
+    ALTER TABLE runs ADD COLUMN new_suppressions INTEGER NOT NULL DEFAULT 0;
+    """,
 )
 # The automatic reviewer those unreleased builds wrote reviews under.
 UNRELEASED_AUTO_REVIEWER = "shoalscan (test scope)"
@@ -770,6 +775,7 @@ def _row(
         "unscanned_skipped": _int(summary, "unscanned", "skipped"),
         "unscanned_errored": _int(summary, "unscanned", "errored"),
         "changed_unscanned": _int(summary, "unscanned", "changed_and_unscanned"),
+        "new_suppressions": _int(summary, "new_suppressions"),
         "test_code": _int(summary, "test_code") if "test_code" in summary else 0,
         "policy_ref": _text(policy_ref, 256) if isinstance(policy_ref, str) else None,
         "shoalscan_version": _text(version, 64) if isinstance(version, str) else None,
@@ -862,6 +868,7 @@ def record_run(
     review_transitions: bool = True,
     max_runs: int = DEFAULT_MAX_RUNS,
     keep_pr_days: int = DEFAULT_KEEP_PR_DAYS,
+    max_pr_runs: int = DEFAULT_MAX_PR_RUNS,
 ) -> RecordResult:
     """Store one run. Recording the same (repo, commit, kind) again replaces it,
     or does nothing when the content is the same, so a retried job is harmless.
@@ -1008,7 +1015,7 @@ def record_run(
         # Only a scan of the branch's tip moves reviews; a rescan of an earlier commit never does.
         if review_transitions and info.kind == "scheduled" and outcome != "scan_error":
             apply_review_transitions(conn, info, run_id, {k for k in seen}, meta)
-        pruned = prune(conn, repo_id, max_runs, keep_pr_days)
+        pruned = prune(conn, repo_id, max_runs, keep_pr_days, max_pr_runs)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
@@ -1016,12 +1023,21 @@ def record_run(
     return RecordResult(run_id, "replaced" if existing else "recorded", pruned)
 
 
-def prune(conn: sqlite3.Connection, repo_id: int, max_runs: int, keep_pr_days: int) -> int:
+def prune(
+    conn: sqlite3.Connection,
+    repo_id: int,
+    max_runs: int,
+    keep_pr_days: int,
+    max_pr_runs: int = DEFAULT_MAX_PR_RUNS,
+) -> int:
     """Drop old runs of one repository: pull-request runs older than `keep_pr_days`
-    before the newest run, then all but the newest `max_runs` runs. Finding
-    identities and messages that no run uses any more go too."""
-    if max_runs < 1 or keep_pr_days < 0:
-        raise SetupError("--max-runs must be at least 1 and --keep-pr-days at least 0")
+    before the newest run and all but the newest `max_pr_runs` of them, and all
+    but the newest `max_runs` scheduled runs. The two kinds are counted apart,
+    so pull-request runs (anyone can open a pull request on a public repository)
+    can never push a scheduled run out. Finding identities and messages that no
+    run uses any more go too; reviews are kept by identity and never pruned."""
+    if max_runs < 1 or keep_pr_days < 0 or max_pr_runs < 1:
+        raise SetupError("--max-runs and --max-pr-runs must be at least 1 and --keep-pr-days at least 0")
     newest = conn.execute("SELECT MAX(scanned_at) FROM runs WHERE repo_id = ?", (repo_id,)).fetchone()[0]
     if newest is None:
         return 0
@@ -1030,11 +1046,12 @@ def prune(conn: sqlite3.Connection, repo_id: int, max_runs: int, keep_pr_days: i
     )
     before = conn.total_changes
     conn.execute("DELETE FROM runs WHERE repo_id = ? AND kind = 'pr' AND scanned_at < ?", (repo_id, cutoff))
-    conn.execute(
-        "DELETE FROM runs WHERE repo_id = ? AND id NOT IN "
-        "(SELECT id FROM runs WHERE repo_id = ? ORDER BY scanned_at DESC, id DESC LIMIT ?)",
-        (repo_id, repo_id, max_runs),
-    )
+    for kind, keep in (("scheduled", max_runs), ("pr", max_pr_runs)):
+        conn.execute(
+            "DELETE FROM runs WHERE repo_id = ? AND kind = ? AND id NOT IN "
+            "(SELECT id FROM runs WHERE repo_id = ? AND kind = ? ORDER BY scanned_at DESC, id DESC LIMIT ?)",
+            (repo_id, kind, repo_id, kind, keep),
+        )
     pruned = conn.total_changes - before
     if pruned:
         _drop_orphans(conn, repo_id)
@@ -1308,7 +1325,7 @@ def apply_review_transitions(
                 "SELECT rf.line FROM run_findings rf JOIN finding_keys fk ON fk.id = rf.key_id JOIN runs r ON r.id = "
                 "rf.run_id "
                 "JOIN repos rp ON rp.id = r.repo_id WHERE rp.name = ? AND fk.tool = ? AND fk.rule = ? AND fk.path = ? "
-                "AND fk.fingerprint = ? "
+                "AND fk.fingerprint = ? AND r.kind = 'scheduled' "
                 "ORDER BY r.scanned_at DESC LIMIT 1",
                 (info.repo, *key),
             ).fetchone()
@@ -1335,6 +1352,17 @@ def run_commit(conn: sqlite3.Connection, repo: str, run_id: int) -> tuple[str, s
         (repo, run_id),
     ).fetchone()
     return (row[0], row[1], row[2], row[3]) if row else None
+
+
+def pull_request_runs(conn: sqlite3.Connection, repo: str) -> list[tuple[str, str, str, str]]:
+    """The (ref, commit, outcome, scanned_at) of every pull-request run of this repository."""
+    rows = conn.execute(
+        "SELECT runs.ref, runs.commit_sha, COALESCE(runs.outcome, CASE runs.result WHEN 'pass' THEN 'passed' ELSE "
+        "'blocked' END), runs.scanned_at FROM runs JOIN repos ON repos.id = runs.repo_id "
+        "WHERE repos.name = ? AND runs.kind = 'pr'",
+        (repo,),
+    ).fetchall()
+    return [(row[0], row[1], row[2], row[3]) for row in rows]
 
 
 def list_runs(conn: sqlite3.Connection, repo: str) -> list[dict]:

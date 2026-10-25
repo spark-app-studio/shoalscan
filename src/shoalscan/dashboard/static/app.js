@@ -993,6 +993,7 @@
         body.appendChild(row);
       });
       pager($("runs-pager"), res, "runs", params);
+      renderPulls(res.pull_requests || { total: 0, items: [] }, params);
       var deleted = clear($("runs-deleted"));
       var d = res.deletions || { count: 0, items: [] };
       if (d.count) {
@@ -1003,6 +1004,27 @@
       }
     });
     return Promise.all([detail, list]);
+  }
+
+  // Each pull request's latest run, from `scanjob --pull-requests`: number, head commit and result.
+  function renderPulls(pulls, params) {
+    $("runs-pulls").hidden = !pulls.items.length;
+    var body = clear($("runs-pulls-table").tBodies[0]);
+    pulls.items.forEach(function (p) {
+      var r = p.latest;
+      var cls = r.outcome === "passed" ? "status-pass" : (r.outcome === "scan_error" ? "status-error" : "status-fail");
+      var num = function (v) { return el("td", { "class": "num" }, r.outcome === "scan_error" ? "-" : String(v)); };
+      body.appendChild(el("tr", { "class": String(r.id) === params.run ? "selected" : null },
+        el("td", null, "#" + p.number),
+        el("td", { "class": "mono", title: r.commit }, r.commit.slice(0, 10)),
+        el("td", null, fmtTime(r.scanned_at)),
+        el("td", { "class": cls }, internalLink(M.href("runs", { run: r.id }), r.status.label, "Show the detail of run " + r.id),
+          p.error ? el("div", { "class": "muted small" }, p.error) : ""),
+        num(r.new_blocking), num(r["new"]), num(r.unscanned.changed_and_unscanned), num(r.suppressions.total),
+        num(r.suppressions["new"]), el("td", { "class": "num" }, String(p.runs))));
+    });
+    $("runs-pulls-more").textContent = pulls.total > pulls.items.length
+      ? "Showing the " + pulls.items.length + " most recently scanned of " + pulls.total + " pull requests." : "";
   }
 
   function runNote(id, prefix) { return prefix + " in run " + id + ". "; }

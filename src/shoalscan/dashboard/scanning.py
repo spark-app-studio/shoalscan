@@ -7,9 +7,9 @@ Configuration page may change it, but only through `validate_*` below, and
 only the fields a browser may set: name, an https source on an allowlisted
 host or a pre-registered local mirror chosen by name, branch, enabled,
 nightly and the policy text. Clone, configuration and baseline paths are
-derived by the server; `clone`, `config`, `baseline` and `python` can only be
-written into the file by hand, and are kept as they are when the dashboard
-rewrites it.
+derived by the server; `clone`, `config`, `baseline`, `python`, `max_clone_mb`
+and `pull_requests` can only be written into the file by hand, and are kept as
+they are when the dashboard rewrites it.
 
 Single flight across processes comes from an flock on a lock file, held for
 as long as the scan runs; the kernel releases it when the process ends.
@@ -27,6 +27,7 @@ import stat
 import subprocess
 import time
 import tomllib
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -95,6 +96,8 @@ GIT_HARDENED_ENV = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_ATTR_NOSYSTEM": "1",
     "GIT_ATTR_SOURCE": EMPTY_TREE,
+    # A path is a path: a file a scanned repository names `:(exclude)*` must never act as pathspec magic.
+    "GIT_LITERAL_PATHSPECS": "1",
 }
 
 
@@ -212,6 +215,8 @@ class Target:
     baseline: Path | None = None  # set by hand only
     python: Path | None = None  # set by hand only
     max_clone_mb: int | None = None  # set by hand only
+    # Scan the open pull requests of the source too (`scanjob --pull-requests`); set by hand only, https sources only.
+    pull_requests: bool = False
 
     def public_source(self) -> dict:
         if self.kind == "url":
@@ -231,6 +236,13 @@ class Targets:
     max_scans_per_hour: int = 6
     min_free_mb: int = 2048
     max_clone_mb: int = 2048
+    # The checkout of the commit being scanned: its total size (as git's tree lists it) and its files.
+    max_checkout_mb: int = 2048
+    max_checkout_files: int = 200_000
+    # At most this many pull requests are scanned by one `scanjob --pull-requests` poll, and in one hour (a
+    # budget of their own: pull-request scans never use up the dashboard's max_scans_per_hour).
+    max_pull_requests: int = 10
+    max_pr_scans_per_hour: int = 6
     # Scans fail unless the scanners can run without network access (see shoalscan.process).
     require_network_sandbox: bool = True
     mirrors: dict[str, Path] = field(default_factory=dict)
@@ -481,6 +493,10 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
         "max_scans_per_hour",
         "min_free_mb",
         "max_clone_mb",
+        "max_pull_requests",
+        "max_pr_scans_per_hour",
+        "max_checkout_mb",
+        "max_checkout_files",
         "require_network_sandbox",
     }
     unknown = set(data) - top
@@ -502,6 +518,7 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
         "baseline",
         "python",
         "max_clone_mb",
+        "pull_requests",
     }
     for n, entry in enumerate(entries, 1):
         where = f"target {n}"
@@ -544,6 +561,12 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
                 fields[key] = value
         if "max_clone_mb" in entry:
             fields["max_clone_mb"] = _int(entry["max_clone_mb"], f"{name} max_clone_mb", 1, 10_000_000)
+        if _bool(entry.get("pull_requests", False), f"{name} pull_requests"):
+            if fields["kind"] != "url":
+                # Pull requests are listed and fetched anonymously over https, with no credential helper: a
+                # mirror is never fetched, and a clone set by hand is fetched with its owner's git configuration.
+                raise SetupError(f"{TARGETS_FILE}: {name} pull_requests = true needs an https source")
+            fields["pull_requests"] = True
         targets[name] = Target(
             name=name,
             branch=branch,
@@ -560,6 +583,10 @@ def load_targets(state_dir: Path, allow_missing: bool = False) -> Targets | None
         max_scans_per_hour=_int(data.get("max_scans_per_hour", 6), "max_scans_per_hour", 1, 60),
         min_free_mb=_int(data.get("min_free_mb", 2048), "min_free_mb", 0, 10_000_000),
         max_clone_mb=_int(data.get("max_clone_mb", 2048), "max_clone_mb", 1, 10_000_000),
+        max_pull_requests=_int(data.get("max_pull_requests", 10), "max_pull_requests", 1, 100),
+        max_pr_scans_per_hour=_int(data.get("max_pr_scans_per_hour", 6), "max_pr_scans_per_hour", 1, 60),
+        max_checkout_mb=_int(data.get("max_checkout_mb", 2048), "max_checkout_mb", 1, 10_000_000),
+        max_checkout_files=_int(data.get("max_checkout_files", 200_000), "max_checkout_files", 1, 100_000_000),
         require_network_sandbox=_bool(data.get("require_network_sandbox", True), "require_network_sandbox"),
         mirrors=mirrors,
         allowed_hosts=hosts,
@@ -579,13 +606,23 @@ def dump_targets(t: Targets, raw_top: dict) -> str:
     """Write the file back: the top-level settings as they were, then every target."""
     lines = [
         "# Scan targets for the Shoalscan dashboard. The Configuration page edits this file;",
-        "# clone, config, baseline and python can only be set here by hand.",
+        "# clone, config, baseline, python, max_clone_mb and pull_requests can only be set here by hand.",
         "",
     ]
     for key in ("history_db", "tools_dir"):
         if key in raw_top:
             lines.append(f"{key} = {_toml_string(str(raw_top[key]))}")
-    for key in ("cooldown_minutes", "timeout_minutes", "max_scans_per_hour", "min_free_mb", "max_clone_mb"):
+    for key in (
+        "cooldown_minutes",
+        "timeout_minutes",
+        "max_scans_per_hour",
+        "min_free_mb",
+        "max_clone_mb",
+        "max_pull_requests",
+        "max_pr_scans_per_hour",
+        "max_checkout_mb",
+        "max_checkout_files",
+    ):
         if key in raw_top:
             lines.append(f"{key} = {int(raw_top[key])}")
     if "require_network_sandbox" in raw_top:
@@ -607,6 +644,8 @@ def dump_targets(t: Targets, raw_top: dict) -> str:
                 lines.append(f"{key} = {_toml_string(str(value))}")
         if target.max_clone_mb is not None:
             lines.append(f"max_clone_mb = {int(target.max_clone_mb)}")
+        if target.pull_requests:
+            lines.append("pull_requests = true")
     return "\n".join(lines) + "\n"
 
 
@@ -678,6 +717,71 @@ def read_json(path: Path) -> dict:
     except (OSError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+# ---------------------------------------------------------------- scan requests: cooldowns and the hourly cap
+#
+# scan_requests.json holds when each target was last asked for (by name; a
+# pull-request poll of a target under "<name>#pull-requests", which no target
+# name can be), the times of the last hour's scans from the dashboard
+# ("recent", against max_scans_per_hour) and, apart, those of pull-request
+# scans ("pr_recent", against max_pr_scans_per_hour), so pull requests, which
+# anyone can open, never use up the dashboard's budget.
+
+HOUR = 3600
+PULL_REQUESTS_KEY = "#pull-requests"
+
+
+def read_requests(state_dir: Path) -> dict:
+    data = read_json(state_dir / REQUESTS_FILE)
+    targets = data.get("targets") if isinstance(data.get("targets"), dict) else {}
+
+    def last_hour(key: str) -> list:
+        values = data.get(key) if isinstance(data.get(key), list) else []
+        return [t for t in values if isinstance(t, (int, float)) and time.time() - t < HOUR]
+
+    return {
+        "targets": {k: v for k, v in targets.items() if isinstance(v, (int, float))},
+        "recent": last_hour("recent"),
+        "pr_recent": last_hour("pr_recent"),
+    }
+
+
+def write_requests(state_dir: Path, requests: dict) -> None:
+    write_private(state_dir / REQUESTS_FILE, json.dumps(requests))
+
+
+REQUESTS_LOCK = "scan_requests.lock"
+
+
+@contextmanager
+def locked_requests(state_dir: Path):
+    """Read, change and write scan_requests.json under an exclusive flock that the dashboard and the worker
+    both take, so neither loses the other's update. Nothing is written when the body raises."""
+    fd = os.open(state_dir / REQUESTS_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        requests = read_requests(state_dir)
+        yield requests
+        write_requests(state_dir, requests)
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def cooldown_wait(targets: Targets, key: str, requests: dict) -> int:
+    """Seconds until `key` (a target name, or a name with PULL_REQUESTS_KEY) may be asked for again."""
+    last = requests["targets"].get(key)
+    return max(0, int(last + targets.cooldown_seconds - time.time())) if last else 0
+
+
+def hourly_wait(targets: Targets, requests: dict, pull_requests: bool = False) -> int:
+    """Seconds until the hourly cap allows another scan: the dashboard's, or the pull-request scans' own."""
+    recent = sorted(requests["pr_recent" if pull_requests else "recent"])
+    cap = targets.max_pr_scans_per_hour if pull_requests else targets.max_scans_per_hour
+    if len(recent) < cap:
+        return 0
+    return max(0, int(recent[-cap] + HOUR - time.time()))
 
 
 # ---------------------------------------------------------------- the lock
@@ -775,12 +879,25 @@ def release_lock(state_dir: Path) -> None:
 _ABS_PATH = re.compile(r"(?<![\w.>])/(?:[^\s:'\"]+)")
 
 
+# Bidirectional overrides and isolates, which can make a line read differently from what it says.
+_BIDI = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+def plain_text(line: str) -> str:
+    """A line with no terminal control or escape sequences: C0 and C1 control characters, DEL and
+    bidirectional controls are dropped (tabs become spaces), so text a scanned repository chose, such
+    as a file name in a scanner's output, cannot drive a terminal or reorder what the log shows."""
+    return "".join(
+        " " if c == "\t" else c for c in line if c == "\t" or not (c < " " or "\x7f" <= c <= "\x9f" or c in _BIDI)
+    )
+
+
 def sanitise_log(lines: list[str], clone: Path | None) -> list[str]:
     """Log lines for the browser: control characters dropped, the clone shown by
     its name, every other absolute path replaced with <path>."""
     out = []
     for line in lines:
-        line = "".join(c for c in line if c >= " " and c != "\x7f")[:300]
+        line = plain_text(line)[:300]
         if clone is not None:
             line = line.replace(str(clone), f"<clone {clone.name}>")
         out.append(_ABS_PATH.sub("<path>", line))

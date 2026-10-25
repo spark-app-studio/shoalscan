@@ -2,6 +2,38 @@
 
 All notable changes to Shoalscan are recorded here.
 
+## Unreleased
+
+### Added
+
+- `shoalscan scanjob --pull-requests` scans the open pull requests of a public repository itself, with no credentials, so a public repository's pull requests never need to run on your own CI runners. Set `pull_requests = true` by hand on a target with an https `source` in `scan_targets.toml`. Everything in a pull request is treated as written by an attacker. See [Scheduled scans](docs/scheduled-scans.md#scanning-the-open-pull-requests-of-a-public-repository), with the limits of finding open pull requests this way.
+  - Discovery is one anonymous, hardened `git ls-remote` with `HOME=/nonexistent` (never the GitHub API). A pull request is a candidate when it has a `refs/pull/N/merge` ref, an earlier run of its `refs/pull/N/head`, or, by a per-target poll state, a number above the first poll's high-water mark or a head that moved since the previous poll (so one that conflicts from its first push is still scanned, and closed ones are not).
+  - Each head is fetched anonymously into a throwaway repository that borrows the branch clone's objects read-only, so the branch clone never grows or breaks, size-checked before checkout, scanned like a scheduled scan and recorded as a pull-request run of `refs/pull/N/head`. A pull request pushed to after the listing is scanned at the head that was fetched.
+  - The policy and baseline are the target's, the repository rule directories come from the head of the registered branch, and changed files are listed against the merge base with it. Inline suppressions the pull request adds on its changed lines fail it, and so does new code an existing marker silences; stale baseline entries are only reported. A head is scanned again when the registered branch's head or the target's policy or baseline file changes.
+  - Fairness and budgets: pull-request scans have their own `max_pr_scans_per_hour` (default 6), apart from the dashboard's `max_scans_per_hour`; at most `max_pull_requests` (default 10) per poll; a pull request at most once an hour, counted from its last attempt; never-scanned and longest-waiting first, so new pull requests can push rescans of older heads to later polls. A failure the pull request caused is recorded as a scan error and retried only after a day, while it looks open, or when the head changes; a failure of this machine is retried on the next poll, and an attempt that ran no scan gives its budget back. Closed pull requests are never retried or rescanned.
+  - A listing that fails, times out, is malformed or does not show the registered branch, or an unreadable poll state, is recorded as a scan error, never as nothing to scan. Nothing is posted to GitHub.
+  - Example launchd and systemd units run it every 15 minutes.
+- The Runs page shows a **Pull requests** table with each pull request's latest run: its number, head commit, status and the reason for a failed scan, new blocking and new findings, changed files that were not fully scanned, suppressions and new suppressions, and its number of runs. `/api/runs` returns it as `pull_requests`.
+- `shoalscan scan --rules-commit <commit>` reads the repository rule directories from that commit instead of the scanned tree (with `--config`), and records it in `findings.json` under `policy.rules_commit`. `shoalscan check --changed-since <commit>` lists the changed files against the merge base with that commit, with an explicit configuration and baseline: a changed file that was not fully scanned and an inline suppression on an added line fail, and stale baseline entries are only reported. The added lines come from a textual diff (`--text`), a changed file with no textual diff counts in full, and Trivy markers in a changed chart archive count as new. `findings.json` lists every finding a scanner silenced because of an inline comment (`silenced_list`, `silenced_total`), and `check --changed-since` fails those whose lines overlap the added lines, even under a marker that was already there. When the scan listed only part of them (over 10,000), the check stops with a setup error rather than guess. History schema version 16 stores the new suppressions.
+- Every scan, scheduled scans included, checks the commit's tree before checking it out: past `max_checkout_mb` (default 2048), `max_checkout_files` (default 200000), a path deeper than 64 directories, or not enough free space for the checkout twice (in whole 4 KiB blocks, plus 4 KiB per file) besides `min_free_mb`, the scan is refused. The size is also watched while git writes the checkout. A scheduled scan of a repository past these limits now fails until they are raised.
+- `shoalscan record --max-pr-runs` (default 2000) caps the pull-request runs kept per repository, counted apart from the scheduled runs `--max-runs` keeps.
+
+### Changed
+
+- `check --changed-since` no longer fails on stale baseline entries: the change cannot edit the outside baseline, so they are reported only. `check --policy-ref` and plain checks still fail on them.
+- The text embeddings are made from, the similar-finding description, the line a "fixed" review is verified against and the line `triage export` writes come from scheduled runs only.
+- The Overview's latest run, the repository list, the Configuration page's last run, the scanners in use and the trends use scheduled runs only. A repository without scheduled runs no longer falls back to its pull-request runs.
+- Pull-request runs never push scheduled runs out of the history: the two kinds are pruned apart.
+
+### Fixed
+
+- Hardening: network git commands of the scan worker run without the home directory, so curl never reads a `~/.netrc`, and scanner output loses control, escape and bidirectional characters before it is written to the scan log.
+- The dashboard and the scan worker change `scan_requests.json` under a shared lock.
+- Hardening: every git command Shoalscan's checks run treats file names as literal paths (`GIT_LITERAL_PATHSPECS`), so a file a change names like pathspec magic (`:(exclude)*.py`, `:(glob)**`, `:/x`) can no longer hide its added lines from `check`; a changed file whose diff is empty counts as added in full. The worker's own git commands use literal pathspecs too.
+- Hardening: the diffs `check` reads ignore the repository's `.gitattributes` and the machine's system and global git configuration (`GIT_ATTR_SOURCE` set to the empty tree, no system or global configuration, `--no-ext-diff`, `--no-textconv`), so no clean filter can reshape them. `scan --policy-ref`, `check --policy-ref` and `check --changed-since` need git 2.40 or later and refuse an older git, which would silently ignore the attribute source and let the change's `.gitattributes` apply: **CI on Ubuntu 22.04 (git 2.34) needs a newer git**, for example from the git-core PPA. Each git command passes `-c safe.directory` for exactly the repository path it was given, since global configuration is no longer read.
+- git's output is read as it is written and capped at 256 MB, instead of being buffered whole first.
+- Hardening: `check` (in a git work tree) and the scan worker refuse a path that is not valid UTF-8 or holds a control character, with exit 2 or a scan error. The scanners report such a name differently (Opengrep as U+FFFD) or not at all, so its code could pass unscanned and its suppressions unseen. **A repository with such a file name now fails its checks until the file is renamed.**
+
 ## 0.3.1 (2026-10-17)
 
 ### Fixed

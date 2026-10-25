@@ -302,6 +302,33 @@ def silenced_findings(log: str, markers: list[Suppression], excludes: tuple[str,
     return count
 
 
+def silenced_spans(log: str, excludes: tuple[str, ...]) -> list[dict]:
+    """Where Trivy says an inline comment silenced a finding: its rule and lines. A marker applies to the block below
+    it, so a marker already there can silence code a change adds inside that block."""
+    matcher = ExcludeMatcher(list(excludes))
+    out = []
+    for match in _IGNORED.finditer(log):
+        where = _RANGE.search(match.group(1))
+        if where is None:
+            continue  # silenced_findings has already refused it
+        path = where.group(1).replace('\\"', '"')
+        if path == ".git" or path.startswith(".git/") or matcher.excluded(path):
+            continue
+        rule = re.search(r'\brule="((?:[^"\\\n]|\\.)*)"', match.group(1))
+        start = int(where.group(2))
+        end = int(where.group(3)) if where.group(3) else start
+        out.append(
+            {
+                "tool": "trivy",
+                "rule": rule.group(1)[:300] if rule else "",
+                "path": path,
+                "start": start,
+                "end": max(end, start),
+            }
+        )
+    return out
+
+
 def config_files(root: Path, excludes: tuple[str, ...], max_bytes: int) -> list[str]:
     """The files whose Trivy markers are linted: every file of a kind Trivy reads, outside .git and the excludes."""
     matcher = ExcludeMatcher(list(excludes))
@@ -378,11 +405,12 @@ def run(
     ignore: tuple[str, ...],
     helm_pin: tuple[Path, str] | None = None,
     helm_values: dict[str, tuple[str, ...]] | None = None,
-) -> tuple[list[Finding], dict, list[Suppression], int, dict]:
+) -> tuple[list[Finding], dict, list[Suppression], int, dict, list[dict]]:
     """Check the repository's infrastructure as code, Helm charts rendered by the pinned Helm.
 
     Returns the findings, the unscanned files, the Trivy markers found, how
-    many findings those markers silenced (from Trivy's log) and the rule metadata.
+    many findings those markers silenced (from Trivy's log), the rule metadata, and where each silenced
+    finding was.
     """
     if not binary.is_file():
         raise SetupError(f"trivy is not installed: {binary} (run `shoalscan install`)")
@@ -405,4 +433,4 @@ def run(
     )
     silenced = silenced_findings(log, markers, excludes)
     unscanned = {"skipped": [], "errors": [*parse_errors(log, root, excludes), *chart_errors]}
-    return findings, unscanned, markers, silenced, meta
+    return findings, unscanned, markers, silenced, meta, silenced_spans(log, excludes)

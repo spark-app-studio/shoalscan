@@ -1,0 +1,12 @@
+# Starts shoalscan-pull-requests.service every 15 minutes. See that file for installation.
+
+[Unit]
+Description=Shoalscan scans of open pull requests, every 15 minutes
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=15m
+RandomizedDelaySec=1m
+
+[Install]
+WantedBy=timers.target
