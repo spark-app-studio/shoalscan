@@ -192,6 +192,86 @@ def rule_languages(rule: RuleText) -> frozenset[str] | None:
     return found
 
 
+def rule_include_globs(rule: RuleText) -> tuple[str, ...] | None:
+    """The globs under the rule's `paths: include:`, or None when the rule reads every file.
+
+    None covers a rule with no `paths:`, a `paths:` without `include:`, and any shape that cannot be read
+    with certainty (a second key, a scalar, a list over several lines, a flow mapping).
+    """
+    lines = [line.rstrip("\n") for line in rule.text.splitlines()]
+    first = _ITEM.match(lines[0]) if lines else None
+    if not first:
+        return None
+    child = len(first.group(0))
+
+    def key_at(n: int) -> re.Match | None:
+        body = " " * child + lines[n][child:] if n == 0 else lines[n]
+        return _KEY.match(body)
+
+    def block_end(start: int, indent: int) -> int:
+        """The first line after `start` that is not blank, a comment, or deeper than `indent`."""
+        n = start
+        while n < len(lines) and (
+            not lines[n].strip() or lines[n].lstrip().startswith("#") or _indent(lines[n]) > indent
+        ):
+            n += 1
+        return n
+
+    paths_at = [
+        n
+        for n in range(len(lines))
+        if (m := key_at(n)) and len(m.group("indent")) == child and m.group("key") == "paths"
+    ]
+    if len(paths_at) != 1:
+        return None
+    start = paths_at[0]
+    if key_at(start).group("value").split(" #", 1)[0].strip():
+        return None
+    end = block_end(start + 1, child)
+    body = [n for n in range(start + 1, end) if lines[n].strip() and not lines[n].lstrip().startswith("#")]
+    if not body:
+        return None
+    key_indent = _indent(lines[body[0]])
+    include_at = []
+    for n in body:
+        # Deeper lines, and list items at the keys' indent (the compact form), belong to a key above.
+        if _indent(lines[n]) != key_indent or lines[n].lstrip().startswith("- "):
+            continue
+        m = _KEY.match(lines[n])
+        if not m:
+            return None
+        if m.group("key") == "include":
+            include_at.append(n)
+        elif m.group("key") != "exclude":
+            return None
+    if len(include_at) != 1:
+        return None
+    n = include_at[0]
+    value = _KEY.match(lines[n]).group("value").split(" #", 1)[0].strip()
+    if value.startswith("["):
+        if not value.endswith("]"):
+            return None
+        items = [x.strip() for x in value[1:-1].split(",")]
+    elif value == "":
+        items = []
+        for m in range(n + 1, len(lines)):
+            stripped = lines[m].strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            # A block list under the key, or at the key's own indent (YAML's compact form).
+            if _indent(lines[m]) < key_indent or (_indent(lines[m]) == key_indent and not stripped.startswith("- ")):
+                break
+            if not stripped.startswith("- "):
+                return None
+            items.append(stripped[2:].split(" #", 1)[0].strip())
+    else:
+        return None
+    globs = tuple(_scalar(x) for x in items)
+    if not globs or any(not g for g in globs):
+        return None
+    return globs
+
+
 def split_rules(text: str, where: str) -> list[RuleText]:
     """Split a rule file into its rules. Raises SetupError if the shape is unexpected."""
     # Split on newline only: YAML does not break lines on form feeds or

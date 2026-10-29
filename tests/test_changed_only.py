@@ -217,6 +217,30 @@ class ChangedOnlyTests(unittest.TestCase):
         code, out, err = self.scan_dropping("tool")
         self.assertEqual(code, 2, out + err)
 
+    def test_a_file_a_generic_rules_include_reads_left_out_stops_the_scan(self):
+        # The base policy gains a generic rule that reads only *.html files.
+        policy_ref.git(self.repo, "checkout", "-q", "main")
+        (self.repo / "security-rules" / "html.yaml").write_text(
+            "rules:\n- id: inline-script\n  languages: [generic]\n  severity: ERROR\n  message: inline script\n"
+            "  pattern: <script>eval(...)</script>\n  paths:\n    include:\n    - '*.html'\n",
+            encoding="utf-8",
+        )
+        self.commit("html rule")
+        policy_ref.git(self.repo, "checkout", "-q", "change")
+        policy_ref.git(self.repo, "merge", "-q", "--ff-only", "main")
+        (self.repo / "web").mkdir()
+        (self.repo / "web" / "page.html").write_text("<p>hi</p>\n", encoding="utf-8")
+        (self.repo / "notes.md").write_text("notes\n", encoding="utf-8")
+        self.commit("page")
+        # Opengrep reads the page and not the notes, so a full scan and a changed-only scan agree and pass.
+        code, summary, out = self.assert_same_verdict()
+        self.assertEqual(code, 0, out)
+        findings = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(findings["changed_unread"], ["notes.md"])
+        code, out, err = self.scan_dropping("web/page.html")
+        self.assertEqual(code, 2, out + err)
+        self.assertIn("web/page.html", err)
+
     # ── what is refused ──
 
     def test_changed_only_needs_a_policy_ref(self):
@@ -291,9 +315,10 @@ class SilentDropTests(unittest.TestCase):
         path.chmod(mode)
         return name
 
-    def refuses(self, name: str, languages) -> bool:
+    def refuses(self, name: str, languages, globs: tuple[str, ...] = ()) -> bool:
+        loaded = None if languages is None else changedscan.LoadedRules(frozenset(languages), globs)
         try:
-            changedscan.refuse_silent_drops([name], self.root, languages)
+            changedscan.refuse_silent_drops([name], self.root, loaded)
         except ScanError:
             return True
         return False
@@ -333,17 +358,51 @@ class SilentDropTests(unittest.TestCase):
             "stage/a/one.yaml",
             "rules:\n- id: a\n  languages: [python, js]\n  pattern: x\n- id: b\n  languages:\n  - rust\n  pattern: y\n",
         )
-        self.file("stage/b/two.yml", "rules:\n- id: c\n  languages: [generic]\n  pattern: z\n")
+        self.file(
+            "stage/b/two.yml",
+            "rules:\n- id: c\n  languages: [generic]\n  paths:\n    include:\n    - '*.html'\n  pattern: z\n"
+            "- id: c2\n  languages: [regex]\n  paths:\n    include: [sites-enabled/*, '*.html']\n  pattern: z\n",
+        )
         self.file("stage/b/two.test.yaml", "rules:\n- id: d\n  languages: python\n  pattern: z\n")
-        self.assertEqual(changedscan.loaded_languages(stage), {"python", "js", "rust"})
+        self.assertEqual(
+            changedscan.loaded_languages(stage),
+            changedscan.LoadedRules(frozenset({"python", "js", "rust"}), ("*.html", "sites-enabled/*")),
+        )
         self.file("stage/c/three.yaml", "rules:\n- id: e\n  languages: python\n  pattern: z\n")
         self.assertIsNone(changedscan.loaded_languages(stage))
+
+    def test_a_generic_rule_with_no_readable_include_counts_as_reading_everything(self):
+        stage = self.root / "stage"
+        self.file("stage/a/one.yaml", "rules:\n- id: a\n  languages: [python]\n  pattern: x\n")
+        self.assertIsNotNone(changedscan.loaded_languages(stage))
+        for n, paths in enumerate(("", "  paths:\n    exclude: ['*.md']\n", "  paths:\n    include: '*.html'\n")):
+            self.file("stage/b/g.yaml", f"rules:\n- id: g\n  languages: [generic]\n{paths}  pattern: z\n")
+            self.assertIsNone(changedscan.loaded_languages(stage), n)
+
+    def test_a_linked_directory_in_the_stage_counts_as_reading_everything(self):
+        stage = self.root / "stage"
+        self.file("stage/a/one.yaml", "rules:\n- id: a\n  languages: [python]\n  pattern: x\n")
+        self.file("elsewhere/two.yaml", "rules:\n- id: b\n  languages: [rust]\n  pattern: y\n")
+        self.assertIsNotNone(changedscan.loaded_languages(stage))
+        (stage / "linked").symlink_to(self.root / "elsewhere", target_is_directory=True)
+        self.assertIsNone(changedscan.loaded_languages(stage))
+
+    def test_by_a_generic_rules_include(self):
+        globs = ("*.html", "sites-enabled/*", "*/openssl/*.h", "/docs/", "*Dockerfile*")
+        self.assertTrue(self.refuses(self.file("web/page.html"), (), globs))
+        self.assertTrue(self.refuses(self.file("web/PAGE.HTML"), (), globs))
+        self.assertTrue(self.refuses(self.file("etc/nginx/sites-enabled/site"), (), globs))
+        self.assertTrue(self.refuses(self.file("vendor/openssl/ssl.h"), (), globs))
+        self.assertTrue(self.refuses(self.file("docs/guide.md"), (), globs))
+        self.assertTrue(self.refuses(self.file("deploy/api.dockerfile.tmpl"), (), globs))
+        self.assertFalse(self.refuses(self.file("README.md"), (), globs))
+        self.assertFalse(self.refuses(self.file("web/page.htm"), (), globs))
 
     def test_a_linked_rule_file_in_the_stage_counts_as_reading_everything(self):
         stage = self.root / "stage"
         self.file("stage/a/one.yaml", "rules:\n- id: a\n  languages: [python]\n  pattern: x\n")
         self.file("elsewhere.yaml", "rules:\n- id: b\n  languages: [rust]\n  pattern: y\n")
-        self.assertEqual(changedscan.loaded_languages(stage), {"python"})
+        self.assertEqual(changedscan.loaded_languages(stage), changedscan.LoadedRules(frozenset({"python"}), ()))
         (stage / "a" / "linked.yaml").symlink_to(self.root / "elsewhere.yaml")
         self.assertIsNone(changedscan.loaded_languages(stage))
 
