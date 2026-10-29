@@ -9,10 +9,10 @@ Shoalscan needs Python 3.11 or later and has no Python dependencies. It runs on 
 Each release on [GitHub](https://github.com/spark-app-studio/shoalscan/releases) carries a wheel, a source archive and a `SHA256SUMS` file. Download the wheel and the checksums, check the wheel, and install it:
 
 ```sh
-base=https://github.com/spark-app-studio/shoalscan/releases/download/v0.5.0
-curl -fsSLO "$base/shoalscan-0.5.0-py3-none-any.whl" -O "$base/SHA256SUMS"
+base=https://github.com/spark-app-studio/shoalscan/releases/download/v0.5.1
+curl -fsSLO "$base/shoalscan-0.5.1-py3-none-any.whl" -O "$base/SHA256SUMS"
 shasum -a 256 --check --ignore-missing SHA256SUMS
-python3 -m pip install ./shoalscan-0.5.0-py3-none-any.whl
+python3 -m pip install ./shoalscan-0.5.1-py3-none-any.whl
 ```
 
 You can also install the command from a commit you have reviewed:
