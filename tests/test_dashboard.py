@@ -422,6 +422,7 @@ class DashboardServerTests(unittest.TestCase):
             "scanners",
             "id",
             "kind",
+            "scope",
             "ref",
             "commit",
             "scanned_at",

@@ -2,6 +2,12 @@
 
 All notable changes to Shoalscan are recorded here.
 
+## Unreleased
+
+### Added
+
+- `shoalscan scan --changed-only`, with `--policy-ref`, scans only the files a pull request changed, and `check` with the same `--policy-ref` judges only those files. The verdict on a changed file is a full scan's: the walk keeps the same excludes, size limit and symbolic-link handling, and anchored `--include` patterns narrow it, because Opengrep scans an explicit target even where an exclude or the size limit would have left it out. The list of changed files comes from git (renames split into a deletion and an addition, untracked files included), is recorded in `findings.json` under `changed`, and is listed again by `check`, which refuses findings whose list differs. Baseline entries of unchanged files are carried over without being judged (`baseline_not_judged`), and only changed or deleted files can leave stale entries. The scan stops when Opengrep scans a file outside the changed files, leaves a changed file out, or scans a file Shoalscan reads as excluded, and it refuses a base that is not an ancestor of `HEAD`, more than 2000 changed files, file names an `--include` pattern would read as a glob, and configurations with scanners other than Opengrep. Changed files no loaded rule reads are named (`changed_unread`); a changed file that a loaded rule's language reads (by extension, Dockerfile name or shebang, from Opengrep 1.30.2's language table) but Opengrep did not list stops the scan. History schema version 17 records each run's scope (`full` or `changed`); a scan of changed files is recorded only as a pull-request run, and the dashboard marks it. See [Scanning only the changed files](docs/baseline-and-check.md#scanning-only-the-changed-files).
+
 ## 0.4.0 (2026-10-24)
 
 ### Added

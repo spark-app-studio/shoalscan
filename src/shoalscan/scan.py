@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from shoalscan import __version__, gitleaks, hadolint, opengrep, process, testscope, trivy, zizmor
+from shoalscan import __version__, changedscan, gitleaks, hadolint, opengrep, process, testscope, trivy, zizmor
 from shoalscan.check import CHECK_JSON
 from shoalscan.config import Config
 from shoalscan.errors import ScanError, SetupError
@@ -117,6 +117,7 @@ def run_scan(
     policy: dict | None = None,
     baseline: Path | None = None,
     require_network_sandbox: bool = False,
+    changed: changedscan.ChangedFiles | None = None,
 ) -> ScanResult:
     """Scan `repo`. Repository rule dirs are read under `rule_root` (default: the repo).
 
@@ -126,6 +127,10 @@ def run_scan(
     `baseline` is the baseline file `check` will read, given only without a
     policy ref: the tree binding then also records the working tree's state
     with that file left out (see `gitref.worktree_state`).
+
+    `changed` limits the scan to a change's files (`scan --changed-only`, see
+    `shoalscan.changedscan`). Only Opengrep can be limited that way, so any
+    other configured scanner refuses it.
     """
     started = time.monotonic()
     network = check_network_sandbox(require_network_sandbox)
@@ -139,6 +144,13 @@ def run_scan(
 
     excludes = list(config.excludes)
     ExcludeMatcher(excludes)  # validate the patterns before running anything
+    if changed is not None:
+        others = sorted(set(config.scanners) - {"opengrep"})
+        if others or "opengrep" not in config.scanners:
+            raise SetupError(
+                "--changed-only limits only Opengrep, and this configuration also runs "
+                f"{', '.join(others) or 'no Opengrep'}; scan the whole repository"
+            )
 
     suppressions = []
     own_findings: list[Finding] = []
@@ -154,6 +166,9 @@ def run_scan(
             "network_sandbox_required": require_network_sandbox,
         },
         "worktree": worktree_state(root, baseline_binding_path(repo, baseline) if baseline is not None else None),
+        # A scan of changed files describes those files only, never the state of the whole repository.
+        "mode": changedscan.MODE_CHANGED if changed is not None else changedscan.MODE_FULL,
+        **({"changed": changed.record()} if changed is not None else {}),
     }
     unscanned: dict = {"skipped": [], "errors": []}
     sarif_index: dict = {}
@@ -205,16 +220,28 @@ def run_scan(
                 scope_ids = testscope.rule_ids(repository.module_names)
                 namespaces.append(testscope.NAMESPACE)
             sarif_source = stage / "opengrep.sarif"
-            cmd = opengrep.build_command(tools.opengrep, namespaces, root, config.limits, excludes, sarif_source)
+            includes = changedscan.include_patterns(changed) if changed is not None else None
+            cmd = opengrep.build_command(
+                tools.opengrep, namespaces, root, config.limits, excludes, sarif_source, includes=includes
+            )
             og_env = opengrep.scanner_env_extra(config.limits)
-            doc = opengrep.execute(cmd, rules_stage, config.limits.scan_timeout_seconds, extra_env=og_env)
+            if includes == []:
+                # A change with no file to scan: the binary and the rules were verified and staged above, and
+                # there is nothing for Opengrep to read.
+                doc = {"results": [], "errors": [], "paths": {"scanned": [], "skipped": []}, "time": {"rules": []}}
+                write_atomic(sarif_source, json.dumps({"version": "2.1.0", "runs": []}))
+            else:
+                doc = opengrep.execute(cmd, rules_stage, config.limits.scan_timeout_seconds, extra_env=og_env)
+            if changed is not None:
+                meta["changed_unread"] = changedscan.account_for_targets(doc, root, changed)
+                changedscan.refuse_silent_drops(meta["changed_unread"], root, changedscan.loaded_languages(rules_stage))
             # The scope rules' matches are never findings: taken out before anything reads the results.
             scope_results = testscope.split_results(doc)
             warnings = opengrep.check_errors(doc)
             rules_ran = opengrep.check_rules_ran(doc, stats.rule_ids | scope_ids)
             scanned_paths = opengrep.scanned_paths(doc, root)
             scanned = len(scanned_paths)
-            if scanned == 0:
+            if scanned == 0 and changed is None:
                 raise ScanError("opengrep scanned no files; check the target and the excludes")
             # The lint covers exactly the files Opengrep scanned, prose included:
             # Opengrep honours a marker in any file it scans.

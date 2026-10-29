@@ -233,6 +233,23 @@ def changed_files(repo: Path, commit: str) -> list[str]:
     return sorted(set(path_names(out + b"\0" + untracked)))
 
 
+def is_ancestor(repo: Path, commit: str) -> bool:
+    """Is `commit` an ancestor of HEAD (or HEAD itself)?"""
+    proc = _git(repo, "merge-base", "--is-ancestor", commit, "HEAD", check=False)
+    if proc.returncode not in (0, 1):
+        detail = proc.stderr.decode("utf-8", errors="replace").strip()[-500:]
+        raise SetupError(f"git merge-base --is-ancestor failed: {detail}")
+    return proc.returncode == 0
+
+
+def touched_paths(repo: Path, commit: str) -> list[str]:
+    """Every path that differs between `commit` and the working tree, whatever the change did to it, plus
+    untracked files. With --no-renames a rename lists both its old and its new path."""
+    out = _git(repo, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", "--no-renames", commit).stdout
+    untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").stdout
+    return sorted(set(path_names(out + b"\0" + untracked)))
+
+
 def diff_against(repo: Path, commit: str, paths: list[str], max_lines: int = 400) -> str:
     """The working tree's diff against `commit` for `paths`, cut to `max_lines` lines."""
     if not paths:

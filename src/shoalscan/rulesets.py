@@ -137,6 +137,61 @@ def _describe(item_lines: list[str], item_indent: int, where: str) -> tuple[str,
     return rule_id, (category or UNCATEGORISED).lower()
 
 
+def rule_languages(rule: RuleText) -> frozenset[str] | None:
+    """The rule's `languages:` list, lower-cased, or None when it cannot be read with certainty.
+
+    Two forms are read: a one-line flow list (`languages: [python, js]`) and a block list (indented, or at the
+    key's own indent). Anything else (a
+    scalar, a list over several lines, a second `languages:` key) gives None, which a caller must treat as
+    "reads every file".
+    """
+    lines = [line.rstrip("\n") for line in rule.text.splitlines()]
+    first = _ITEM.match(lines[0]) if lines else None
+    if not first:
+        return None
+    child = len(first.group(0))
+    found: frozenset[str] | None = None
+    seen = False
+    n = 0
+    while n < len(lines):
+        line = lines[n]
+        body = " " * child + line[child:] if n == 0 else line
+        match = _KEY.match(body)
+        n += 1
+        if not match or len(match.group("indent")) != child or match.group("key") != "languages":
+            continue
+        if seen:
+            return None
+        seen = True
+        value = match.group("value").split(" #", 1)[0].strip()
+        if value.startswith("["):
+            if not value.endswith("]"):
+                return None
+            items = [x.strip() for x in value[1:-1].split(",")]
+        elif value == "":
+            items = []
+            # A block list, indented under the key or at the key's own indent (YAML's compact form).
+            while n < len(lines) and (
+                not lines[n].strip()
+                or _indent(lines[n]) > child
+                or (_indent(lines[n]) == child and lines[n].strip().startswith("- "))
+            ):
+                stripped = lines[n].strip()
+                n += 1
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if not stripped.startswith("- "):
+                    return None
+                items.append(stripped[2:].split(" #", 1)[0].strip())
+        else:
+            return None
+        names = [_scalar(x).lower() for x in items]
+        if not names or any(not re.fullmatch(r"[a-z0-9_+#-]+", x) for x in names):
+            return None
+        found = frozenset(names)
+    return found
+
+
 def split_rules(text: str, where: str) -> list[RuleText]:
     """Split a rule file into its rules. Raises SetupError if the shape is unexpected."""
     # Split on newline only: YAML does not break lines on form feeds or

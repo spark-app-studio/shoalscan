@@ -2,6 +2,8 @@
 
 Shoalscan runs as one step in any CI system. On a pull request, pass `--policy-ref` with the base commit's full SHA to both `scan` and `check`, so the configuration, the baseline and the rule directories come from the base branch ([why](baseline-and-check.md#pull-requests-the-policy-comes-from-the-base-branch)). Nothing needs a token or a secret. `--policy-ref` needs git 2.40 or later, so that the change's own `.gitattributes` cannot shape the diffs; Shoalscan refuses an older git. GitHub's `ubuntu-latest` runners have a recent git; on Ubuntu 22.04 (git 2.34), install a newer one first, for example from the git-core PPA (`add-apt-repository ppa:git-core/ppa`).
 
+On a large repository, add `--changed-only` to `scan` to scan only the files the pull request changed; keep a full scan of the default branch at least nightly and before every release ([details](baseline-and-check.md#scanning-only-the-changed-files)).
+
 ## GitHub Actions
 
 [`examples/github-actions/shoalscan.yml`](../examples/github-actions/shoalscan.yml) is a GitHub Actions workflow with every action pinned by commit SHA. Copy it to `.github/workflows/shoalscan.yml`. It needs no secrets, reads the policy from the base branch on pull requests (`github.event.pull_request.base.sha`), and uploads the SARIF file to code scanning. It also runs a nightly full scan of the default branch.

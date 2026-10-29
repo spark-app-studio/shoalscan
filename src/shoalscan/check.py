@@ -56,6 +56,10 @@ class CheckResult:
     # False for a pull request checked with `--changed-since`: its baseline is managed outside the change, so a
     # stale entry (the change fixed a baselined finding) is reported but is no new risk and does not fail it.
     stale_blocks: bool = True
+    # A scan of changed files (`scan --changed-only`): "changed", and how many baseline entries lie outside the
+    # change and so were carried over without being judged.
+    scan_mode: str = "full"
+    not_judged: int = 0
 
     def __post_init__(self) -> None:
         self._labelled = set(self.test_code)
@@ -96,6 +100,7 @@ def compare(
     test_code_rules: tuple[str, ...] = (),
     new_suppressions: list[dict] | None = None,
     stale_blocks: bool = True,
+    stale_scope: frozenset[str] | None = None,
 ) -> CheckResult:
     """Compare findings with the baseline.
 
@@ -113,6 +118,10 @@ def compare(
     git reports a rename (`renames`), every base entry of the old path moves
     to the new path unchanged and one-to-one, and the component and
     non-blocking status stay the same.
+
+    With `stale_scope` (a scan of changed files), only baseline entries whose
+    path is in it can be stale: the scan read no other file, so the entries
+    for other files are carried over without being judged.
 
     A test code label only groups a finding for the report: it never changes
     whether the finding blocks. A label counts only when this check's own
@@ -140,7 +149,8 @@ def compare(
         for f in new
         if f.severity in blocking and f.severity != "INFO" and not under_prefix(f.path, non_blocking_paths)
     ]
-    stale = sorted((e for e in entries if e.key() not in present), key=lambda e: (e.path, e.rule, e.fingerprint))
+    judged = [e for e in entries if stale_scope is None or e.path in stale_scope]
+    stale = sorted((e for e in judged if e.key() not in present), key=lambda e: (e.path, e.rule, e.fingerprint))
     unscanned = unscanned or {"skipped": [], "errors": []}
     changed_unscanned: list[dict] = []
     partial_warnings: list[dict] = []
@@ -215,6 +225,8 @@ def compare(
         test_code_rules=tuple(test_code_rules),
         new_suppressions=list(new_suppressions or []),
         stale_blocks=stale_blocks,
+        scan_mode="full" if stale_scope is None else "changed",
+        not_judged=len(entries) - len(judged),
     )
 
 
@@ -280,6 +292,8 @@ def summary(result: CheckResult) -> dict:
         "new_test_code": sum(1 for f in result.new if result.is_test_code(f)),
         "new_blocking_test_code": sum(1 for f in result.new_blocking if result.is_test_code(f)),
         "new_suppressions": len(result.new_suppressions),
+        "scan_mode": result.scan_mode,
+        "baseline_not_judged": result.not_judged,
     }
 
 
@@ -317,6 +331,7 @@ def details(result: CheckResult, findings_sha256: str) -> dict:
         "format": DETAILS_FORMAT,
         "findings_sha256": findings_sha256,
         "result": "pass" if result.passed else "fail",
+        "scan_mode": result.scan_mode,
         "new": [key(f) for f in result.new],
         "new_blocking": [key(f) for f in result.new_blocking],
         # Every finding the policy treats as blocking, baselined or not: a
@@ -366,6 +381,11 @@ def render_report(result: CheckResult, max_items: int = 200) -> str:
         f"{blocking})",
         f"  Stale baseline entries: {len(result.stale)}",
     ]
+    if result.scan_mode == "changed":
+        out.append(
+            f"  Changed files only: {result.not_judged} baseline entries are for files the change did not touch, "
+            "and were carried over without being judged"
+        )
     if result.test_code_rules:
         out.append(
             f"  Labelled as test code (a label only; they block like any other finding): {len(result.test_code)}, "

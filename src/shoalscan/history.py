@@ -314,6 +314,11 @@ MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE runs ADD COLUMN new_suppressions INTEGER NOT NULL DEFAULT 0;
     """,
+    # 17: whether a run scanned the whole repository or only a pull request's changed files (`scan
+    # --changed-only`). A scan of changed files never describes the state of the repository.
+    """
+    ALTER TABLE runs ADD COLUMN scope TEXT NOT NULL DEFAULT 'full' CHECK (scope IN ('full', 'changed'));
+    """,
 )
 # The automatic reviewer those unreleased builds wrote reviews under.
 UNRELEASED_AUTO_REVIEWER = "shoalscan (test scope)"
@@ -743,6 +748,7 @@ def _row(
     policy_ref = summary.get("policy_ref")
     return {
         "kind": info.kind,
+        "scope": "changed" if meta.get("mode") == "changed" else "full",
         "ref": info.ref,
         "commit_sha": info.commit,
         "scanned_at": info.scanned_at,
@@ -879,6 +885,13 @@ def record_run(
     `details` is check.json from the same check (see `read_details`).
     """
     info.validate()
+    if meta.get("mode", "full") not in ("full", "changed"):
+        raise SetupError("the findings record an unknown scan mode")
+    if meta.get("mode") == "changed" and info.kind != "pr":
+        raise SetupError(
+            "a scan of changed files (`scan --changed-only`) is recorded only as a pr run: it does not describe the "
+            "whole repository"
+        )
     outcome = run_outcome(summary, check_exit)
     if outcome == "scan_error" and (findings or details):
         raise SetupError("a scan-error run is recorded without findings or check details")

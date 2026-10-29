@@ -110,6 +110,30 @@ With a policy ref, `.shoalscan.toml`, the baseline and the repository's own rule
 - `blocking` must include ERROR.
 - First-time adoption: when the base ref has neither a configuration nor a baseline, the pull request's own configuration and baseline are used and reported as ADOPTION, so reviewers know they are setting the policy. ERROR findings still block. A base ref with a configuration but no baseline file, or the other way round, is refused; commit both (`shoalscan baseline init` writes an empty baseline when there are no findings).
 
+### Scanning only the changed files
+
+On a large repository most of a pull request's scan time goes to files the pull request did not touch. `scan --changed-only`, with `--policy-ref`, scans only the files that differ from the policy commit, and `check` with the same `--policy-ref` then judges only those files:
+
+```sh
+shoalscan scan  --policy-ref "$BASE_SHA" --changed-only --out "$OUT"
+shoalscan check --policy-ref "$BASE_SHA" --out "$OUT"
+```
+
+**The verdict on a changed file is the full scan's.** Opengrep reads each file on its own, so a file's findings do not depend on the other files. The scan still walks the whole repository, with the same excludes, size limit and handling of symbolic links as a full scan; anchored `--include` patterns only narrow the walk to the changed files. It does not name them as explicit targets, because Opengrep scans an explicit target even when an exclude pattern or `--max-target-bytes` would have left it out. The rules, the configuration and the baseline come from the policy commit, as on any pull request, and a rule's own `paths:` filters still apply.
+
+**The list of changed files comes from git, never from the pull request.** It is every path that differs between the policy commit and the working tree, with renames split into a deletion and an addition, plus untracked files. The policy commit must be an ancestor of `HEAD`. `scan` records the list in `findings.json` (`changed`), and `check` lists the files again and refuses (exit 2) findings whose list differs, so findings from another change or an edited list are never judged.
+
+**What `check` judges.**
+
+- A finding in a changed file is judged exactly as in a full scan: new findings fail, and so do a changed file that was not fully scanned (over the size limit, say) and the inline suppressions the change adds.
+- A baseline entry for a changed or deleted file is judged as in a full scan, so the entry of a deleted file is stale and fails until it is removed. A rename leaves the old path's entries stale and the new path's findings new, unless the baseline moves them with `baseline rename-path`.
+- A baseline entry for an unchanged file is carried over without being judged, and the report says how many (`baseline_not_judged` in the summary). It is never reported as stale: the scan did not read that file.
+- A changed file that no loaded rule reads (a Markdown file when only Python rules are loaded, say) is not listed by Opengrep in a full scan either. The scan names those files (`changed_unread`) instead of failing on them. A changed file that a loaded rule's language does read, and that Opengrep still did not list, stops the scan (exit 2): Opengrep dropped it without saying so. A language reads a file by its extension (minus excluded ones such as `.min.js`), by the names `Dockerfile` and `dockerfile`, or, for an executable file with no extension, by the interpreter its shebang names, using Opengrep 1.30.2's own table. A rule whose `languages:` Shoalscan cannot read makes every changed file count as read. `generic` and `regex` rules map to no extension, so a changed file that only they would read is not checked this way.
+
+**The scan stops (exit 2) rather than differ from a full scan** when Opengrep scans a file that is not a changed file, when the `--include` filter leaves out a changed file, or when it scans a file Shoalscan reads as excluded. It also refuses a change of more than 2000 files and a changed file name that an `--include` pattern would read as a glob (`*`, `?`, `[`, `]`, `\`) or with leading or trailing spaces: scan those in full. `--changed-only` limits only Opengrep, so a configuration that also runs another scanner refuses it.
+
+**Keep a full scan of the default branch.** A scan of changed files says nothing about the rest of the repository. When two pull requests change the same file, each is scanned against its own base, and the file as it is after both merge is first scanned by the next full scan of the default branch. Run one at least nightly and before every release, and fail the release on any finding it is the first to report. `shoalscan record` stores a scan of changed files only as a pull-request run, with the scope `changed`, and the dashboard marks those runs "(changed files only)".
+
 ### Protect the policy with CODEOWNERS
 
 Put `.shoalscan.toml`, the baseline, your rule directories and the CI workflow under CODEOWNERS, so that changes to the policy on the base branch need a review from the people who own security. `examples/CODEOWNERS` shows the lines to add; [CI](ci.md#codeowners) lists them.
