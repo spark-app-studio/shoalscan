@@ -50,7 +50,7 @@ _RUN_COLUMNS = (
     "baseline_additions, suppressions, suppressions_invalid, suppressed_findings, unscanned_skipped, "
     "unscanned_errored, changed_unscanned, policy_ref, shoalscan_version, duration_seconds, outcome, check_exit, "
     "details_known, files_known, suppressions_known, partial_warnings, partial_warn_only, excluded_changed, "
-    "blocking_class_count, scanners, test_code, new_suppressions, "
+    "blocking_class_count, scanners, test_code, new_suppressions, scope, "
     "EXISTS (SELECT 1 FROM scan_triggers st WHERE st.run_id = runs.id AND st.trigger = 'rescan-commit') AS rescanned"
 )
 SORTS = ("priority",)
@@ -260,6 +260,7 @@ def _run_dict(row: sqlite3.Row) -> dict:
     out = {
         "id": d["id"],
         "kind": d["kind"],
+        "scope": d["scope"],
         "ref": d["ref"],
         "commit": d["commit_sha"],
         "scanned_at": d["scanned_at"],

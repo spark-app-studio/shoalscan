@@ -110,6 +110,7 @@ def build_command(
     limits: Limits,
     excludes: list[str],
     sarif_path: Path,
+    includes: list[str] | None = None,
 ) -> list[str]:
     cmd = [str(binary), "scan"]
     for ns in namespaces:
@@ -133,6 +134,9 @@ def build_command(
     ]
     for pattern in excludes:
         cmd.append(f"--exclude={pattern}")
+    # A scan of changed files narrows the same walk of `target` to those files (shoalscan.changedscan).
+    for pattern in includes or []:
+        cmd.append(f"--include={pattern}")
     cmd.append(str(target))
     return cmd
 

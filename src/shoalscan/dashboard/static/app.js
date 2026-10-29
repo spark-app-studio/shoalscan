@@ -64,6 +64,8 @@
   function status(text) { $("status").textContent = text || ""; }
   function fmtDate(ts) { return ts ? ts.slice(0, 10) : "-"; }
   function fmtTime(ts) { return ts ? ts.slice(0, 16).replace("T", " ") + " UTC" : "-"; }
+  // A scan of a pull request's changed files only describes those files, never the whole repository.
+  function runKind(r) { return r.kind + (r.scope === "changed" ? " (changed files only)" : ""); }
   // A timestamp in the viewer's local time, with the exact UTC time on hover.
   function localTime(ts) {
     if (!ts) return el("span", null, "-");
@@ -447,7 +449,7 @@
       var panel = clear($("latest-status"));
       if (o.latest_run) {
         var r = o.latest_run;
-        panel.appendChild(statusNode(r, "Latest run: " + r.kind + " " + r.ref + " at " + r.commit.slice(0, 10) + ", " + fmtTime(r.scanned_at)));
+        panel.appendChild(statusNode(r, "Latest run: " + runKind(r) + " " + r.ref + " at " + r.commit.slice(0, 10) + ", " + fmtTime(r.scanned_at)));
         withScanStatus().then(function () { panel.appendChild(rescanControls(r, false)); });
       }
       blockingPanel(o);
@@ -810,7 +812,7 @@
   function runDetail(run) {
     var box = clear($("run-detail"));
     box.hidden = false;
-    box.appendChild(el("h2", null, "Run " + run.id + ": " + run.kind + " " + run.ref + " at " + run.commit.slice(0, 12),
+    box.appendChild(el("h2", null, "Run " + run.id + ": " + runKind(run) + " " + run.ref + " at " + run.commit.slice(0, 12),
       run.rescanned ? el("span", { "class": "badge neutral" }, "Rescanned") : null));
     box.appendChild(statusNode(run, null));
     withScanStatus().then(function () { box.insertBefore(rescanControls(run, true), box.childNodes[2] || null); });
@@ -985,7 +987,7 @@
         var num = function (v) { return el("td", { "class": "num" }, r.outcome === "scan_error" ? "-" : String(v)); };
         var row = el("tr", { "class": String(r.id) === params.run ? "selected" : null },
           el("td", null, internalLink(M.href("runs", { run: r.id }), String(r.id), "Show the detail of run " + r.id)),
-          el("td", null, fmtTime(r.scanned_at)), el("td", null, r.kind), el("td", { "class": "mono" }, r.ref),
+          el("td", null, fmtTime(r.scanned_at)), el("td", null, runKind(r)), el("td", { "class": "mono" }, r.ref),
           el("td", { "class": "mono", title: r.commit }, r.commit.slice(0, 10)),
           el("td", { "class": cls }, r.status.label + (r.rescanned ? " (rescanned)" : "")),
           num(r.by_severity.ERROR), num(r.by_severity.WARNING), num(r.by_severity.INFO), num(r["new"]), num(r.new_blocking),

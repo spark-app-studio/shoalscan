@@ -74,6 +74,52 @@ class PullRequestRunTests(HistoryTestCase):
         self.assertEqual(run["suppressions"]["new"], 2)
         self.assertEqual(run["status"]["label"], "Blocked: 2 new inline suppressions")
 
+    def test_a_scan_of_changed_files_is_recorded_as_a_changed_pr_run(self):
+        run_id = history.record_run(
+            self.conn,
+            history.RunInfo("acme/app", "refs/pull/4/head", "7" * 40, "pr", "2026-10-01T00:00:00Z"),
+            [],
+            {"mode": "changed"},
+            {"result": "pass", "findings": 0},
+        ).run_id
+        scope = self.conn.execute("SELECT scope FROM runs WHERE id = ?", (run_id,)).fetchone()[0]
+        self.assertEqual(scope, "changed")
+        data = Data(history.open_read_only(self.db))
+        try:
+            self.assertEqual(data.run(data.repo_id("acme/app"), run_id)["scope"], "changed")
+        finally:
+            data.conn.close()
+
+    def test_a_full_scan_is_recorded_with_the_full_scope(self):
+        run_id = self.pr("refs/pull/5/head", "8" * 40, "2026-10-01T00:00:00Z")
+        self.assertEqual(self.conn.execute("SELECT scope FROM runs WHERE id = ?", (run_id,)).fetchone()[0], "full")
+
+    def test_a_scan_of_changed_files_is_never_recorded_as_a_branch_run(self):
+        with self.assertRaisesRegex(SetupError, "recorded only as a pr run"):
+            history.record_run(
+                self.conn,
+                history.RunInfo("acme/app", "refs/heads/main", "9" * 40, "scheduled", "2026-10-01T00:00:00Z"),
+                [],
+                {"mode": "changed"},
+                {"result": "pass", "findings": 0},
+            )
+        self.assertEqual(self.count("runs"), 0)
+
+    def test_an_unknown_scan_mode_is_refused(self):
+        with self.assertRaisesRegex(SetupError, "unknown scan mode"):
+            history.record_run(
+                self.conn,
+                history.RunInfo("acme/app", "refs/pull/6/head", "a" * 40, "pr", "2026-10-01T00:00:00Z"),
+                [],
+                {"mode": "partial"},
+                {"result": "pass", "findings": 0},
+            )
+
+    def test_the_scope_column_refuses_other_values(self):
+        run_id = self.pr("refs/pull/8/head", "b" * 40, "2026-10-01T00:00:00Z")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute("UPDATE runs SET scope = 'some' WHERE id = ?", (run_id,))
+
     def test_the_latest_run_of_each_pull_request(self):
         self.pr("refs/pull/7/head", "1" * 40, "2026-10-01T00:00:00Z")
         latest7 = self.pr("refs/pull/7/head", "2" * 40, "2026-10-03T00:00:00Z", result="fail")

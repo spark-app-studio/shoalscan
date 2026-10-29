@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from shoalscan import __version__, gitref
+from shoalscan import __version__, changedscan, gitref
 from shoalscan import markdown as md
 from shoalscan.baseline import (
     Entry,
@@ -190,6 +190,12 @@ def _do_scan(args: argparse.Namespace):
     policy = _policy(args)
     lock = _lock(args)
     tools = _tools(args, policy.config, lock)
+    changed_only = getattr(args, "changed_only", False)
+    if changed_only and (policy.commit is None or policy.adoption):
+        raise SetupError(
+            "--changed-only needs --policy-ref with a base that has a configuration and a baseline: the change is "
+            "judged against that base"
+        )
     if policy.commit is None or policy.adoption:
         if policy.adoption:
             _print_adoption(policy)
@@ -225,6 +231,9 @@ def _do_scan(args: argparse.Namespace):
                 require_network_sandbox=getattr(args, "require_network_sandbox", False),
             )
         return result, policy.config
+    changed = (
+        changedscan.changed_files(Path(args.repo), policy.commit, policy.config.excludes) if changed_only else None
+    )
     # The repository's own rules also come from the policy ref.
     with tempfile.TemporaryDirectory(prefix="shoalscan-policy-rules-") as tmp:
         gitref.archive_dirs(Path(args.repo), policy.commit, list(policy.config.opengrep.rule_dirs), Path(tmp))
@@ -236,6 +245,7 @@ def _do_scan(args: argparse.Namespace):
             rule_root=Path(tmp),
             policy=policy.record(),
             require_network_sandbox=getattr(args, "require_network_sandbox", False),
+            changed=changed,
         )
     return result, policy.config
 
@@ -274,6 +284,21 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 f"shoalscan: WARNING: {labels['module_names_dropped']} #[cfg(test)] module names were left out "
                 f"(the limit is {labels['module_names']}); findings in those modules get no label.",
                 file=sys.stderr,
+            )
+    changed = result.meta.get("changed")
+    if isinstance(changed, dict):
+        print(
+            f"shoalscan scan: changed files only, against {changed['base'][:12]}: {len(changed['targets'])} to scan, "
+            f"{len(changed['deleted'])} deleted, {len(changed['excluded'])} excluded, "
+            f"{len(changed['links']) + len(changed['other'])} not regular files"
+        )
+        if not changed["targets"]:
+            print("shoalscan scan: no scannable changed files")
+        unread = result.meta.get("changed_unread") or []
+        if unread:
+            print(
+                f"shoalscan scan: {len(unread)} changed files are read by no rule (as in a full scan), such as "
+                f"{md.one_line(unread[0])[:120]}"
             )
     counts = result.meta["counts"]
     print(
@@ -449,6 +474,22 @@ def cmd_check(args: argparse.Namespace) -> int:
             "the findings do not match the current tree: the repository changed after `shoalscan scan` "
             "(or the findings come from another checkout); run the scan again"
         )
+    mode = meta.get("mode", changedscan.MODE_FULL)
+    if mode not in (changedscan.MODE_FULL, changedscan.MODE_CHANGED):
+        raise SetupError(f"the findings record an unknown scan mode: {md.one_line(str(mode))[:40]}")
+    stale_scope = None
+    if mode == changedscan.MODE_CHANGED:
+        # A scan of changed files is judged only against the base it was taken from, and only when git still
+        # lists exactly the files it scanned.
+        if policy.commit is None or policy.adoption or getattr(args, "changed_since", None):
+            raise SetupError("findings from `scan --changed-only` are checked only with the same --policy-ref")
+        listed = changedscan.changed_files(repo, policy.commit, config.excludes)
+        if listed.record() != meta.get("changed"):
+            raise SetupError(
+                "the findings come from a scan of changed files, and the changed files differ from the ones it "
+                "scanned; run the scan again"
+            )
+        stale_scope = listed.paths
     baseline = load_baseline(baseline_path)
     base_baseline = None
     changed = None
@@ -504,6 +545,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         new_suppressions=new_suppressions,
         # A change checked against an outside baseline cannot remove its stale entries: they are reported only.
         stale_blocks=not getattr(args, "changed_since", None),
+        stale_scope=stale_scope,
     )
     write_atomic(out / CHECK_JSON, json.dumps(details(result, findings_sha256), sort_keys=True) + "\n")
     print(render_report(result))
@@ -652,6 +694,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-network-sandbox",
         action="store_true",
         help="fail unless the scanners can run in an operating-system network sandbox (sandbox-exec or unshare --net)",
+    )
+    p.add_argument(
+        "--changed-only",
+        action="store_true",
+        help=(
+            "with --policy-ref: scan only the files that differ from the policy commit (an ancestor of HEAD), for a "
+            "pull request; `check` then judges only those files"
+        ),
     )
     group = p.add_mutually_exclusive_group()
     _policy_option(group)
