@@ -117,6 +117,37 @@ def include_patterns(changed: ChangedFiles) -> list[str]:
     return [f"/{path}" for path in sorted((*changed.targets, *changed.excluded))]
 
 
+def anchor_excludes(root: Path, changed: ChangedFiles) -> list[str]:
+    """Anchored --exclude patterns that hold each root-level --include pattern to its own file.
+
+    Opengrep 1.30.2 does not anchor an --include pattern that has a single path component: `/README.md`
+    also matches `docs/README.md`. Every other file with the name of a root-level target or excluded file gets
+    an anchored --exclude; such a path has an inner slash, which Opengrep anchors. A changed file of that name
+    deeper in the tree is passed on its own and never excluded. account_for_targets still stops the scan if
+    Opengrep scans anything else.
+    """
+    passed = {*changed.targets, *changed.excluded}
+    names = {p for p in passed if "/" not in p}
+    if not names:
+        return []
+    others = sorted(
+        p for p in gitref.listed_files(root) if "/" in p and p.rsplit("/", 1)[1] in names and p not in passed
+    )
+    # An exclude pattern with glob characters could leave out a changed file too.
+    unsafe = [p for p in others if set(p) & _GLOB_CHARS or p != p.strip()]
+    if unsafe:
+        raise SetupError(
+            f"--changed-only: {unsafe[0]!r} shares its name with a changed file at the repository root and cannot "
+            "be passed to Opengrep as an exact --exclude pattern; scan the whole repository"
+        )
+    if len(others) > MAX_TARGETS:
+        raise SetupError(
+            f"--changed-only: {len(others)} files share a name with a changed file at the repository root, more "
+            f"than {MAX_TARGETS}; scan the whole repository"
+        )
+    return [f"/{path}" for path in others]
+
+
 @dataclass(frozen=True)
 class LoadedRules:
     """What the staged rules read: their languages, and the `paths: include` globs of their

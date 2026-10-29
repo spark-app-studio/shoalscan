@@ -241,6 +241,55 @@ class ChangedOnlyTests(unittest.TestCase):
         self.assertEqual(code, 2, out + err)
         self.assertIn("web/page.html", err)
 
+    # ── a root-level file and the files that share its name ──
+
+    def test_a_root_level_file_is_scanned_without_the_files_that_share_its_name(self):
+        # Opengrep reads the --include pattern `/load.py` as any load.py; the unchanged, baselined
+        # src/load.py must stay out of the scan.
+        (self.repo / "load.py").write_text(
+            "import pickle\n\ndef top(b):\n    return pickle.loads(b)\n", encoding="utf-8"
+        )
+        self.commit("a root-level file named like an unchanged one")
+        code, summary, out = self.assert_same_verdict()
+        self.assertEqual((code, summary["new_blocking"]), (1, 1), out)
+        doc = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(doc["changed"]["targets"], ["load.py"])
+        self.assertEqual({f["path"] for f in doc["findings"]}, {"load.py"})
+
+    def test_same_named_changed_files_below_the_root_are_still_scanned(self):
+        # The base gains a clean docs/load.py; the change adds a root load.py and a finding to src/load.py.
+        policy_ref.git(self.repo, "checkout", "-q", "main")
+        (self.repo / "docs" / "load.py").write_text("def nothing():\n    return 1\n", encoding="utf-8")
+        self.commit("a clean docs/load.py")
+        policy_ref.git(self.repo, "checkout", "-q", "change")
+        policy_ref.git(self.repo, "merge", "-q", "--ff-only", "main")
+        (self.repo / "load.py").write_text("def top():\n    return 2\n", encoding="utf-8")
+        with open(self.repo / "src" / "load.py", "a", encoding="utf-8") as f:
+            f.write("\ndef again(b):\n    return pickle.loads(b + b)\n")
+        self.commit("root load.py and a finding in src/load.py")
+        code, summary, out = self.assert_same_verdict()
+        self.assertEqual((code, summary["new_blocking"]), (1, 1), out)
+        doc = json.loads((self.out / "findings.json").read_text(encoding="utf-8"))
+        self.assertEqual(doc["changed"]["targets"], ["load.py", "src/load.py"])
+        self.assertTrue({f["path"] for f in doc["findings"]} <= {"load.py", "src/load.py"})
+        base = policy_ref.git(self.repo, "rev-parse", "main").strip()
+        changed = changedscan.changed_files(self.repo, base, [])
+        self.assertEqual(changedscan.anchor_excludes(self.repo, changed), ["/docs/load.py"])
+
+    def test_a_same_named_file_that_cannot_be_excluded_exactly_is_refused(self):
+        (self.repo / "odd[1]").mkdir()
+        (self.repo / "odd[1]" / "load.py").write_text("x = 1\n", encoding="utf-8")
+        policy_ref.git(self.repo, "add", "-A")
+        self.commit("an odd directory name")
+        policy_ref.git(self.repo, "checkout", "-q", "main")
+        policy_ref.git(self.repo, "merge", "-q", "--ff-only", "change")
+        policy_ref.git(self.repo, "checkout", "-q", "change")
+        (self.repo / "load.py").write_text("x = 2\n", encoding="utf-8")
+        self.commit("root load.py")
+        code, out, err = self.pcli("scan", "--changed-only")
+        self.assertEqual(code, 2, out + err)
+        self.assertIn("cannot be passed to Opengrep as an exact --exclude pattern", err)
+
     # ── what is refused ──
 
     def test_changed_only_needs_a_policy_ref(self):
