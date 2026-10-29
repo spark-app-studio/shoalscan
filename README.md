@@ -36,7 +36,7 @@ A shoal is a hidden hazard under the water. A lighthouse warns ships about it; S
 Shoalscan needs Python 3.11 or later, git, and Linux or macOS. Install it from the release, then install the pinned scanners:
 
 ```sh
-python3 -m pip install https://github.com/spark-app-studio/shoalscan/releases/download/v0.5.0/shoalscan-0.5.0-py3-none-any.whl
+python3 -m pip install https://github.com/spark-app-studio/shoalscan/releases/download/v0.5.1/shoalscan-0.5.1-py3-none-any.whl
 shoalscan install
 ```
 
@@ -93,7 +93,7 @@ shoalscan scan && shoalscan check
 
 ## Status
 
-The current release is **0.5.0** (29 October 2026). Shoalscan is used every day to gate pull requests and scan a default branch nightly, but it is still before 1.0: configuration keys and the history database can still change between minor releases. Each release says what changed in [CHANGELOG.md](CHANGELOG.md), and `shoalscan serve` and `shoalscan record` migrate an older history database themselves, after saving a copy of it.
+The current release is **0.5.1** (29 October 2026). Shoalscan is used every day to gate pull requests and scan a default branch nightly, but it is still before 1.0: configuration keys and the history database can still change between minor releases. Each release says what changed in [CHANGELOG.md](CHANGELOG.md), and `shoalscan serve` and `shoalscan record` migrate an older history database themselves, after saving a copy of it.
 
 All four phases of the [design](docs/design.md#phases) are done:
 
