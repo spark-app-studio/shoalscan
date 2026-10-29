@@ -32,8 +32,9 @@ MODE_CHANGED = "changed"
 MAX_TARGETS = 2000
 # Characters an --include pattern would read as a glob or an escape.
 _GLOB_CHARS = frozenset("*?[]\\")
-# Opengrep's skip reason for a file the --include patterns leave out.
+# Opengrep's skip reasons for a file the --include patterns leave out, and for one an --exclude pattern matches.
 _INCLUDE_SKIP = "cli_include_flags_do_not_match"
+_EXCLUDE_SKIP = "cli_exclude_flags_match"
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,37 @@ def include_patterns(changed: ChangedFiles) -> list[str]:
     """One anchored --include pattern per target and per excluded file: `/path` matches that path from the scan
     root only. Opengrep's own excludes still apply, and an excluded file it scans anyway stops the scan."""
     return [f"/{path}" for path in sorted((*changed.targets, *changed.excluded))]
+
+
+def anchor_excludes(root: Path, changed: ChangedFiles) -> list[str]:
+    """Anchored --exclude patterns that hold each root-level --include pattern to its own file.
+
+    Opengrep 1.30.2 does not anchor an --include pattern that has a single path component: `/README.md`
+    also matches `docs/README.md`. Every other file with the name of a root-level target or excluded file gets
+    an anchored --exclude; such a path has an inner slash, which Opengrep anchors. A changed file of that name
+    deeper in the tree is passed on its own and never excluded. account_for_targets still stops the scan if
+    Opengrep scans anything else.
+    """
+    passed = {*changed.targets, *changed.excluded}
+    names = {p for p in passed if "/" not in p}
+    if not names:
+        return []
+    others = sorted(
+        p for p in gitref.listed_files(root) if "/" in p and p.rsplit("/", 1)[1] in names and p not in passed
+    )
+    # An exclude pattern with glob characters could leave out a changed file too.
+    unsafe = [p for p in others if set(p) & _GLOB_CHARS or p != p.strip()]
+    if unsafe:
+        raise SetupError(
+            f"--changed-only: {unsafe[0]!r} shares its name with a changed file at the repository root and cannot "
+            "be passed to Opengrep as an exact --exclude pattern; scan the whole repository"
+        )
+    if len(others) > MAX_TARGETS:
+        raise SetupError(
+            f"--changed-only: {len(others)} files share a name with a changed file at the repository root, more "
+            f"than {MAX_TARGETS}; scan the whole repository"
+        )
+    return [f"/{path}" for path in others]
 
 
 @dataclass(frozen=True)
@@ -210,7 +242,9 @@ def account_for_targets(doc: dict, root: Path, changed: ChangedFiles) -> list[st
     can read nowhere at all, in a full scan as in this one (a Markdown file with only Python rules, say). Such a
     target is returned, so the scan reports it; a full scan says nothing about it. What would make a scan of
     changed files differ from a full scan stops the scan: a scanned file that is not a target, a target the
-    --include filter left out, and an excluded file that was scanned.
+    --include filter or an --exclude pattern left out, and an excluded file that was scanned. A target is never
+    excluded on purpose (the configuration's excludes sort a changed file into `excluded`, and anchor_excludes
+    leaves the targets alone), so a target an --exclude pattern matched is a disagreement, never a skip.
     """
     from shoalscan.opengrep import relative_path
 
@@ -246,4 +280,12 @@ def account_for_targets(doc: dict, root: Path, changed: ChangedFiles) -> list[st
     filtered = sorted(targets & left_out)
     if filtered:
         raise ScanError(f"--changed-only: the --include patterns left out a changed file: {filtered[0]!r}")
+    excluded_out = {
+        rel(e.get("path"))
+        for e in paths.get("skipped") or []
+        if isinstance(e, dict) and e.get("reason") == _EXCLUDE_SKIP
+    }
+    dropped = sorted(targets & excluded_out)
+    if dropped:
+        raise ScanError(f"--changed-only: an --exclude pattern left out a changed file: {dropped[0]!r}")
     return sorted(targets - scanned - (skipped - left_out) - errored)

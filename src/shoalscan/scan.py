@@ -221,8 +221,10 @@ def run_scan(
                 namespaces.append(testscope.NAMESPACE)
             sarif_source = stage / "opengrep.sarif"
             includes = changedscan.include_patterns(changed) if changed is not None else None
+            # A scan of changed files also keeps each root-level --include pattern to its own file.
+            og_excludes = excludes + (changedscan.anchor_excludes(root, changed) if changed else [])
             cmd = opengrep.build_command(
-                tools.opengrep, namespaces, root, config.limits, excludes, sarif_source, includes=includes
+                tools.opengrep, namespaces, root, config.limits, og_excludes, sarif_source, includes=includes
             )
             og_env = opengrep.scanner_env_extra(config.limits)
             if includes == []:

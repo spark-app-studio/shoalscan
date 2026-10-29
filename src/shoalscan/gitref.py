@@ -250,6 +250,12 @@ def touched_paths(repo: Path, commit: str) -> list[str]:
     return sorted(set(path_names(out + b"\0" + untracked)))
 
 
+def listed_files(repo: Path) -> list[str]:
+    """The files git lists in the working tree: tracked ones, and untracked ones that are not ignored."""
+    out = _git(repo, "ls-files", "--cached", "--others", "--exclude-standard", "-z").stdout
+    return sorted(set(path_names(out)))
+
+
 def diff_against(repo: Path, commit: str, paths: list[str], max_lines: int = 400) -> str:
     """The working tree's diff against `commit` for `paths`, cut to `max_lines` lines."""
     if not paths:
