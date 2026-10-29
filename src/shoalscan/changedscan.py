@@ -16,10 +16,11 @@ them again and refuses findings whose list differs.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import os
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from shoalscan import gitref, opengrep_langs
 from shoalscan.errors import ScanError, SetupError
@@ -116,44 +117,85 @@ def include_patterns(changed: ChangedFiles) -> list[str]:
     return [f"/{path}" for path in sorted((*changed.targets, *changed.excluded))]
 
 
-def loaded_languages(rules_stage: Path) -> frozenset[str] | None:
-    """The languages of every rule staged for Opengrep, or None when one rule's languages cannot be read: then
-    every file counts as one a rule reads.
+@dataclass(frozen=True)
+class LoadedRules:
+    """What the staged rules read: their languages, and the `paths: include` globs of their
+    `generic`, `aliengrep` and `regex` rules."""
 
-    `generic`, `aliengrep` and `regex` map to no extension or interpreter, so they are left out: those rules
-    normally narrow themselves with `paths:` filters, and a changed file only they could read is not checked
-    for a silent drop.
+    languages: frozenset[str]
+    include_globs: tuple[str, ...]
+
+
+def loaded_languages(rules_stage: Path) -> LoadedRules | None:
+    """What the rules staged for Opengrep read, or None when every file counts as read.
+
+    None is returned when a rule's languages cannot be read, when a `generic`, `aliengrep` or `regex` rule has
+    no `paths: include` that can be read (Opengrep then runs it on every file), and when the stage holds a
+    link: staging copies files and directories and never links one, so a link is not something Shoalscan
+    staged, and a linked directory is not walked.
     """
     from shoalscan.opengrep import is_rule_file
-    from shoalscan.rulesets import rule_languages, split_rules
+    from shoalscan.rulesets import rule_include_globs, rule_languages, split_rules
 
     found: set[str] = set()
+    globs: list[str] = []
     for dirpath, dirnames, filenames in os.walk(rules_stage, followlinks=False):
+        if any((Path(dirpath) / d).is_symlink() for d in dirnames):
+            return None
         dirnames.sort()
         for name in sorted(filenames):
             path = Path(dirpath) / name
             if not is_rule_file(name):
                 continue
             if path.is_symlink():
-                # Staging copies files and never links one; a link here is not a rule Shoalscan wrote.
                 return None
             for rule in split_rules(path.read_text(encoding="utf-8"), str(path.relative_to(rules_stage))):
                 languages = rule_languages(rule)
                 if languages is None:
                     return None
+                if languages & opengrep_langs.ANY_FILE:
+                    include = rule_include_globs(rule)
+                    if include is None:
+                        return None
+                    globs.extend(include)
                 found |= languages - opengrep_langs.ANY_FILE
-    return frozenset(found)
+    return LoadedRules(frozenset(found), tuple(dict.fromkeys(globs)))
 
 
-def refuse_silent_drops(unread: list[str], root: Path, languages: frozenset[str] | None) -> None:
+def matches_include(path: str, globs: tuple[str, ...]) -> bool:
+    """Whether a repository path may match one of Opengrep's `paths: include` globs.
+
+    This errs toward a match, so a dropped file is refused rather than passed: case is ignored, `*` crosses
+    `/`, a leading or trailing `/` is dropped, and a glob is tried against every trailing part of the path and
+    every directory above the file (`sites-enabled/*` matches `etc/nginx/sites-enabled/x`, `docs/` matches
+    `docs/a.md`). A rule's `exclude` is not applied.
+    """
+    parts = PurePosixPath(path.lower()).parts
+    candidates = set()
+    for start in range(len(parts)):
+        for stop in range(start + 1, len(parts) + 1):
+            candidates.add("/".join(parts[start:stop]))
+    for glob in globs:
+        pattern = glob.lower().strip("/")
+        if pattern and any(fnmatch.fnmatchcase(c, pattern) for c in candidates):
+            return True
+    return False
+
+
+def refuse_silent_drops(unread: list[str], root: Path, loaded: LoadedRules | None) -> None:
     """Stop the scan when Opengrep left out a changed file that a loaded rule reads.
 
-    A file no loaded rule's language reads is listed nowhere by Opengrep, and is only named. A file one of
-    them reads (by its extension, its name, or, with no extension, its shebang; see `opengrep_langs`) should
-    have been scanned or skipped with a reason, so its absence means Opengrep dropped it without saying so.
+    A file no loaded rule reads is listed nowhere by Opengrep, and is only named. A file one of them reads (by
+    its language's extension, its name, or, with no extension, its shebang; see `opengrep_langs`; or by a
+    `generic`, `aliengrep` or `regex` rule's `paths: include`) should have been scanned or skipped with a
+    reason, so its absence means Opengrep dropped it without saying so.
     """
     for path in unread:
-        if languages is None or opengrep_langs.reads(root / path, path, languages):
+        if (
+            loaded is None
+            or opengrep_langs.reads(root / path, path, loaded.languages)
+            or matches_include(path, loaded.include_globs)
+        ):
             raise ScanError(
                 f"--changed-only: opengrep did not account for {path!r}, a changed file the loaded rules read "
                 "(not scanned, skipped or errored); nothing is known about it"
