@@ -541,6 +541,23 @@ class ChangedFilesUnitTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "left out a changed file"):
             changedscan.account_for_targets(doc, root, changed)
 
+    def test_a_target_an_exclude_pattern_left_out_stops_the_scan(self):
+        root = Path("/repo")
+        changed = changedscan.ChangedFiles("b" * 40, ("src/a.py", "src/b.py"), (), (), (), ())
+        doc = {
+            "paths": {
+                "scanned": ["/repo/src/b.py"],
+                "skipped": [{"path": "/repo/src/a.py", "reason": "cli_exclude_flags_match"}],
+            },
+            "errors": [],
+        }
+        with self.assertRaisesRegex(Exception, "an --exclude pattern left out a changed file: 'src/a.py'"):
+            changedscan.account_for_targets(doc, root, changed)
+        # An unchanged file an --exclude pattern matched is not a target: nothing to refuse.
+        doc["paths"]["skipped"] = [{"path": "/repo/docs/a.py", "reason": "cli_exclude_flags_match"}]
+        doc["paths"]["scanned"] = ["/repo/src/a.py", "/repo/src/b.py"]
+        self.assertEqual(changedscan.account_for_targets(doc, root, changed), [])
+
     def test_an_excluded_file_that_was_scanned_stops_the_scan(self):
         root = Path("/repo")
         changed = changedscan.ChangedFiles("b" * 40, (), (), ("generated/x.py",), (), ())

@@ -7,6 +7,7 @@ All notable changes to Shoalscan are recorded here.
 ### Fixed
 
 - `scan --changed-only` no longer stops when a changed file sits at the repository root and another file elsewhere has the same name. Opengrep 1.30.2 does not anchor an `--include` pattern with a single path component (`/README.md` also matches `docs/README.md`), so the scan also read those files, and the check that Opengrep scanned only the changed files stopped it. No finding was missed: the scan stopped instead. Each other file of that name now gets an anchored `--exclude`, and a changed file of the same name below the root is still scanned. A file of that name whose path an `--exclude` pattern would read as a glob, or more than 2000 of them, makes the scan refuse, so you scan the whole repository instead.
+- `scan --changed-only` stops when an `--exclude` pattern leaves out a changed file. Before, such a file counted as skipped, like one over the size limit, and was reported as unread instead of stopping the scan.
 
 ## 0.5.0 (2026-10-29)
 
