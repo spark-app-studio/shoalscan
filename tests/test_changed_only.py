@@ -339,6 +339,14 @@ class SilentDropTests(unittest.TestCase):
         self.file("stage/c/three.yaml", "rules:\n- id: e\n  languages: python\n  pattern: z\n")
         self.assertIsNone(changedscan.loaded_languages(stage))
 
+    def test_a_linked_rule_file_in_the_stage_counts_as_reading_everything(self):
+        stage = self.root / "stage"
+        self.file("stage/a/one.yaml", "rules:\n- id: a\n  languages: [python]\n  pattern: x\n")
+        self.file("elsewhere.yaml", "rules:\n- id: b\n  languages: [rust]\n  pattern: y\n")
+        self.assertEqual(changedscan.loaded_languages(stage), {"python"})
+        (stage / "a" / "linked.yaml").symlink_to(self.root / "elsewhere.yaml")
+        self.assertIsNone(changedscan.loaded_languages(stage))
+
     def test_rule_languages_forms(self):
         text = (
             "rules:\n"

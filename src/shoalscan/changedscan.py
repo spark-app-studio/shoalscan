@@ -132,8 +132,11 @@ def loaded_languages(rules_stage: Path) -> frozenset[str] | None:
         dirnames.sort()
         for name in sorted(filenames):
             path = Path(dirpath) / name
-            if not is_rule_file(name) or path.is_symlink():
+            if not is_rule_file(name):
                 continue
+            if path.is_symlink():
+                # Staging copies files and never links one; a link here is not a rule Shoalscan wrote.
+                return None
             for rule in split_rules(path.read_text(encoding="utf-8"), str(path.relative_to(rules_stage))):
                 languages = rule_languages(rule)
                 if languages is None:
