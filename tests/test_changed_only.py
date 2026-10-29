@@ -10,14 +10,18 @@ import io
 import json
 import os
 import shutil
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from test_end_to_end import TOOLS, tools_ready
 
 import test_policy_ref as policy_ref
-from shoalscan import changedscan
+from shoalscan import changedscan, opengrep, opengrep_langs
 from shoalscan.cli import main
+from shoalscan.errors import ScanError
+from shoalscan.rulesets import rule_languages, split_rules
 
 git = policy_ref.git
 MAIN = "refs/heads/main"
@@ -180,6 +184,39 @@ class ChangedOnlyTests(unittest.TestCase):
         code, summary, out = self.assert_same_verdict()
         self.assertEqual(code, 0, out)
 
+    # ── a changed file Opengrep leaves out without saying so ──
+
+    def scan_dropping(self, dropped: str):
+        """Scan changed files with Opengrep's report edited to leave `dropped` out, as a silent drop would."""
+        real = opengrep.execute
+
+        def execute(*args, **kwargs):
+            doc = real(*args, **kwargs)
+            doc["paths"]["scanned"] = [p for p in doc["paths"]["scanned"] if not p.endswith("/" + dropped)]
+            doc["results"] = [r for r in doc["results"] if not r.get("path", "").endswith("/" + dropped)]
+            return doc
+
+        with mock.patch.object(opengrep, "execute", execute):
+            return self.pcli("scan", "--changed-only")
+
+    def test_a_python_file_left_out_with_python_rules_loaded_stops_the_scan(self):
+        (self.repo / "src" / "more.py").write_text("import pickle\npickle.loads(b'')\n", encoding="utf-8")
+        self.commit("more")
+        code, out, err = self.scan_dropping("src/more.py")
+        self.assertEqual(code, 2, out + err)
+        self.assertIn("a changed file the loaded rules read", err)
+
+    def test_a_python_script_left_out_by_its_shebang_stops_the_scan(self):
+        script = self.repo / "tool"
+        script.write_text("#!/usr/bin/env python3\nimport pickle\npickle.loads(b'')\n", encoding="utf-8")
+        script.chmod(0o755)
+        self.commit("tool")
+        # Opengrep itself reads it as Python: an executable file with no extension and a python3 shebang.
+        code, summary, out = self.assert_same_verdict()
+        self.assertEqual((code, summary["new_blocking"]), (1, 1), out)
+        code, out, err = self.scan_dropping("tool")
+        self.assertEqual(code, 2, out + err)
+
     # ── what is refused ──
 
     def test_changed_only_needs_a_policy_ref(self):
@@ -237,6 +274,120 @@ class ChangedOnlyTests(unittest.TestCase):
         code, _, err = self.pcli("scan", "--changed-only")
         self.assertEqual(code, 2)
         self.assertIn("--changed-only limits only Opengrep", err)
+
+
+class SilentDropTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def file(self, name: str, text: str = "x\n", mode: int = 0o644) -> str:
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        path.chmod(mode)
+        return name
+
+    def refuses(self, name: str, languages) -> bool:
+        try:
+            changedscan.refuse_silent_drops([name], self.root, languages)
+        except ScanError:
+            return True
+        return False
+
+    def test_by_extension(self):
+        py = frozenset({"python"})
+        self.assertTrue(self.refuses(self.file("a.py"), py))
+        self.assertTrue(self.refuses(self.file("b.pyi"), py))
+        self.assertFalse(self.refuses(self.file("c.md"), py))
+        self.assertFalse(self.refuses(self.file("d.js"), py))
+        self.assertTrue(self.refuses(self.file("d2.js"), frozenset({"javascript"})))
+        # Opengrep's excluded extensions are not read.
+        self.assertFalse(self.refuses(self.file("e.min.js"), frozenset({"js"})))
+        self.assertFalse(self.refuses(self.file("f.d.ts"), frozenset({"ts"})))
+        self.assertTrue(self.refuses(self.file("Dockerfile"), frozenset({"dockerfile"})))
+        self.assertTrue(self.refuses(self.file("app.Dockerfile"), frozenset({"docker"})))
+
+    def test_by_shebang(self):
+        py = frozenset({"python"})
+        self.assertTrue(self.refuses(self.file("run", "#!/usr/bin/env python3\n", 0o755), py))
+        self.assertTrue(self.refuses(self.file("run2", "#!/usr/bin/env -S python3 -u\n", 0o755), py))
+        self.assertTrue(self.refuses(self.file("run3", "#! /usr/bin/python\n", 0o700), py))
+        # Opengrep reads a shebang only on an executable file with no extension.
+        self.assertFalse(self.refuses(self.file("plain", "#!/usr/bin/env python3\n", 0o644), py))
+        self.assertFalse(self.refuses(self.file("run.txt", "#!/usr/bin/env python3\n", 0o755), py))
+        self.assertFalse(self.refuses(self.file("shell", "#!/bin/sh\n", 0o755), py))
+        self.assertTrue(self.refuses(self.file("shell2", "#!/bin/sh\n", 0o755), frozenset({"bash"})))
+
+    def test_unknown_or_unreadable_languages_fail_closed(self):
+        self.assertTrue(self.refuses(self.file("notes.md"), None))
+        self.assertTrue(self.refuses(self.file("notes2.md"), frozenset({"cobol"})))
+        self.assertFalse(self.refuses(self.file("notes3.md"), frozenset()))
+
+    def test_loaded_languages(self):
+        stage = self.root / "stage"
+        self.file(
+            "stage/a/one.yaml",
+            "rules:\n- id: a\n  languages: [python, js]\n  pattern: x\n- id: b\n  languages:\n  - rust\n  pattern: y\n",
+        )
+        self.file("stage/b/two.yml", "rules:\n- id: c\n  languages: [generic]\n  pattern: z\n")
+        self.file("stage/b/two.test.yaml", "rules:\n- id: d\n  languages: python\n  pattern: z\n")
+        self.assertEqual(changedscan.loaded_languages(stage), {"python", "js", "rust"})
+        self.file("stage/c/three.yaml", "rules:\n- id: e\n  languages: python\n  pattern: z\n")
+        self.assertIsNone(changedscan.loaded_languages(stage))
+
+    def test_rule_languages_forms(self):
+        text = (
+            "rules:\n"
+            '- id: flow\n  languages: [Python, "js"]\n  pattern: x\n'
+            "- id: block\n  pattern: y\n  languages:\n    - go  # a comment\n    - rust\n"
+            "- id: compact\n  languages:\n  - ts\n  pattern: y\n"
+            "- languages: [generic]\n  id: first\n"
+            "- id: nested\n  metadata:\n    languages: [python]\n  languages: python\n"
+            "- id: twice\n  languages: [go]\n  languages: [js]\n"
+            "- id: missing\n  pattern: z\n"
+        )
+        got = {r.rule_id: rule_languages(r) for r in split_rules(text, "t")}
+        self.assertEqual(
+            got,
+            {
+                "flow": {"python", "js"},
+                "block": {"go", "rust"},
+                "compact": {"ts"},
+                "first": {"generic"},
+                "nested": None,
+                "twice": None,
+                "missing": None,
+            },
+        )
+
+    def test_the_table_knows_every_language_key(self):
+        for key in (
+            "python",
+            "py",
+            "python3",
+            "js",
+            "javascript",
+            "ts",
+            "typescript",
+            "rust",
+            "go",
+            "golang",
+            "bash",
+            "sh",
+            "dockerfile",
+            "docker",
+            "yaml",
+            "json",
+            "terraform",
+            "hcl",
+            "c#",
+            "csharp",
+        ):
+            self.assertIn(key, opengrep_langs.LANGUAGES, key)
 
 
 class ChangedFilesUnitTests(unittest.TestCase):

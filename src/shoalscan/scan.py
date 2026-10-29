@@ -234,6 +234,7 @@ def run_scan(
                 doc = opengrep.execute(cmd, rules_stage, config.limits.scan_timeout_seconds, extra_env=og_env)
             if changed is not None:
                 meta["changed_unread"] = changedscan.account_for_targets(doc, root, changed)
+                changedscan.refuse_silent_drops(meta["changed_unread"], root, changedscan.loaded_languages(rules_stage))
             # The scope rules' matches are never findings: taken out before anything reads the results.
             scope_results = testscope.split_results(doc)
             warnings = opengrep.check_errors(doc)

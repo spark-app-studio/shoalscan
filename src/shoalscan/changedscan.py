@@ -21,7 +21,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from shoalscan import gitref
+from shoalscan import gitref, opengrep_langs
 from shoalscan.errors import ScanError, SetupError
 from shoalscan.excludes import ExcludeMatcher
 
@@ -114,6 +114,47 @@ def include_patterns(changed: ChangedFiles) -> list[str]:
     """One anchored --include pattern per target and per excluded file: `/path` matches that path from the scan
     root only. Opengrep's own excludes still apply, and an excluded file it scans anyway stops the scan."""
     return [f"/{path}" for path in sorted((*changed.targets, *changed.excluded))]
+
+
+def loaded_languages(rules_stage: Path) -> frozenset[str] | None:
+    """The languages of every rule staged for Opengrep, or None when one rule's languages cannot be read: then
+    every file counts as one a rule reads.
+
+    `generic`, `aliengrep` and `regex` map to no extension or interpreter, so they are left out: those rules
+    normally narrow themselves with `paths:` filters, and a changed file only they could read is not checked
+    for a silent drop.
+    """
+    from shoalscan.opengrep import is_rule_file
+    from shoalscan.rulesets import rule_languages, split_rules
+
+    found: set[str] = set()
+    for dirpath, dirnames, filenames in os.walk(rules_stage, followlinks=False):
+        dirnames.sort()
+        for name in sorted(filenames):
+            path = Path(dirpath) / name
+            if not is_rule_file(name) or path.is_symlink():
+                continue
+            for rule in split_rules(path.read_text(encoding="utf-8"), str(path.relative_to(rules_stage))):
+                languages = rule_languages(rule)
+                if languages is None:
+                    return None
+                found |= languages - opengrep_langs.ANY_FILE
+    return frozenset(found)
+
+
+def refuse_silent_drops(unread: list[str], root: Path, languages: frozenset[str] | None) -> None:
+    """Stop the scan when Opengrep left out a changed file that a loaded rule reads.
+
+    A file no loaded rule's language reads is listed nowhere by Opengrep, and is only named. A file one of
+    them reads (by its extension, its name, or, with no extension, its shebang; see `opengrep_langs`) should
+    have been scanned or skipped with a reason, so its absence means Opengrep dropped it without saying so.
+    """
+    for path in unread:
+        if languages is None or opengrep_langs.reads(root / path, path, languages):
+            raise ScanError(
+                f"--changed-only: opengrep did not account for {path!r}, a changed file the loaded rules read "
+                "(not scanned, skipped or errored); nothing is known about it"
+            )
 
 
 def account_for_targets(doc: dict, root: Path, changed: ChangedFiles) -> list[str]:
